@@ -1,18 +1,19 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index d0db521b..1e79d947 100644
+index d0db521b..471f925c 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -142,7 +142,9 @@ add_library(hailstone_engine STATIC
+@@ -142,7 +142,10 @@ add_library(hailstone_engine STATIC
    src/mq/event_pattern.cpp
    src/mq/lua_mq.cpp
    src/mq/lua_mq_web.cpp
 +  src/mq/lua_compat_modules.cpp
    src/mq/lua_hailstone.cpp
++  src/mq/rgmercs_bridge.cpp
 +  src/ipc/session_bus.cpp
    src/plugin/native_plugins.cpp
    src/plugin/plugin_tcp.cpp
    src/plugin/ui_bridge.cpp
-@@ -293,6 +295,7 @@ add_library(hailstone_engine STATIC
+@@ -293,6 +296,7 @@ add_library(hailstone_engine STATIC
    src/core/atomic_file.cpp
    src/core/config.cpp
    src/core/ini_file.cpp
@@ -20,7 +21,15 @@ index d0db521b..1e79d947 100644
    src/core/old_ui_settings.cpp
    src/web/browser_host.cpp
    src/platform/paths.cpp
-@@ -725,7 +728,7 @@ set(HAILSTONE_UPDATE_KEY "${HAILSTONE_UPDATE_KEY_DEFAULT}" CACHE STRING "The rel
+@@ -550,6 +554,7 @@ add_library(hailstone_engine STATIC
+   src/app/lua_eq_caps.cpp
+   src/app/lua_eq_plugins.cpp
+   src/app/lua_eq_scripts.cpp
++  src/app/lua_eq_rgmercs.cpp
+   src/app/lua_eq_items.cpp
+   src/app/lua_eq_itemdisplay.cpp
+   src/app/lua_eq_adventure.cpp
+@@ -725,7 +730,7 @@ set(HAILSTONE_UPDATE_KEY "${HAILSTONE_UPDATE_KEY_DEFAULT}" CACHE STRING "The rel
  set_property(SOURCE src/app/updater.cpp APPEND PROPERTY COMPILE_DEFINITIONS
               HAILSTONE_UPDATE_FEED="${HAILSTONE_UPDATE_FEED}" HAILSTONE_UPDATE_KEY="${HAILSTONE_UPDATE_KEY}"
               HAILSTONE_ADDON_INDEX="${HAILSTONE_ADDON_INDEX}" HAILSTONE_PROJECT_PAGE="${HAILSTONE_PROJECT_PAGE}")
@@ -29,7 +38,7 @@ index d0db521b..1e79d947 100644
  if(WIN32)
    target_link_libraries(hailstone_engine PUBLIC ws2_32 advapi32 dbghelp winhttp ole32 shell32)
  elseif(APPLE)
-@@ -955,6 +958,26 @@ foreach(tool ${HAILSTONE_TOOLS})
+@@ -955,6 +960,26 @@ foreach(tool ${HAILSTONE_TOOLS})
    endif()
    target_link_libraries(${tool} PRIVATE hailstone_engine)
  endforeach()
@@ -56,7 +65,7 @@ index d0db521b..1e79d947 100644
  # The shared GPU texture experiment's broker, its server transport and its probes (docs/graphics.md "Shared GPU
  # textures"): linked by the tools below and the tests, never by the client, which has only the importing side.
  add_library(hailstone_gpu_lab STATIC
-@@ -1074,6 +1097,11 @@ if(HAILSTONE_BUILD_TESTS)
+@@ -1074,6 +1099,12 @@ if(HAILSTONE_BUILD_TESTS)
      tests/mq_combat_test.cpp
      tests/automation_test.cpp
      tests/mq_lua_test.cpp
@@ -65,6 +74,7 @@ index d0db521b..1e79d947 100644
 +    tests/hailstone24/mq_login_import_test.cpp
 +    tests/hailstone24/login_autoselect_test.cpp
 +    tests/hailstone24/rgmercs_tlo_test.cpp
++    tests/hailstone24/rgmercs_native_ui_test.cpp
      tests/mq_event_pattern_test.cpp
      tests/lua_social_test.cpp
      tests/code_syntax_test.cpp
@@ -96,175 +106,27 @@ index 5bbc2baf..b0521ec6 100644
  # Dear ImGui: the temporary developer UI until the SIDL UI engine (M5).
  # Built with the SDL3 platform backend and the Vulkan backend on our volk loader.
  FetchContent_Declare(imgui
-diff --git a/debug/rgmercs-patched-launch.log b/debug/rgmercs-patched-launch.log
-new file mode 100644
-index 00000000..8f189646
---- /dev/null
-+++ b/debug/rgmercs-patched-launch.log
-@@ -0,0 +1,158 @@
-+[info] data folder /home/john/.local/share/hailstone24: --data-dir
-+[info] Vulkan instance extensions: VK_KHR_surface VK_KHR_xlib_surface VK_KHR_portability_enumeration
-+[info] GPU: Intel(R) Graphics (BMG G31) (Vulkan 1.4.354), BC textures: yes, textures per array: 33554416 (update after bind)
-+[info] pipeline cache /home/john/.local/share/hailstone24/cache/pipelines.bin: 2459300 bytes
-+[info] asset folder /home/john/Games/EZ-RoF2-clean-20260828 (--game-dir / EQ_GAME_DIR)
-+[info] scene: 4x MSAA, upscaler fsr1, render scale 1.00 (1280x720), tonemap 1, exposure +0.00 EV, shadows 2048, light shadows 8 x 512, grade +0.00 / 1.00 / 1.00
-+[info] ui: Lua started, scripts in /home/john/src/hailstone24-auto-src/build/hailstone/ui/modern
-+[info] audio: pipewire at 48000 Hz, 3072 frame buffer (3072 asked)
-+[info] audio: 3205 sound names, 24 music selections, 732 races
-+[info] spell particles: 2578 emitter definitions, 675 effects, density 0.00, opacity 1.00
-+[info] sky: 110 colour maps, 74 colour sets, 49 weather patterns, 144 sky settings, 0 area fogs
-+[info] auto-login: logging in saved account pumpkin
-+[info] server ez-server: assets /home/john/.local/share/hailstone24/servers/ez-server/assets
-+[info] Updates: checking https://github.com/projecthailstone/hailstone-client/releases/latest/download/hailstone-update.txt for a release newer than 0.7.1-beta
-+[info] gamepad: X360 Controller (xbox)
-+[info] window title: EZ Server
-+[info] Update check: 0.7.1-beta is the newest release
-+[info] auto-login: joining world '[] EZ Server - Custom Zones, Vendors, Quests, Items, etc'
-+[info] chat: [MQ2Example] loaded
-+[info] chat: [Plugin] MQ2Example loaded (read,commands,target,actions,move,chat,events,ui,packets,extend,login,net,web)
-+[info] plugin MQ2Example loaded from /home/john/src/hailstone24-auto-src/build/hailstone/plugins/MQ2Example.so (sha256 55b44a4c7b852330a0d9fd145fd11f023a6b6623ad56ba3430e18d5108ecd9ac, caps read,commands,target,actions,move,chat,events,ui,packets,extend,login,net,web)
-+[info] world: PvP rule set 0
-+[info] world: membership level 2
-+[info] auto-login: entering world as 'Stabbinyah'
-+[info] character select: loading the scene (clz)
-+[info] audio: clz: 0 emitters, 0 music entries
-+[info] clz: 13 environment emitters
-+[info] smoothed ground: 0 triangles drawn as 0, 0 curved edges, at most 0.00 units off
-+[info] zone particles: 13 emitters (0 flames, 0 kinds measured) from 625 cloud definitions
-+[info] zone fires: 0 flames, 0 lights added for them
-+[info] world atlas: clz: not visited on this server
-+[info] zone renderer: 5 plants sway in the wind
-+[info] zone renderer: no land round the zone (831 terrain triangles, too little level ground)
-+[info] zone renderer prepared: 28 textures (5 MB), 8332 vertices (0 MB), 25800 indices (0 MB), 0 instances
-+[info] nav: 4 tiles read from /home/john/.local/share/hailstone24/cache/navmesh/ez-server/clz.navmesh
-+[info] zone clz loaded in 132 ms (5185 triangles)
-+[info] memory archives: global: 113 archives, mapped 134.55 MiB, heap 0.00 MiB, parsed WLD estimate 29.76 MiB
-+[info] appearance data: 78 NPC tints, 0 item tints, 21278 hero's forge tags, 335 adjustments, 42 customization entries
-+[info] character archives: 113 global (with Luclin models) in 1467 ms
-+[info] memory archives: clz: 0 archives, mapped 0.00 MiB, heap 0.00 MiB, parsed WLD estimate 0.00 MiB
-+[info] sky: 2 cloud layers for clz
-+[info] sky 1: 4 draws, 532 triangles, 7 textures
-+[info] character select: Stabbinyah (race 6 gender 0 face 2 hair 2 / 15 beard 255 / 255 eyes 1 / 1 heritage 0 tattoo 0 details 0)
-+[info] appearance Stabbinyah: race 6 gender 0 class 9 size 0.0 texture 255 helm 255 face 2 hair 2 / 15 beard 255 / 255 eyes 1 / 1 heritage 0 tattoo 0 details 0 material [0,2,2,2,23,3,2,10762,10716] tint [4283133550,4278190080,4280156210,4278190080,4278190080,4292664540,4278190080,0,0] hero_forge [0,0,0,0,0,0,0,0,0] npc_tint 0
-+[info] model player: race 6 gender 0 class 9, Height 5.00, at z 3.19 (avatar 2.40, view 4.77)
-+[info] clouds: noise made (128^3 shape, 32^3 detail, 512^2 weather)
-+[info] chat: Tier 12.5 - Direwind Cliffs is now open, Tier 13 due soon.
-+[[warn] lua script rgmercs: ....local/share/hailstone24/scripts/rgmercs/utils/files.lua:12: attempt to index a nil value (global 'io')
-+[warn] lua script rgmercs: ....local/share/hailstone24/scripts/rgmercs/utils/files.lua:12: attempt to index a nil value (global 'io')
-+  stack traceback:
-+  	....local/share/hailstone24/scripts/rgmercs/utils/files.lua:12: in field 'file_exists'
-+  	...local/share/hailstone24/scripts/rgmercs/utils/config.lua:3047: in field 'GetConfigFileName'
-+  	...local/share/hailstone24/scripts/rgmercs/utils/config.lua:4497: in method 'ConvertToDb'
-+  	...local/share/hailstone24/scripts/rgmercs/utils/config.lua:3079: in method 'LoadSettings'
-+  	...e/john/.local/share/hailstone24/scripts/rgmercs/init.lua:33: in main chunk
-+info] zone server 148.113.203.173:7136
-+[info] settings: the character's, /home/john/.local/share/hailstone24/servers/ez-server/characters/__ EZ Server - Custom Zones_ Vendors_ Quests_ Items_ etc/Stabbinyah/hailstone.ini
-+[info] scene: 4x MSAA, upscaler fsr1, render scale 1.00 (1280x720), tonemap 1, exposure +0.00 EV, shadows 2048, light shadows 8 x 512, grade +0.00 / 1.00 / 1.00
-+[info] zone entry: spell file crc 0x3cf0536e, assoc crc 0x4f353196
-+[info] spells: 0 in the book, gems empty
-+[info] inventory: 30 items (61740 bytes)
-+[info] weather: OP_Weather kind 0xff intensity 0
-+[info] game time 23:24, sky hour 23.40
-+[info] server files: no answer (a server without Hailstone's script)
-+[info] server rules: none (no hailstone.cfg): plugins and scripts run freely
-+[info] audio: qrg: 14 emitters, 2 music entries
-+[info] smoothed ground: 8668 triangles drawn as 43876, 2329 curved edges, at most 0.73 units off
-+[info] qrg: zone flora: 175 tiles (4232 pieces of ground) may grow plants by flora/default.txt (a lawn, 0 donor archives); 15 ms
-+[info] zone fires: 25 flames, 0 lights added for them
-+[info] zone renderer: 93 plants sway in the wind
-+[info] zone renderer: 718 water and lava surface triangles
-+[info] zone renderer: the land's trees: TREE16_ACTORDEF (25 placed, 47 units tall)
-+[info] zone renderer: the land's trees: TREE10_ACTORDEF (17 placed, 47 units tall)
-+[info] zone renderer: the land's trees: TREE18_ACTORDEF (15 placed, 29 units tall)
-+[info] zone renderer: the land's trees, 1687 of 3 kinds of the zone's (spacing 391: 130 in the woods, 587 elsewhere), 0 where an atlas zone's own stand, in 15 ms
-+[info] zone renderer: the land round the zone, 69810 triangles (57146 ground 'Xgrass1.BMP', 12664 rock 'rock1.BMP', 0 water), level ground (-2799 -1133) to (650 1399) at 0, relief 59, shaped by 0 neighbours' ground
-+[info] zone renderer: 148 lights in a 19x14 grid of 64-unit cells
-+[info] zone renderer prepared: 98 textures (3 MB), 116231 vertices (8 MB), 502896 indices (1 MB), 1687 instances
-+[info] nav: 396 tiles read from /home/john/.local/share/hailstone24/cache/navmesh/ez-server/qrg.navmesh
-+[info] zone qrg loaded in 333 ms (126695 triangles)
-+[info] memory archives: qrg: 1 archives, mapped 2.35 MiB, heap 0.00 MiB, parsed WLD estimate 0.21 MiB
-+[info] character models kept from the last zone: 1 meshes, 26 textures
-+[info] 4 doors
-+[info] chat: You have entered The Surefall Glade.
-+[info] chat server: connecting to 148.113.203.173:7778 as EZ (Linux) x4 Exp.Stabbinyah
-+[info] chat: [MQ2Example] zoned
-+[info] hot buttons: /home/john/.local/share/hailstone24/servers/ez-server/characters/__ EZ Server - Custom Zones_ Vendors_ Quests_ Items_ etc/Stabbinyah/hotbuttons.ini
-+[info] chat: [Lua] running rgmercs (read,commands,target,actions,move,chat,events,ui,packets,extend,login,net,web)
-+[info] lua: running rgmercs from /home/john/.local/share/hailstone24/scripts/rgmercs/init.lua, sha256 981d2034836e046a9d15c1619dad84ab52c5533c6ec8309f7a92ed66b4303e82, caps read,commands,target,actions,move,chat,events,ui,packets,extend,login,net,web
-+[info] chat history: 332 lines from /home/john/.local/share/hailstone24/servers/ez-server/characters/__ EZ Server - Custom Zones_ Vendors_ Quests_ Items_ etc/Stabbinyah/chat_history.txt
-+[info] ui: window places from /home/john/.local/share/hailstone24/servers/ez-server/characters/__ EZ Server - Custom Zones_ Vendors_ Quests_ Items_ etc/Stabbinyah/UI.ini (defaults /home/john/Games/EZ-RoF2-clean-20260828/defaults.ini)
-+[info] window title: EZ Server - Stabbinyah
-+[info] chat: \x07r[\x07x\x07gRGMercs\x07w:\x07oINFO   \x07x \x07w<\x07t9.292\x07w> \x07w(\x07ounknown_file\x07w::\x07ounknown_func()\x07w:\x07o0\x07x\x07w)\x07r]\x07x\x07w >>> \x07x\x07yCharacter not found in DB, converting settings to DB...
-+[info] chat: [Lua] rgmercs ended with an error: ....local/share/hailstone24/scripts/rgmercs/utils/files.lua:12: attempt to index a nil value (global 'io')
-+[info] character model HSF: from hsf_chr.s3d (no global or zone archive has it)
-+[info] appearance Stabbinyah: race 6 gender 0 class 9 size 0.0 texture 255 helm 0 face 2 hair 2 / 15 be[warn] chat server: the chat server closed the link before answering the login
-+[warn] character texture i_chrome01_e.dds: missing or invalid environment map
-+ard 255 / 255 eyes 1 / 1 heritage 0 tattoo 0 details 0 material [0,2,2,2,23,3,2,10762,10716] tint [4283133550,4278190080,4280156210,4278190080,4278190080,4292664540,4278197810,4278190080,4278190080] hero_forge [0,0,0,0,0,0,0,0,0] npc_tint 0
-+[info] map: qrg (1221 lines, 24 labels, maps dir "")
-+[info] neighbour zone qeytoqrg (4): 3 line cells, box (-640 96 0)-(-616 136 16), seam +y at 96.0, open sky 0%: indoor zone; first offset (-5825.7 12.0 0.0), spread (0.0 0.0 0.0), 1 targets, axis +y, face 96.0
-+[info] neighbour zones: 1 lines to other zones, 0 drawable, found in 0.1 ms
-+[info] chat: Norosun joined the raid.
-+[info] chat: Oyloe joined the raid.
-+[info] chat: Crowdcontrol joined the raid.
-+[info] chat: Buffnstuff joined the raid.
-+[info] chat: Shesstabbinyah joined the raid.
-+[info] chat: Vivosun joined the raid.
-+[info] chat: Yavaha joined the raid.
-+[info] chat: Gatupy joined the raid.
-+[info] chat: Beeboppaloopa joined the raid.
-+[info] chat: Kucodion joined the raid.
-+[info] chat: Fastlikebruce joined the raid.
-+[info] chat: Frankdatank joined the raid.
-+[info] chat: Raxes joined the raid.
-+[info] chat: Unos joined the raid.
-+[info] chat: Jedia joined the raid.
-+[info] chat: Dunos joined the raid.
-+[info] chat: Lunosty joined the raid.
-+[info] chat: Rogerwho joined the raid.
-+[info] chat: Rogertwo joined the raid.
-+[info] chat: Rogerone joined the raid.
-+[info] chat: Rogette joined the raid.
-+[info] chat: Onfone joined the raid.
-+[info] chat: Rogerroger joined the raid.
-+[info] chat: Norosun is now the leader of your raid.
-+[info] weather: OP_Weather kind 0x0 intensity 0
-+[info] chat: Welcome to The Surefall Glade!
-+[info] chat:  
-+[info] chat: Welcome back to EZ Server! If you have been gone from EZ server for awhile or need a 'refresher', please take a moment to speak to Lorekeeper of EZServer to orient yourself with our world again!
-+[info] chat:  
-+[info] position history: 6 entries sent (packet 1)
-+[info] effect packet 0: effect 413 caster 189 target 189 (1000 / 0 / 3000 ms, full true)
-+[info] effect packet 0: effect 413 caster 169 target 169 (1000 / 0 / 3000 ms, full true)
-+[info] effect packet 0: effect 413 caster 166 target 166 (1000 / 0 / 3000 ms, full true)
-+[info] effect packet 0: effect 413 caster 162 target 162 (1000 / 0 / 3000 ms, full true)
-+[info] effect packet 0: effect 413 caster 161 target 161 (1000 / 0 / 3000 ms, full true)
-+[info] effect packet 0: effect 413 caster 152 target 152 (1000 / 0 / 3000 ms, full true)
-+[info] effect packet 0: effect 413 caster 150 target 150 (1000 / 0 / 3000 ms, full true)
-+[info] effect packet 0: effect 413 caster 147 target 147 (1000 / 0 / 3000 ms, full true)
-+[info] effect packet 0: effect 413 caster 144 target 144 (1000 / 0 / 3000 ms, full true)
-+[info] zone-in: loading screen up 8791 ms (zone loaded at 5582 ms, zone-in done at 5603 ms, then 47 frames in 3188 ms, 134 appearances waiting at most)
-+[info] memory checkpoint: zone-in: settled appearances: resident 1018.77 MiB
-+[info] memory GPU: zone-in: settled appearances: heap 0 (device-local), allocation bytes 633.52 MiB, 2304 allocations
-+[info] memory GPU: zone-in: settled appearances: heap 1 (host), allocation bytes 4.49 MiB, 29 allocations
-+[info] memory character WLDs: 23 / 114 materialized, index and decoded estimate 151.16 MiB (retained after use: 121.19 of 128 MiB)
-+[info] memory character WLD activity: 91 decodes, 68 releases (current archives, cumulative)
-+[info] memory character caches: 34 models 132.13 MiB, 81 appearances 12.41 MiB, 74 item copies 2.11 MiB (payload estimates)
-+[info] memory model breakdown: animation/skeleton 128.93 MiB, geometry/materials 3.17 MiB, other 0.03 MiB
-+[info] ui: EQ menu: 5 rows left out (not offered by this client): Zone Guide, Trophies, Leave Real Estate, Help, Claims
-+[info] chat: [Lua] running rgmercs (read,commands,target,actions,move,chat,events,ui,packets,extend,login,net,web)
-+[info] lua: running rgmercs from /home/john/.local/share/hailstone24/scripts/rgmercs/init.lua, sha256 981d2034836e046a9d15c1619dad84ab52c5533c6ec8309f7a92ed66b4303e82, caps read,commands,target,actions,move,chat,events,ui,packets,extend,login[warn] lua script rgmercs: ....local/share/hailstone24/scripts/rgmercs/utils/files.lua:12: attempt to index a nil value (global 'io')
-+[warn] lua script rgmercs: ....local/share/hailstone24/scripts/rgmercs/utils/files.lua:12: attempt to index a nil value (global 'io')
-+  stack traceback:
-+  	....local/share/hailstone24/scripts/rgmercs/utils/files.lua:12: in field 'file_exists'
-+  	...local/share/hailstone24/scripts/rgmercs/utils/config.lua:3047: in field 'GetConfigFileName'
-+  	...local/share/hailstone24/scripts/rgmercs/utils/config.lua:4497: in method 'ConvertToDb'
-+  	...local/share/hailstone24/scripts/rgmercs/utils/config.lua:3079: in method 'LoadSettings'
-+  	...e/john/.local/share/hailstone24/scripts/rgmercs/init.lua:33: in main chunk
 diff --git a/src/app/automation.cpp b/src/app/automation.cpp
-index c1ce7a41..f4b58771 100644
+index c1ce7a41..8dd02610 100644
 --- a/src/app/automation.cpp
 +++ b/src/app/automation.cpp
-@@ -64,6 +64,8 @@ struct Automation::Impl {
+@@ -14,6 +14,7 @@
+ #include "core/log.h"
+ #include "mq/commands.h"
+ #include "mq/lua_mq.h"
++#include "mq/rgmercs_bridge.h"
+ #include "mq/tlo.h"
+ #include "net/game_connection.h"
+ #include "plugin/native_plugins.h"
+@@ -45,6 +46,7 @@ struct Automation::Impl {
+     mq::Registry registry;
+     mq::Context ctx;
+     std::unique_ptr<mq::Commands> commands;
++    std::unique_ptr<mq::RGMercsBridge> rgmercs = std::make_unique<mq::RGMercsBridge>();
+     std::unique_ptr<mq::ScriptHost> scripts;
+     std::unique_ptr<plugin::NativePlugins> plugins;
+     std::set<std::string> autoskill_holds; // the scripts holding autoskill off
+@@ -64,6 +66,8 @@ struct Automation::Impl {
          ctx.conn = conn();
          ctx.nav = env.nav ? env.nav() : nullptr;
          ctx.server_name = env.server_name ? env.server_name() : std::string();
@@ -273,7 +135,19 @@ index c1ce7a41..f4b58771 100644
          return ctx;
      }
  
-@@ -150,6 +152,7 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
+@@ -105,7 +109,10 @@ struct Automation::Impl {
+         // The server's scripts and plugins are looked for first (servers/<profile>/scripts and plugins).
+         // Out of the world (character select, a login, disconnected): the character's autorun list goes until a
+         // character's zone-in sets it again (ClientApp's zone-in).
+-        if (!has || c->server_rules()->provisional) scripts->set_autorun_file({});
++        if (!has || c->server_rules()->provisional) {
++            scripts->set_autorun_file({});
++            rgmercs->clear_character();
++        }
+         scripts->set_server_dir(dir.empty() ? fs::path() : dir / "scripts");
+         plugins->set_server_dir(dir.empty() ? fs::path() : dir / "plugins");
+         recheck();
+@@ -150,6 +157,7 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
      };
      ce.face = m.env.face;
      ce.keypress = m.env.keypress;
@@ -281,15 +155,24 @@ index c1ce7a41..f4b58771 100644
      m.commands = std::make_unique<mq::Commands>(ce);
  
      std::error_code ec;
-@@ -160,6 +163,7 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
+@@ -160,6 +168,8 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
      se.context = ce.context;
      se.print = ce.echo;
      se.run = ce.run;
 +    se.ipc_bus = m.env.ipc_bus;
++    se.rgmercs = m.rgmercs.get();
      se.dirs = search_dirs(m.env.data_dir / "scripts", m.env.install_dir / "scripts");
      se.config_dir = m.env.data_dir / "scripts" / "config";
      // Scripts as plugins (mq/lua_hailstone.cpp): the same chain, UI bridge and packets as the compiled plugins.
-@@ -295,6 +299,10 @@ void Automation::imgui(bool dev) {
+@@ -233,6 +243,7 @@ plugin::Hooks& Automation::hooks() { return impl_->hooks; }
+ std::shared_ptr<game::ExtensionChain> Automation::extensions() { return impl_->extensions; }
+ plugin::UiBridge& Automation::plugin_ui() { return impl_->plugin_ui; }
+ mq::ScriptHost& Automation::scripts() { return *impl_->scripts; }
++mq::RGMercsBridge& Automation::rgmercs() { return *impl_->rgmercs; }
+ 
+ std::uint32_t Automation::plugin_caps(std::string_view tag) const {
+     // By the owner's tag alone (plugin::UiBridge::owner_tag): a script named after a compiled plugin never gets the
+@@ -295,6 +306,10 @@ void Automation::imgui(bool dev) {
      ui::lua::raise_guarded_windows(); // the question above every window drawn this frame
  }
  
@@ -301,10 +184,15 @@ index c1ce7a41..f4b58771 100644
      Impl& m = *impl_;
      if (m.scripts) m.scripts->stop_all();
 diff --git a/src/app/automation.h b/src/app/automation.h
-index 0fe4b160..9509f3c3 100644
+index 0fe4b160..5bf3678a 100644
 --- a/src/app/automation.h
 +++ b/src/app/automation.h
-@@ -34,6 +34,7 @@ namespace hailstone::mq { class ScriptHost; class Registry; struct Context; }
+@@ -30,10 +30,11 @@
+ #include "plugin/policy.h"
+ 
+ namespace hailstone::net { class GameConnection; }
+-namespace hailstone::mq { class ScriptHost; class Registry; struct Context; }
++namespace hailstone::mq { class ScriptHost; class Registry; struct Context; class RGMercsBridge; }
  namespace hailstone::game { class ExtensionChain; }
  namespace hailstone::plugin { class UiBridge; class WebAccess; }
  namespace hailstone::nav { class NavControl; }
@@ -321,7 +209,15 @@ index 0fe4b160..9509f3c3 100644
  };
  
  class Automation {
-@@ -110,6 +113,8 @@ public:
+@@ -85,6 +88,7 @@ public:
+     plugin::UiBridge& plugin_ui();
+     // The script host (the Lua socials run there too) and MQ's TLOs and types.
+     mq::ScriptHost& scripts();
++    mq::RGMercsBridge& rgmercs();
+     const mq::Registry& registry() const;
+     const mq::Context& context(); // what the TLOs read now
+     // An owner's capabilities by its tag (plugin::UiBridge::owner_tag): "plugin:<name>" a compiled plugin's while it
+@@ -110,6 +114,8 @@ public:
      // Inside the ImGui frame: the scripts' and plugins' windows, the server plugins' question when no UI pack window
      // stands in for it ("PluginConsent", eq.ReplaceWindow), and with `dev` the "Plugins & Lua" window.
      void imgui(bool dev);
@@ -709,7 +605,7 @@ index d9c8464d..6017b636 100644
  
  // The playable client: login, server and character select, then the zone. options.auto_password is wiped once the
 diff --git a/src/app/client_app_internal.h b/src/app/client_app_internal.h
-index f71f2916..a0f524c0 100644
+index f71f2916..b8097060 100644
 --- a/src/app/client_app_internal.h
 +++ b/src/app/client_app_internal.h
 @@ -20,6 +20,9 @@
@@ -757,12 +653,18 @@ index f71f2916..a0f524c0 100644
          if (opts_.clip_plane != 15) clip_plane_arg_ = opts_.clip_plane;
          if (opts_.max_fps > 0) max_fps_arg_ = opts_.max_fps;
          // The asset folder: --game-dir or EQ_GAME_DIR, else hailstone.ini assets.path, else the picker asks.
-@@ -467,9 +483,64 @@ public:
+@@ -467,9 +483,70 @@ public:
              if (!collision_) return std::nullopt;
              return collision_->line_of_sight(glm::vec3(a[0], a[1], a[2]), glm::vec3(b[0], b[1], b[2]));
          };
 +        aenv.ipc_bus = &bus_;
          automation_ = std::make_unique<Automation>(aenv);
++        eq_host_.rgmercs = &automation_->rgmercs();
++        eq_host_.run_rgmercs_command = [this](const std::string& cmd) {
++            if (!automation_ || cmd.empty()) return false;
++            automation_->run_command(cmd);
++            return true;
++        };
 +        {
 +            const std::string bus_sock = !opts_.ipc_socket.empty()
 +                                             ? opts_.ipc_socket
@@ -822,7 +724,21 @@ index f71f2916..a0f524c0 100644
          stats_ui_->set_open(opts_.show_stats);
          // The performance window (app/perf_ui.h): Ctrl+Shift+P, /perf, or ui.perf_window=1.
          perf_ui_.set_open(config_.get_bool("ui.perf_window", false));
-@@ -561,6 +632,7 @@ public:
+@@ -509,6 +586,13 @@ public:
+         automation_->hooks().add_command(plugin::Hooks::kClient, "/luasocial", [this](std::string_view args) {
+             lua_social_command(args);
+         });
++        // /rgmercs and /rgui: toggle Hailstone's native RGMercs window.
++        automation_->hooks().add_command(plugin::Hooks::kClient, "/rgmercs", [this](std::string_view) {
++            if (eq_api_) eq_api_->toggle("RGMercsWnd");
++        });
++        automation_->hooks().add_command(plugin::Hooks::kClient, "/rgui", [this](std::string_view) {
++            if (eq_api_) eq_api_->toggle("RGMercsWnd");
++        });
+         actions_ui_ = std::make_unique<ActionsUi>(config_, config_path_);
+         // The gamepad (app/gamepad.h, docs/gamepad.md; a client extension): hailstone.ini gamepad.*.
+         gamepad_ = std::make_unique<Gamepad>(config_, config_path_);
+@@ -561,6 +645,7 @@ public:
          // The isometric camera when it was the one in use (hailstone.ini camera.iso, /camera).
          if (config_.get_bool("camera.iso", false)) set_camera_type(game::kCameraIsometric);
          game::reset_camera_defaults(cameras_);
@@ -830,7 +746,7 @@ index f71f2916..a0f524c0 100644
          if (opts_.login_launch.token_requested) {
              token_login_worker.finish();
              if (token_login_worker.error) std::rethrow_exception(token_login_worker.error);
-@@ -590,6 +662,15 @@ public:
+@@ -590,6 +675,15 @@ public:
              start_login();
          } else if (!opts_.account.empty()) {
              start_account_login();
@@ -846,7 +762,7 @@ index f71f2916..a0f524c0 100644
          }
      }
  
-@@ -1042,6 +1123,13 @@ private:
+@@ -1042,6 +1136,13 @@ private:
      platform::Window window_;
      std::string window_title_; // what update_window_title() set last
      render::VkContext vk_;
@@ -860,7 +776,7 @@ index f71f2916..a0f524c0 100644
      // Declared after vk_, so it is destroyed before the Vulkan device it holds objects of: draw_nameplates makes it at its
      // first use.
      std::unique_ptr<NameplateLayer> plate_layer_; // draw_nameplates, made at its first use
-@@ -1078,6 +1166,7 @@ private:
+@@ -1078,6 +1179,7 @@ private:
      // The server select's rows in the order it lists them (ui::server_list_order): row -> index into servers_.
      std::vector<std::size_t> server_rows_;
      bool auto_play_sent_ = false;
@@ -1176,10 +1092,24 @@ index 3fdae900..3cc3685a 100644
          }
          break;
 diff --git a/src/app/client_app_zone.cpp b/src/app/client_app_zone.cpp
-index 02c623b4..0d0769e1 100644
+index 02c623b4..8b407278 100644
 --- a/src/app/client_app_zone.cpp
 +++ b/src/app/client_app_zone.cpp
-@@ -225,7 +225,12 @@ void ClientApp::update_zone_settle() {
+@@ -17,11 +17,13 @@
+ #include "core/ini_file.h"
+ #include "core/server_profile.h"
+ #include "mq/lua_mq.h"
++#include "game/eq_names.h"
+ #include "game/mechanics/abilities.h"
+ #include "game/option_commands.h"
+ #include "game/particles.h"
+ #include "game/revamped_zone.h"
+ #include "nav/zone_nav.h"
++#include "platform/paths.h"
+ #include "platform/process.h"
+ #include <unordered_set>
+ 
+@@ -225,7 +227,12 @@ void ClientApp::update_zone_settle() {
          return;
      }
      auto now = Clock::now();
@@ -1193,6 +1123,23 @@ index 02c623b4..0d0769e1 100644
      bool done = zone_settle_.update(settle_frame_, std::chrono::duration<double>(now - start_time_).count());
      settle_frame_ = {};
      loading_view_.detail = zone_settle_.detail();
+@@ -535,7 +542,15 @@ void ClientApp::enter_zone() {
+     use_character_settings(files.dir); // (taken over at the entry into the world: the same, unless the name differs)
+     actions_ui_->enter_zone(files.hot_buttons());
+     // The character's autorun scripts (the Scripts window; the same file at each zone-in starts nothing again).
+-    if (automation_) automation_->scripts().set_autorun_file(files.scripts_ini());
++    if (automation_) {
++        automation_->scripts().set_autorun_file(files.scripts_ini());
++        std::string cls;
++        if (me->class_id != 0) cls = game::class_short_name(me->class_id);
++        else if (conn_->player_class_mask() != 0) cls = game::class_mask_name(conn_->player_class_mask());
++        automation_->rgmercs().attach_character(platform::data_dir(), files.dir, game::display_name(me->name),
++                                                char_view_.server_name, std::move(cls));
++    }
++    eq_host_.rgmercs_server = char_view_.server_name;
+     // The UI's window layout is the character's (ui-<pack>.txt), its other settings shared.
+     ui_character_dir_ = files.dir;
+     if (lua_ui_) lua_ui_->set_character_settings(files.ui_settings(ui_name_));
 diff --git a/src/app/execution_state.h b/src/app/execution_state.h
 new file mode 100644
 index 00000000..2c7c9c39
@@ -1591,6 +1538,137 @@ index 6a57781d..04358de6 100644
 +                                            bool allow_keyword_match = true);
 +
  } // namespace hailstone::app
+diff --git a/src/app/lua_eq.cpp b/src/app/lua_eq.cpp
+index 13c3b756..b1cb21aa 100644
+--- a/src/app/lua_eq.cpp
++++ b/src/app/lua_eq.cpp
+@@ -2475,6 +2475,8 @@ int CascadeClick(lua_State* L) {
+         if (m.host.conn) m.host.conn->set_bug_report_open(true);
+     } else if (cmd && *cmd == kMenuScripts) {
+         if (StockWindow* w = m.window("ScriptsWnd")) w->set_shown(m.host, true);
++    } else if (cmd && *cmd == kMenuRGMercs) {
++        if (StockWindow* w = m.window("RGMercsWnd")) w->set_shown(m.host, true);
+     } else if (cmd && *cmd == kMenuWebBrowser) {
+         if (StockWindow* w = m.window("BrowserWnd")) w->set_shown(m.host, true);
+     } else if (cmd && *cmd >= kMenuPluginFirst) { // a plugin's entry: its command line, as the plugin
+@@ -3047,6 +3049,7 @@ void EqApi::register_functions(lua_State* L) {
+     register_map_api(L, impl_->host, impl_->windows);
+     register_plugins_api(L, impl_->host);
+     register_scripts_api(L, impl_->host);
++    register_rgmercs_api(L, impl_->host);
+     register_pregame_api(L, impl_->host, impl_->screens);
+     static const luaL_Reg fns[] = {
+         {"InGame", InGame}, {"UiReady", UiReady}, {"GameState", GameState}, {"Name", Name}, {"SlotName", SlotName},
+diff --git a/src/app/lua_eq.h b/src/app/lua_eq.h
+index 662b7f21..0be22b96 100644
+--- a/src/app/lua_eq.h
++++ b/src/app/lua_eq.h
+@@ -36,7 +36,7 @@ namespace hailstone::net { class GameConnection; struct Item; struct ItemSlot; s
+ namespace hailstone::game { class HotButtonStore; struct HotButton; namespace mechanics { class Character; } }
+ namespace hailstone { class GameDir; }
+ namespace hailstone::assets { class CharacterLibrary; struct CharacterModel; }
+-namespace hailstone::mq { class ScriptHost; class Registry; struct Context; }
++namespace hailstone::mq { class ScriptHost; class Registry; struct Context; class RGMercsBridge; }
+ namespace hailstone::ui {
+ class UiTextures; class UiIni; struct ChatView; struct ServerSelectView; struct LoginView; struct CharacterSelectView;
+ struct CharacterCreateView;
+@@ -169,6 +169,9 @@ struct EqHost {
+     // Lua socials (app/lua_eq_luasocial.cpp): the script host they run in, MQ's TLOs for the editor's completion, and
+     // a request to open the Lua social editor on social 0..119 (-1 none; the editor window takes it).
+     mq::ScriptHost* scripts = nullptr;
++    mq::RGMercsBridge* rgmercs = nullptr;
++    std::string rgmercs_server;
++    std::function<bool(const std::string&)> run_rgmercs_command;
+     const mq::Registry* registry = nullptr;
+     // What the plugins give the UI (plugin/ui_bridge.h; app/lua_eq_plugins.h): null without plugins.
+     plugin::UiBridge* plugin_ui = nullptr;
+diff --git a/src/app/lua_eq_caps.cpp b/src/app/lua_eq_caps.cpp
+index dae38fd0..568c0bff 100644
+--- a/src/app/lua_eq_caps.cpp
++++ b/src/app/lua_eq_caps.cpp
+@@ -84,7 +84,10 @@ constexpr Entry kCalls[] = {
+     // These check a plugin's code themselves (the file's head)
+     {"Plugin", 0}, {"PluginOptions", 0}, {"SetPluginOption", 0}, {"PluginMenu", 0}, {"PluginMenuClick", 0},
+     {"PluginConsent", 0}, {"AnswerPluginConsent", 0}, {"Scripts", 0}, {"ScriptRun", 0}, {"ScriptStop", 0},
+-    {"ScriptPause", 0}, {"SetScriptAutorun", 0}, {"LoginScreen", 0}, {"LoginSet", 0}, {"LoginDo", 0},
++    {"ScriptPause", 0}, {"SetScriptAutorun", 0}, {"RGMercsState", 0}, {"RGMercsControl", kCapCommands},
++    {"RGMercsSetSetting", kCapCommands}, {"RGMercsSaveSettings", kCapCommands}, {"RGMercsResetDefaults", kCapCommands},
++    {"RGMercsImportDb", kCapCommands}, {"RGMercsSetModule", kCapCommands}, {"RGMercsClearLogs", kCapCommands},
++    {"RGMercsCommand", kCapCommands}, {"LoginScreen", 0}, {"LoginSet", 0}, {"LoginDo", 0},
+     {"ServerSelect", 0}, {"ServerSelectDo", 0}, {"CharacterSelect", 0}, {"CharacterSelectDo", 0},
+     {"CharacterCreate", 0}, {"CharacterCreateHelp", 0}, {"CharacterCreateDo", 0}, {"WebAvailable", 0}, {"WebOpen", 0},
+     {"WebTabs", 0}, {"WebState", 0}, {"WebNavigate", 0}, {"WebNav", 0}, {"WebClose", 0}, {"WebView", 0},
+diff --git a/src/app/lua_eq_menu.cpp b/src/app/lua_eq_menu.cpp
+index 6ab6e277..71f06cb7 100644
+--- a/src/app/lua_eq_menu.cpp
++++ b/src/app/lua_eq_menu.cpp
+@@ -109,6 +109,7 @@ bool menu_command_offered(int command, const std::function<bool(std::string_view
+     case C::CMD_TOGGLE_AGGRO: return false;
+     default: break;
+     }
++    if (command == kMenuRGMercs) return replaces && replaces("RGMercsWnd");
+     const char* screen = toggle_command_window(command);
+     return screen && replaces && replaces(screen);
+ }
+@@ -294,7 +295,8 @@ void CascadeMenu::load_text(std::string_view file, std::uint32_t expansions, std
+     const int icon = where != top.end() ? where->icon : -1;
+     where = top.insert(where, {1, icon, "Report a Bug", kMenuReportBug, -1});
+     where = top.insert(where, {1, icon, "Web Browser", kMenuWebBrowser, -1});
+-    top.insert(where, {1, icon, "Lua Scripts", kMenuScripts, -1});
++    where = top.insert(where, {1, icon, "Lua Scripts", kMenuScripts, -1});
++    if (offered && offered(kMenuRGMercs)) top.insert(where, {1, icon, "RGMercs", kMenuRGMercs, -1});
+     plugin_menu_ = -1;
+     apply_plugin_entries();
+     if (!left_out.empty()) {
+@@ -434,9 +436,10 @@ void CascadeMenu::apply_plugin_entries() {
+     plugin_menu_ = static_cast<int>(menus_.size());
+     menus_.push_back(std::move(m));
+     auto& rows = menus_[0].items; // (push_back may have moved menus_)
+-    // Before Hailstone's own rows (Lua Scripts, Web Browser, Report a Bug).
++    // Before Hailstone's own rows (RGMercs, Lua Scripts, Web Browser, Report a Bug).
+     auto where = std::find_if(rows.begin(), rows.end(), [](const Item& it) {
+-        return it.command == kMenuScripts || it.command == kMenuWebBrowser || it.command == kMenuReportBug;
++        return it.command == kMenuRGMercs || it.command == kMenuScripts || it.command == kMenuWebBrowser ||
++               it.command == kMenuReportBug;
+     });
+     rows.insert(where, {5, -1, "Plugins", -1, plugin_menu_});
+     if (sorted_) arrange();
+diff --git a/src/app/lua_eq_menu.h b/src/app/lua_eq_menu.h
+index c7b5bd9e..59e9cf85 100644
+--- a/src/app/lua_eq_menu.h
++++ b/src/app/lua_eq_menu.h
+@@ -62,6 +62,8 @@ inline constexpr int kMenuWebBrowser = 0x10001;
+ // Hailstone's "Lua Scripts" row (the Scripts window, ScriptsWnd: run, stop and autorun the MacroQuest Lua scripts;
+ // docs/plugins.md "The Scripts window"), before Web Browser.
+ inline constexpr int kMenuScripts = 0x10002;
++// Hailstone's native "RGMercs" row (RGMercsWnd), offered when the UI pack draws RGMercsWnd.
++inline constexpr int kMenuRGMercs = 0x10004;
+ // Hailstone: the plugins' menu entries (plugin/ui_bridge.h) in a "Plugins" submenu; entry i's row returns
+ // kMenuPluginFirst + i.
+ inline constexpr int kMenuPluginFirst = 0x20000;
+diff --git a/src/app/lua_eq_misc.cpp b/src/app/lua_eq_misc.cpp
+index 121e361c..58c1f63f 100644
+--- a/src/app/lua_eq_misc.cpp
++++ b/src/app/lua_eq_misc.cpp
+@@ -1059,6 +1059,7 @@ void add_misc_windows(std::vector<std::unique_ptr<StockWindow>>& out) {
+     out.push_back(make_player_notes_window());
+     out.push_back(std::make_unique<StockWindow>("BrowserWnd", false)); // the in-game browser (app/lua_eq_web.cpp)
+     out.push_back(std::make_unique<StockWindow>("ScriptsWnd", false)); // the Lua scripts (app/lua_eq_scripts.cpp)
++    out.push_back(std::make_unique<StockWindow>("RGMercsWnd", false)); // native RG Mercs window (app/lua_eq_rgmercs.cpp)
+ }
+ 
+ } // namespace hailstone::app
+diff --git a/src/app/lua_eq_plugins.h b/src/app/lua_eq_plugins.h
+index 2430c914..ed729e34 100644
+--- a/src/app/lua_eq_plugins.h
++++ b/src/app/lua_eq_plugins.h
+@@ -36,5 +36,6 @@ void register_plugins_api(lua_State* L, EqHost& host);
+ // plugin::CallerScope), not the player's: whoever chose it, the command is the plugin's. False: no such entry.
+ bool run_plugin_menu(EqHost& host, std::size_t i);
+ void register_scripts_api(lua_State* L, EqHost& host);
++void register_rgmercs_api(lua_State* L, EqHost& host);
+ 
+ } // namespace hailstone::app
 diff --git a/src/app/lua_eq_pregame.cpp b/src/app/lua_eq_pregame.cpp
 index 4e506557..01a0740c 100644
 --- a/src/app/lua_eq_pregame.cpp
@@ -1694,6 +1772,491 @@ index 4e506557..01a0740c 100644
                                     {"CharacterCreateDo", CharacterCreateDo}, {nullptr, nullptr}};
      lua_pushlightuserdata(L, &host);
      lua_pushlightuserdata(L, &screens);
+diff --git a/src/app/lua_eq_rgmercs.cpp b/src/app/lua_eq_rgmercs.cpp
+new file mode 100644
+index 00000000..4f85222d
+--- /dev/null
++++ b/src/app/lua_eq_rgmercs.cpp
+@@ -0,0 +1,479 @@
++// Hailstone-native RG Mercs UI adapter for the `eq` table (app/lua_eq_plugins.h, mq/rgmercs_bridge.h).
++// Keeps RG Mercs gameplay/combat logic decoupled from presentation: the UI reads status, modules, settings, and logs,
++// and triggers Start/Stop/Pause/Reload, settings edits, persistence, and read-only DB import through this boundary.
++
++#include "app/lua_eq_plugins.h"
++
++#include <algorithm>
++#include <chrono>
++#include <filesystem>
++#include <new>
++#include <string>
++#include <string_view>
++#include <vector>
++
++#include <lua.hpp>
++
++#include "app/lua_eq.h"
++#include "game/eq_names.h"
++#include "game/slash_commands.h"
++#include "game/world_state.h"
++#include "mq/lua_mq.h"
++#include "mq/rgmercs_bridge.h"
++#include "net/game_connection.h"
++#include "plugin/lua_keep.h"
++#include "plugin/policy.h"
++#include "ui/lua/lua_host.h"
++
++namespace hailstone::app {
++
++namespace {
++
++constexpr auto kRescan = std::chrono::seconds(1);
++
++struct RGMercsCache {
++    std::vector<mq::ScriptHost::Found> found;
++    std::chrono::steady_clock::time_point at{};
++    bool valid = false;
++
++    bool found_flag = false;
++    bool allowed = false;
++    bool server = false;
++    bool kept = false;
++    bool autorun = false;
++    bool autorun_available = false;
++    std::string status;
++    std::string script_error;
++    std::string why;
++    std::string caps;
++    std::string character;
++    std::string server_name;
++    std::string class_name;
++    mq::RGMercsBridge::Snapshot snap;
++};
++
++EqHost& host_of(lua_State* L) { return *static_cast<EqHost*>(lua_touserdata(L, lua_upvalueindex(1))); }
++RGMercsCache& cache_of(lua_State* L) { return *static_cast<RGMercsCache*>(lua_touserdata(L, lua_upvalueindex(2))); }
++bool plugin_code() { return !ui::lua::LuaUi::caller_tag().empty(); }
++
++int cache_gc(lua_State* L) {
++    static_cast<RGMercsCache*>(lua_touserdata(L, 1))->~RGMercsCache();
++    return 0;
++}
++
++std::string status_word(std::string_view s) {
++    if (s == "RUNNING") return "running";
++    if (s == "PAUSED") return "paused";
++    if (s == "EXITED") return "exited";
++    if (s == "ERROR") return "error";
++    return {};
++}
++
++void set_string(lua_State* L, const char* key, std::string_view v) {
++    lua_pushlstring(L, v.data(), v.size());
++    lua_setfield(L, -2, key);
++}
++
++void set_bool(lua_State* L, const char* key, bool v) {
++    lua_pushboolean(L, v);
++    lua_setfield(L, -2, key);
++}
++
++void set_int(lua_State* L, const char* key, lua_Integer v) {
++    lua_pushinteger(L, v);
++    lua_setfield(L, -2, key);
++}
++
++void set_number(lua_State* L, const char* key, double v) {
++    lua_pushnumber(L, v);
++    lua_setfield(L, -2, key);
++}
++
++std::vector<std::string> split_args(const char* a) {
++    std::vector<std::string> args;
++    if (!a) return args;
++    std::string_view rest = a;
++    while (true) {
++        while (!rest.empty() && rest.front() == ' ') rest.remove_prefix(1);
++        if (rest.empty()) break;
++        args.push_back(game::next_cmd_arg(rest));
++    }
++    return args;
++}
++
++// st = eq.RGMercsState([rescan])
++int RGMercsState(lua_State* L) {
++    EqHost& h = host_of(L);
++    RGMercsCache& c = cache_of(L);
++    const bool rescan = lua_toboolean(L, 1) != 0;
++    const bool restricted = plugin_code();
++
++    plugin::cxx_guard(L, [&] {
++        c.found_flag = false;
++        c.allowed = false;
++        c.server = false;
++        c.kept = false;
++        c.autorun = false;
++        c.autorun_available = false;
++        c.status.clear();
++        c.script_error.clear();
++        c.why.clear();
++        c.caps.clear();
++        c.character.clear();
++        c.server_name.clear();
++        c.class_name.clear();
++        c.snap = {};
++
++        if (h.scripts) {
++            const auto now = std::chrono::steady_clock::now();
++            if (!c.valid || rescan || now - c.at >= kRescan) {
++                c.found = h.scripts->found();
++                c.at = now;
++                c.valid = true;
++            }
++            for (const auto& f : c.found) {
++                if (f.name == "rgmercs") {
++                    c.found_flag = true;
++                    c.allowed = f.caps != 0;
++                    c.why = f.why;
++                    c.server = f.server;
++                    if (f.caps) c.caps = plugin::caps_text(f.caps);
++                    break;
++                }
++            }
++            for (const auto& i : h.scripts->list()) {
++                if (i.name == "rgmercs") {
++                    c.status = status_word(i.status);
++                    c.script_error = i.error;
++                    c.kept = i.kept;
++                    if (i.caps) c.caps = plugin::caps_text(i.caps);
++                    break;
++                }
++            }
++            c.autorun_available = h.scripts->autorun_available();
++            c.autorun = h.scripts->autorun("rgmercs");
++        }
++
++        if (h.rgmercs && !restricted) {
++            c.snap = h.rgmercs->snapshot();
++            if (c.status.empty() && !c.snap.script_status.empty()) {
++                c.status = c.snap.script_status;
++            }
++            if (c.script_error.empty() && !c.snap.last_error.empty()) {
++                c.script_error = c.snap.last_error;
++            }
++            c.character = c.snap.character;
++            c.server_name = c.snap.server;
++            c.class_name = c.snap.class_name;
++        }
++
++        if (c.character.empty() && h.conn) {
++            if (const game::Spawn* me = h.conn->world().player()) {
++                c.character = game::display_name(me->name);
++                if (c.class_name.empty()) {
++                    if (me->class_id != 0) c.class_name = game::class_short_name(me->class_id);
++                    else if (h.conn->player_class_mask() != 0) c.class_name = game::class_mask_name(h.conn->player_class_mask());
++                }
++            }
++        }
++        if (c.server_name.empty() && !h.rgmercs_server.empty()) c.server_name = h.rgmercs_server;
++    });
++
++    lua_createtable(L, 0, 20);
++    set_string(L, "status", c.status);
++    set_string(L, "runtime_state", c.snap.runtime_state);
++    set_string(L, "last_error", restricted ? std::string_view() : std::string_view(c.script_error));
++    set_int(L, "error_count", restricted ? 0 : c.snap.error_count);
++    set_bool(L, "found", c.found_flag);
++    set_bool(L, "allowed", c.allowed);
++    set_string(L, "why", restricted ? std::string_view() : std::string_view(c.why));
++    set_bool(L, "server_script", c.server);
++    set_bool(L, "kept", c.kept);
++    set_bool(L, "autorun", c.autorun);
++    set_bool(L, "autorun_available", c.autorun_available);
++    set_string(L, "caps", c.caps);
++
++    set_string(L, "character", c.character);
++    set_string(L, "server", c.server_name);
++    set_string(L, "class_name", c.class_name);
++    set_string(L, "settings_path", restricted ? std::string_view() : std::string_view(c.snap.settings_path));
++    set_string(L, "imported_from", restricted ? std::string_view() : std::string_view(c.snap.imported_from));
++    set_int(L, "imported_count", restricted ? 0 : c.snap.imported_count);
++    set_bool(L, "suppress_script_ui", c.snap.suppress_script_ui);
++    set_bool(L, "dirty", c.snap.dirty);
++
++    // available_dbs
++    lua_newtable(L);
++    if (!restricted) {
++        lua_Integer idx = 0;
++        for (const auto& db : c.snap.available_dbs) {
++            lua_pushlstring(L, db.data(), db.size());
++            lua_rawseti(L, -2, ++idx);
++        }
++    }
++    lua_setfield(L, -2, "available_dbs");
++
++    // modules
++    lua_newtable(L);
++    if (!restricted) {
++        lua_Integer idx = 0;
++        for (const auto& m : c.snap.modules) {
++            lua_createtable(L, 0, 4);
++            set_string(L, "name", m.name);
++            set_bool(L, "enabled", m.enabled);
++            set_string(L, "status", m.status);
++            set_string(L, "detail", m.detail);
++            lua_rawseti(L, -2, ++idx);
++        }
++    }
++    lua_setfield(L, -2, "modules");
++
++    // settings
++    lua_newtable(L);
++    if (!restricted) {
++        lua_Integer idx = 0;
++        for (const auto& s : c.snap.settings) {
++            lua_createtable(L, 0, 10);
++            set_string(L, "key", s.key);
++            set_string(L, "category", s.category);
++            set_string(L, "type", s.type);
++            set_string(L, "value", s.value);
++            set_string(L, "default_value", s.default_value);
++            set_string(L, "description", s.description);
++            set_number(L, "min_val", s.min_val);
++            set_number(L, "max_val", s.max_val);
++            set_bool(L, "imported", s.imported);
++            lua_newtable(L);
++            lua_Integer ci = 0;
++            for (const auto& ch : s.choices) {
++                lua_pushlstring(L, ch.data(), ch.size());
++                lua_rawseti(L, -2, ++ci);
++            }
++            lua_setfield(L, -2, "choices");
++            lua_rawseti(L, -2, ++idx);
++        }
++    }
++    lua_setfield(L, -2, "settings");
++
++    // logs
++    lua_newtable(L);
++    if (!restricted) {
++        lua_Integer idx = 0;
++        for (const auto& l : c.snap.logs) {
++            lua_createtable(L, 0, 3);
++            set_string(L, "timestamp", l.timestamp);
++            set_string(L, "level", l.level);
++            set_string(L, "message", l.message);
++            lua_rawseti(L, -2, ++idx);
++        }
++    }
++    lua_setfield(L, -2, "logs");
++
++    return 1;
++}
++
++// ok, msg = eq.RGMercsControl(action [, arg])
++int RGMercsControl(lua_State* L) {
++    EqHost& h = host_of(L);
++    const char* action_c = luaL_checkstring(L, 1);
++    const char* arg_c = luaL_optstring(L, 2, nullptr);
++    if (plugin_code()) {
++        lua_pushboolean(L, 0);
++        lua_pushliteral(L, "RGMercs controls are reserved for the player");
++        return 2;
++    }
++
++    std::string& why = plugin::lua_keep<std::string>(L);
++    bool ok = false;
++    plugin::cxx_guard(L, [&] {
++        const std::string_view action(action_c);
++        if (action == "start") {
++            if (!h.scripts) {
++                why = "scripts are off";
++                return;
++            }
++            if (h.rgmercs) h.rgmercs->clear_error();
++            ok = h.scripts->run("rgmercs", split_args(arg_c), &why);
++        } else if (action == "stop") {
++            ok = h.scripts && h.scripts->stop("rgmercs");
++            if (!ok) why = "rgmercs is not running";
++        } else if (action == "pause") {
++            ok = h.scripts && h.scripts->pause("rgmercs");
++            if (!ok) why = "rgmercs is not running";
++        } else if (action == "reload") {
++            if (!h.scripts) {
++                why = "scripts are off";
++                return;
++            }
++            h.scripts->stop("rgmercs");
++            if (h.rgmercs) {
++                h.rgmercs->clear_error();
++                h.rgmercs->append_log("info", "Reloading rgmercs...");
++            }
++            ok = h.scripts->run("rgmercs", split_args(arg_c), &why);
++        } else if (action == "autorun_on" || action == "autorun_off") {
++            ok = h.scripts && h.scripts->set_autorun("rgmercs", action == "autorun_on");
++            if (!ok) why = "no character attached";
++        } else if (action == "suppress_ui_on" || action == "suppress_ui_off") {
++            if (h.rgmercs) {
++                h.rgmercs->set_suppress_script_ui(action == "suppress_ui_on");
++                ok = true;
++            }
++        } else if (action == "clear_error") {
++            if (h.rgmercs) {
++                h.rgmercs->clear_error();
++                ok = true;
++            }
++        } else {
++            why = "unknown action";
++        }
++    });
++
++    lua_pushboolean(L, ok);
++    if (ok) return 1;
++    lua_pushlstring(L, why.data(), why.size());
++    return 2;
++}
++
++// ok = eq.RGMercsSetSetting(key, val [, category])
++int RGMercsSetSetting(lua_State* L) {
++    EqHost& h = host_of(L);
++    const char* key = luaL_checkstring(L, 1);
++    const char* val = luaL_checkstring(L, 2);
++    const char* cat = luaL_optstring(L, 3, "");
++    if (plugin_code() || !h.rgmercs) {
++        lua_pushboolean(L, 0);
++        return 1;
++    }
++    bool ok = false;
++    plugin::cxx_guard(L, [&] { ok = h.rgmercs->set_setting(key, val, cat, true); });
++    lua_pushboolean(L, ok);
++    return 1;
++}
++
++// ok = eq.RGMercsSaveSettings()
++int RGMercsSaveSettings(lua_State* L) {
++    EqHost& h = host_of(L);
++    if (plugin_code() || !h.rgmercs) {
++        lua_pushboolean(L, 0);
++        return 1;
++    }
++    bool ok = false;
++    plugin::cxx_guard(L, [&] { ok = h.rgmercs->save_settings(); });
++    lua_pushboolean(L, ok);
++    return 1;
++}
++
++// ok = eq.RGMercsResetDefaults()
++int RGMercsResetDefaults(lua_State* L) {
++    EqHost& h = host_of(L);
++    if (plugin_code() || !h.rgmercs) {
++        lua_pushboolean(L, 0);
++        return 1;
++    }
++    plugin::cxx_guard(L, [&] { h.rgmercs->reset_to_defaults(); });
++    lua_pushboolean(L, 1);
++    return 1;
++}
++
++// ok, count, detail = eq.RGMercsImportDb([path])
++int RGMercsImportDb(lua_State* L) {
++    EqHost& h = host_of(L);
++    const char* path_c = luaL_optstring(L, 1, "");
++    if (plugin_code() || !h.rgmercs) {
++        lua_pushboolean(L, 0);
++        lua_pushinteger(L, 0);
++        lua_pushliteral(L, "unavailable");
++        return 3;
++    }
++    auto& res = plugin::lua_keep<mq::RGMercsBridge::ImportResult>(L);
++    plugin::cxx_guard(L, [&] {
++        const std::string_view p(path_c);
++        res = p.empty() ? h.rgmercs->import_best_source()
++                        : h.rgmercs->import_from_path(std::filesystem::path(p));
++    });
++    lua_pushboolean(L, res.ok);
++    lua_pushinteger(L, res.imported_count);
++    const std::string& detail = res.ok ? res.source : res.error;
++    lua_pushlstring(L, detail.data(), detail.size());
++    return 3;
++}
++
++// ok = eq.RGMercsSetModule(name, enabled)
++int RGMercsSetModule(lua_State* L) {
++    EqHost& h = host_of(L);
++    const char* name = luaL_checkstring(L, 1);
++    const bool enabled = lua_toboolean(L, 2) != 0;
++    if (plugin_code() || !h.rgmercs) {
++        lua_pushboolean(L, 0);
++        return 1;
++    }
++    plugin::cxx_guard(L, [&] {
++        h.rgmercs->set_module(name, enabled, enabled ? "Idle" : "Disabled", {}, true);
++    });
++    lua_pushboolean(L, 1);
++    return 1;
++}
++
++// eq.RGMercsClearLogs()
++int RGMercsClearLogs(lua_State* L) {
++    EqHost& h = host_of(L);
++    if (!plugin_code() && h.rgmercs) {
++        plugin::cxx_guard(L, [&] { h.rgmercs->clear_logs(); });
++    }
++    return 0;
++}
++
++// ok = eq.RGMercsCommand(cmd)
++int RGMercsCommand(lua_State* L) {
++    EqHost& h = host_of(L);
++    const char* cmd_c = luaL_checkstring(L, 1);
++    if (plugin_code() || !h.run_rgmercs_command) {
++        lua_pushboolean(L, 0);
++        return 1;
++    }
++    bool ok = false;
++    plugin::cxx_guard(L, [&] {
++        std::string_view v(cmd_c);
++        while (!v.empty() && v.front() == ' ') v.remove_prefix(1);
++        while (!v.empty() && v.back() == ' ') v.remove_suffix(1);
++        if (v.empty()) return;
++        std::string line(v);
++        if (line.front() != '/') line = "/rgl " + line;
++        if (h.rgmercs) h.rgmercs->append_log("info", "cmd: " + line);
++        ok = h.run_rgmercs_command(line);
++    });
++    lua_pushboolean(L, ok);
++    return 1;
++}
++
++} // namespace
++
++void register_rgmercs_api(lua_State* L, EqHost& host) {
++    void* mem = lua_newuserdatauv(L, sizeof(RGMercsCache), 0);
++    new (mem) RGMercsCache();
++    lua_newtable(L);
++    lua_pushcfunction(L, cache_gc);
++    lua_setfield(L, -2, "__gc");
++    lua_setmetatable(L, -2);
++    const int cache = lua_gettop(L);
++
++    for (auto [name, fn] : std::initializer_list<std::pair<const char*, lua_CFunction>>{
++             {"RGMercsState", RGMercsState},
++             {"RGMercsControl", RGMercsControl},
++             {"RGMercsSetSetting", RGMercsSetSetting},
++             {"RGMercsSaveSettings", RGMercsSaveSettings},
++             {"RGMercsResetDefaults", RGMercsResetDefaults},
++             {"RGMercsImportDb", RGMercsImportDb},
++             {"RGMercsSetModule", RGMercsSetModule},
++             {"RGMercsClearLogs", RGMercsClearLogs},
++             {"RGMercsCommand", RGMercsCommand}}) {
++        lua_pushlightuserdata(L, &host);
++        lua_pushvalue(L, cache);
++        lua_pushcclosure(L, fn, 2);
++        lua_setfield(L, cache - 1, name);
++    }
++    lua_pop(L, 1);
++}
++
++} // namespace hailstone::app
 diff --git a/src/app/main.cpp b/src/app/main.cpp
 index 3cf70366..a7592f12 100644
 --- a/src/app/main.cpp
@@ -3754,10 +4317,10 @@ index ff926c13..4a5aa5fa 100644
  // While one is held, command lines are not ${}-expanded: a window's button sends text the player did not type as a
 diff --git a/src/mq/lua_compat_modules.cpp b/src/mq/lua_compat_modules.cpp
 new file mode 100644
-index 00000000..1ba87b61
+index 00000000..77a021f0
 --- /dev/null
 +++ b/src/mq/lua_compat_modules.cpp
-@@ -0,0 +1,2355 @@
+@@ -0,0 +1,2352 @@
 +#include "mq/lua_compat_modules.h"
 +
 +#include <algorithm>
@@ -3847,12 +4410,12 @@ index 00000000..1ba87b61
 +    if (ec) return false;
 +
 +    fs::path rel = canon_cand.lexically_relative(canon_root);
-+    if (rel.empty() || rel == ".") {
++    if (rel == "." || canon_cand == canon_root) {
 +        if (!allow_root) return false;
 +        out = std::move(canon_cand);
 +        return true;
 +    }
-+    if (rel.is_absolute()) return false;
++    if (rel.empty() || rel.is_absolute()) return false;
 +    if (*rel.begin() == "..") return false;
 +    if (reject_config_subdir && is_config_segment(rel)) return false;
 +    out = std::move(canon_cand);
@@ -5040,20 +5603,17 @@ index 00000000..1ba87b61
 +
 +int l_lfs_mkdir(lua_State* L) {
 +    const char* raw_path = luaL_checkstring(L, 1);
-+    // RG Mercs calls mkdir while walking an already-created config path. Treat
-+    // an existing directory as a successful no-op before resolving the write
-+    // operation; no filesystem mutation occurs in this case.
-+    std::error_code existing_ec;
-+    if (fs::is_directory(fs::path(raw_path), existing_ec)) {
-+        lua_pushboolean(L, 1);
-+        return 1;
-+    }
 +    std::string why;
 +    auto resolved = resolve_sandbox_path(L, raw_path, PathAccess::Write, true, why);
 +    if (!resolved) {
 +        lua_pushnil(L);
 +        lua_pushstring(L, why.c_str());
 +        return 2;
++    }
++    std::error_code existing_ec;
++    if (fs::is_directory(*resolved, existing_ec)) {
++        lua_pushboolean(L, 1);
++        return 1;
 +    }
 +    CompatHolder* h = get_compat(L);
 +    if (h && !h->env.config_dir.empty()) {
@@ -5878,12 +6438,12 @@ index 00000000..1ba87b61
 +})
 +preloaded['mq.ICONS'] = icons
 +
-+-- ImGui's global string hash helper used by RG Mercs for stable widget IDs.
-+-- FNV-1a is deterministic and sufficient for the Lua-side ID namespace.
++-- ImGui global string hash & color helpers used by RG Mercs
 +_G.ImHashStr = _G.ImHashStr or function(value)
++    local s = tostring(value)
 +    local hash = 2166136261
-+    for i = 1, #tostring(value) do
-+        hash = bit32.bxor(hash, string.byte(tostring(value), i))
++    for i = 1, #s do
++        hash = bit32.bxor(hash, string.byte(s, i))
 +        hash = (hash * 16777619) % 4294967296
 +    end
 +    return hash
@@ -5921,10 +6481,10 @@ index 00000000..1ba87b61
 +local ImAnim = {
 +    EasePreset = function(t) return t or 0 end,
 +    OscillateVec2 = function() return ImVec2(0, 0) end,
++    Oscillate = function(_, min_value, max_value) return (min_value + max_value) * 0.5 end,
 +    TweenFloat = function(_, _, target) return target or 0 end,
 +    TweenVec2 = function(_, _, target) return target or ImVec2(0, 0) end,
 +    TweenColor = function(_, _, target) return target end,
-+    Oscillate = function(_, min_value, max_value) return (min_value + max_value) * 0.5 end,
 +}
 +preloaded['ImAnim'] = ImAnim
 +
@@ -6169,8 +6729,258 @@ index 00000000..7ca562df
 +bool push_json_to_lua(lua_State* L, std::string_view json);
 +
 +} // namespace hailstone::mq
+diff --git a/src/mq/lua_hailstone.cpp b/src/mq/lua_hailstone.cpp
+index abcaed95..d5b79f88 100644
+--- a/src/mq/lua_hailstone.cpp
++++ b/src/mq/lua_hailstone.cpp
+@@ -36,7 +36,6 @@
+ #include "plugin/lua_keep.h"
+ #include "plugin/lua_value.h"
+ #include "plugin/policy.h"
+-#include "plugin/raid_snapshot.h"
+ #include "plugin/ui_bridge.h"
+ 
+ #define HAILSTONE_HOST
+@@ -910,65 +909,6 @@ int l_spawns(lua_State* L) {
+     return 1;
+ }
+ 
+-// hailstone.raid(): the raid roster as columnar tables (the members are 1-based; leader and target are 1-based
+-// indexes, 0 for none). One table, no table per member.
+-int l_raid(lua_State* L) {
+-    need_cap(L, plugin::kCapRead, "hailstone.raid");
+-    const net::GameConnection* c = readable(Script::of(L));
+-    if (!c) return 0;
+-    const plugin::RaidSnapshot raid = plugin::build_raid_snapshot(*c);
+-    lua_createtable(L, 0, 21);
+-    set_bool(L, "active", raid.active);
+-    set_bool(L, "locked", raid.locked);
+-    set_int(L, "loot_type", raid.loot_type);
+-    set_int(L, "count", static_cast<lua_Integer>(raid.members.size()));
+-    set_int(L, "leader", raid.leader ? static_cast<lua_Integer>(*raid.leader) + 1 : 0);
+-    set_int(L, "target", raid.target ? static_cast<lua_Integer>(*raid.target) + 1 : 0);
+-
+-    const lua_Integer n = static_cast<lua_Integer>(raid.members.size());
+-    auto column_int = [&](const char* key, auto value) {
+-        lua_createtable(L, static_cast<int>(n), 0);
+-        for (lua_Integer i = 0; i < n; ++i) {
+-            lua_pushinteger(L, static_cast<lua_Integer>(value(raid.members[static_cast<std::size_t>(i)])));
+-            lua_rawseti(L, -2, i + 1);
+-        }
+-        lua_setfield(L, -2, key);
+-    };
+-    auto column_num = [&](const char* key, auto value) {
+-        lua_createtable(L, static_cast<int>(n), 0);
+-        for (lua_Integer i = 0; i < n; ++i) {
+-            lua_pushnumber(L, static_cast<lua_Number>(value(raid.members[static_cast<std::size_t>(i)])));
+-            lua_rawseti(L, -2, i + 1);
+-        }
+-        lua_setfield(L, -2, key);
+-    };
+-    auto column_str = [&](const char* key, auto value) {
+-        lua_createtable(L, static_cast<int>(n), 0);
+-        for (lua_Integer i = 0; i < n; ++i) {
+-            const std::string& text = value(raid.members[static_cast<std::size_t>(i)]);
+-            lua_pushlstring(L, text.data(), text.size());
+-            lua_rawseti(L, -2, i + 1);
+-        }
+-        lua_setfield(L, -2, key);
+-    };
+-    column_int("spawn_id", [](const plugin::RaidMemberSnapshot& m) { return m.spawn_id; });
+-    column_str("name", [](const plugin::RaidMemberSnapshot& m) -> const std::string& { return m.name; });
+-    column_int("group", [](const plugin::RaidMemberSnapshot& m) { return m.group; });
+-    column_int("flags", [](const plugin::RaidMemberSnapshot& m) { return m.flags; });
+-    column_int("level", [](const plugin::RaidMemberSnapshot& m) { return m.level; });
+-    column_int("class", [](const plugin::RaidMemberSnapshot& m) { return m.class_id; });
+-    column_int("pct_hp", [](const plugin::RaidMemberSnapshot& m) { return m.pct_hp; });
+-    column_int("pct_mana", [](const plugin::RaidMemberSnapshot& m) { return m.pct_mana; });
+-    column_int("pct_endurance", [](const plugin::RaidMemberSnapshot& m) { return m.pct_endurance; });
+-    column_int("pet_spawn_id", [](const plugin::RaidMemberSnapshot& m) { return m.pet_spawn_id; });
+-    column_int("pet_pct_hp", [](const plugin::RaidMemberSnapshot& m) { return m.pet_pct_hp; });
+-    column_num("x", [](const plugin::RaidMemberSnapshot& m) { return m.x; });
+-    column_num("y", [](const plugin::RaidMemberSnapshot& m) { return m.y; });
+-    column_num("z", [](const plugin::RaidMemberSnapshot& m) { return m.z; });
+-    column_num("distance", [](const plugin::RaidMemberSnapshot& m) { return m.distance; });
+-    return 1;
+-}
+-
+ int l_spell(lua_State* L) {
+     need_cap(L, plugin::kCapRead, "hailstone.spell");
+     const net::GameConnection* c = readable(Script::of(L));
+@@ -1403,6 +1343,132 @@ int l_set_max_camera_distance(lua_State* L) {
+     return 0;
+ }
+ 
++// hailstone.rgmercs.*: Hailstone-native RG Mercs adapter boundary (settings, modules, status, logs).
++RGMercsBridge* rgmercs_bridge(lua_State* L) {
++    Script& s = Script::of(L);
++    return s.host ? s.host->env.rgmercs : nullptr;
++}
++
++void push_rgmercs_setting_value(lua_State* L, const RGMercsBridge::SettingEntry& e) {
++    if (e.type == "bool") {
++        lua_pushboolean(L, e.value == "true" || e.value == "1" ? 1 : 0);
++    } else if (e.type == "int") {
++        lua_pushinteger(L, static_cast<lua_Integer>(std::strtoll(e.value.c_str(), nullptr, 10)));
++    } else if (e.type == "float") {
++        lua_pushnumber(L, std::strtod(e.value.c_str(), nullptr));
++    } else {
++        lua_pushlstring(L, e.value.data(), e.value.size());
++    }
++}
++
++int l_rgmercs_using_native_ui(lua_State* L) {
++    RGMercsBridge* b = rgmercs_bridge(L);
++    lua_pushboolean(L, (b && b->suppress_script_ui()) ? 1 : 0);
++    return 1;
++}
++
++int l_rgmercs_get_setting(lua_State* L) {
++    const char* key = luaL_checkstring(L, 1);
++    RGMercsBridge* b = rgmercs_bridge(L);
++    if (!b) {
++        lua_pushnil(L);
++        return 1;
++    }
++    auto& got = plugin::lua_keep<std::optional<RGMercsBridge::SettingEntry>>(L);
++    got = b->get_setting(key);
++    if (!got) {
++        lua_pushnil(L);
++        return 1;
++    }
++    push_rgmercs_setting_value(L, *got);
++    return 1;
++}
++
++int l_rgmercs_get_settings(lua_State* L) {
++    RGMercsBridge* b = rgmercs_bridge(L);
++    lua_newtable(L);
++    if (!b) return 1;
++    auto& all = plugin::lua_keep<std::vector<RGMercsBridge::SettingEntry>>(L);
++    all = b->settings();
++    for (const auto& e : all) {
++        lua_pushlstring(L, e.key.data(), e.key.size());
++        push_rgmercs_setting_value(L, e);
++        lua_rawset(L, -3);
++    }
++    return 1;
++}
++
++int l_rgmercs_set_setting(lua_State* L) {
++    const char* key = luaL_checkstring(L, 1);
++    const char* cat = luaL_optstring(L, 3, "");
++    const char* raw = nullptr;
++    bool bool_val = false;
++    bool is_bool = false;
++    if (lua_type(L, 2) == LUA_TBOOLEAN) {
++        is_bool = true;
++        bool_val = lua_toboolean(L, 2) != 0;
++    } else {
++        raw = luaL_tolstring(L, 2, nullptr);
++    }
++    RGMercsBridge* b = rgmercs_bridge(L);
++    const bool ok = b && b->set_setting(key, is_bool ? (bool_val ? "true" : "false") : (raw ? raw : ""), cat, false);
++    lua_pushboolean(L, ok ? 1 : 0);
++    return 1;
++}
++
++int l_rgmercs_set_module(lua_State* L) {
++    const char* name = luaL_checkstring(L, 1);
++    const bool enabled = lua_toboolean(L, 2) != 0;
++    const char* status = luaL_optstring(L, 3, "");
++    const char* detail = luaL_optstring(L, 4, "");
++    if (RGMercsBridge* b = rgmercs_bridge(L)) {
++        b->set_module(name, enabled, status, detail, false);
++    }
++    return 0;
++}
++
++int l_rgmercs_log(lua_State* L) {
++    const char* level = luaL_optstring(L, 1, "info");
++    const char* msg = luaL_checkstring(L, 2);
++    if (RGMercsBridge* b = rgmercs_bridge(L)) {
++        b->append_log(level, msg);
++    }
++    return 0;
++}
++
++int l_rgmercs_set_status(lua_State* L) {
++    const char* state = luaL_optstring(L, 1, "");
++    const char* err = luaL_optstring(L, 2, "");
++    if (RGMercsBridge* b = rgmercs_bridge(L)) {
++        b->set_runtime_state(state);
++        if (err[0] != '\0') b->set_script_error(err);
++    }
++    return 0;
++}
++
++int l_rgmercs_clear_error(lua_State* L) {
++    if (RGMercsBridge* b = rgmercs_bridge(L)) b->clear_error();
++    return 0;
++}
++
++int l_rgmercs_take_pending_changes(lua_State* L) {
++    lua_newtable(L);
++    RGMercsBridge* b = rgmercs_bridge(L);
++    if (!b) return 1;
++    auto& list = plugin::lua_keep<std::vector<std::pair<std::string, std::string>>>(L);
++    list = b->take_pending_changes();
++    lua_Integer idx = 0;
++    for (const auto& [k, v] : list) {
++        lua_createtable(L, 0, 2);
++        lua_pushlstring(L, k.data(), k.size());
++        lua_setfield(L, -2, "key");
++        lua_pushlstring(L, v.data(), v.size());
++        lua_setfield(L, -2, "value");
++        lua_rawseti(L, -2, ++idx);
++    }
++    return 1;
++}
++
+ } // namespace
+ 
+ void register_hailstone(lua_State* L) {
+@@ -1427,7 +1493,6 @@ void register_hailstone(lua_State* L) {
+              {"item", l_item},
+              {"buff", l_buff},
+              {"xtarget", l_xtarget},
+-             {"raid", l_raid},
+              {"eqstr", l_eqstr},
+              {"zone_name", l_zone_name},
+              {"server", l_server},
+@@ -1450,15 +1515,21 @@ void register_hailstone(lua_State* L) {
+         lua_pushcfunction(L, fn);
+         lua_setfield(L, -2, n);
+     }
+-    // The raid flag bits, so a script does not have to copy HS_BULK_RAID_* by hand.
+-    set_int(L, "RAID_LEADER", HS_BULK_RAID_LEADER);
+-    set_int(L, "RAID_GROUP_LEADER", HS_BULK_RAID_GROUP_LEADER);
+-    set_int(L, "RAID_MAIN_ASSIST", HS_BULK_RAID_MAIN_ASSIST);
+-    set_int(L, "RAID_MARKER", HS_BULK_RAID_MARKER);
+-    set_int(L, "RAID_WAYPOINTER", HS_BULK_RAID_WAYPOINTER);
+-    set_int(L, "RAID_LOOTER", HS_BULK_RAID_LOOTER);
+-    set_int(L, "RAID_PRESENT", HS_BULK_RAID_PRESENT);
+-    set_int(L, "RAID_ME", HS_BULK_RAID_ME);
++    lua_newtable(L); // hailstone.rgmercs
++    for (auto [n, fn] : std::initializer_list<std::pair<const char*, lua_CFunction>>{
++             {"using_native_ui", l_rgmercs_using_native_ui},
++             {"get_setting", l_rgmercs_get_setting},
++             {"get_settings", l_rgmercs_get_settings},
++             {"set_setting", l_rgmercs_set_setting},
++             {"set_module", l_rgmercs_set_module},
++             {"log", l_rgmercs_log},
++             {"set_status", l_rgmercs_set_status},
++             {"clear_error", l_rgmercs_clear_error},
++             {"take_pending_changes", l_rgmercs_take_pending_changes}}) {
++        lua_pushcfunction(L, fn);
++        lua_setfield(L, -2, n);
++    }
++    lua_setfield(L, -2, "rgmercs");
+     lua_setglobal(L, "hailstone");
+     // A plugin script in its own folder (lua/<name>/init.lua) with a ui/ there: its windows for each UI pack.
+     Script& s = Script::of(L);
 diff --git a/src/mq/lua_mq.cpp b/src/mq/lua_mq.cpp
-index ae753ef3..b9220393 100644
+index ae753ef3..20486f88 100644
 --- a/src/mq/lua_mq.cpp
 +++ b/src/mq/lua_mq.cpp
 @@ -27,6 +27,7 @@
@@ -6181,7 +6991,21 @@ index ae753ef3..b9220393 100644
  #include "mq/parse.h"
  #include "plugin/lua_keep.h"
  #include "net/game_connection.h"
-@@ -1094,6 +1095,13 @@ int find_module(lua_State* L, const char* given) {
+@@ -345,7 +346,12 @@ int l_print(lua_State* L) {
+         luaL_addvalue(&b);
+     }
+     luaL_pushresult(&b);
+-    Script::of(L).host->say(lua_tostring(L, -1));
++    const char* msg = lua_tostring(L, -1);
++    Script& sc = Script::of(L);
++    if (msg && sc.name == "rgmercs" && sc.host && sc.host->env.rgmercs) {
++        sc.host->env.rgmercs->append_log("info", msg);
++    }
++    sc.host->say(msg ? msg : "");
+     return 0;
+ }
+ 
+@@ -1094,6 +1100,13 @@ int find_module(lua_State* L, const char* given) {
      lua_remove(L, -2);
      if (!lua_isnil(L, -1)) return 2;
      lua_pop(L, 1);
@@ -6195,10 +7019,33 @@ index ae753ef3..b9220393 100644
      if (std::strcmp(given, "mq") == 0) {
          lua_getfield(L, LUA_REGISTRYINDEX, "hailstone.mq");
          return 2;
-@@ -1273,8 +1281,93 @@ function ImGui.SetNextWindowPos(x, y, cond)
+@@ -1171,6 +1184,18 @@ do
+         return f()
+     end
+ end
++do
++    local raw_load = load
++    if raw_load then
++        function load(chunk, chunkname, mode, env)
++            if env ~= nil then return raw_load(chunk, chunkname, 't', env) end
++            return raw_load(chunk, chunkname, 't')
++        end
++        function loadstring(chunk, chunkname)
++            return raw_load(chunk, chunkname, 't')
++        end
++    end
++end
+ local yield = coroutine.yield
+ 
+ function mq.delay(t, cond)
+@@ -1273,8 +1298,97 @@ function ImGui.SetNextWindowPos(x, y, cond)
      if type(x) == 'table' then return ui.SetNextWindowPos(x.x or x[1], x.y or x[2], y) end
      return ui.SetNextWindowPos(x, y, cond)
  end
++function ImGui.Dummy(w, h)
++    if type(w) == 'table' then return ui.Dummy(w.x or w[1] or 0, w.y or w[2] or 0) end
++    return ui.Dummy(w or 0, h or 0)
++end
 +local ImVec4_methods = {}
 +function ImVec4_methods:ToImU32()
 +    local function ch(v, d)
@@ -6290,7 +7137,7 @@ index ae753ef3..b9220393 100644
  ImGuiWindowFlags = ui.WindowFlags
  ImGuiCond = ui.Cond
  ImGuiCol = ui.Col
-@@ -1286,6 +1379,114 @@ ImGuiComboFlags = ui.ComboFlags
+@@ -1286,6 +1400,114 @@ ImGuiComboFlags = ui.ComboFlags
  ImGuiSelectableFlags = ui.SelectableFlags
  ImGuiMouseButton = ui.Mouse
  ImGuiHoveredFlags = ui.HoveredFlags
@@ -6405,7 +7252,7 @@ index ae753ef3..b9220393 100644
  )lua";
  
  } // namespace
-@@ -1345,9 +1546,16 @@ ScriptHost::ScriptHost(ScriptEnv env) : impl_(std::make_unique<Impl>()) {
+@@ -1345,9 +1567,16 @@ ScriptHost::ScriptHost(ScriptEnv env) : impl_(std::make_unique<Impl>()) {
      m->owner = m->env.hooks->new_owner("lua");
      m->env.hooks->add_command(m->owner, "/lua", [m](std::string_view args) { m->lua_command(args); },
                                plugin::kCapCommands);
@@ -6422,21 +7269,20 @@ index ae753ef3..b9220393 100644
      for (auto& s : impl_->scripts) s->close();
      for (auto& [social, s] : impl_->buttons) s->close();
      if (impl_->env.hooks) impl_->env.hooks->remove(impl_->owner);
-@@ -1396,10 +1604,9 @@ bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
+@@ -1395,11 +1624,7 @@ bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
+         lua_pushcclosure(L, runaway_safe_call, 1);
          lua_setglobal(L, name);
      }
-     // No code from strings or files beyond allowed modules; os only for the clock.
+-    // No code from strings or files beyond allowed modules; os only for the clock.
 -    for (const char* drop : {"load", "loadstring"}) {
 -        lua_pushnil(L);
 -        lua_setglobal(L, drop);
 -    }
-+    // Keep Lua's text-only load helpers available. RG Mercs uses `load` to
-+    // deserialize values stored in its configuration database; the script
-+    // environment still uses the normal text chunk loader and capabilities.
++    // Keep text-only load/loadstring (wrapped in kPrelude to force mode 't'); string.dump stays removed and os stays clock-only.
      lua_getglobal(L, "string");
      lua_pushnil(L);
      lua_setfield(L, -2, "dump");
-@@ -1486,6 +1693,27 @@ bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
+@@ -1486,6 +1711,27 @@ bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
      lua_setfield(L, LUA_REGISTRYINDEX, "hailstone.mq");
      lua_pushvalue(L, -1);
      lua_setglobal(L, "mq");
@@ -6464,7 +7310,57 @@ index ae753ef3..b9220393 100644
      register_hailstone(L);
      if (luaL_loadbufferx(L, kPrelude, std::strlen(kPrelude), "=mq", "t") != LUA_OK) {
          std::string err = lua_tostring(L, -1);
-@@ -1691,12 +1919,29 @@ void ScriptHost::Impl::reap() {
+@@ -1506,13 +1752,14 @@ bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
+ 
+ bool ScriptHost::run(const std::string& name, const std::vector<std::string>& args, std::string* why) {
+     Impl& m = *impl_;
++    const std::string key = lower(name);
+     auto refuse = [&](std::string text) {
+         if (why) *why = text;
++        if (key == "rgmercs" && m.env.rgmercs) m.env.rgmercs->set_script_error(text);
+         m.say("[Lua] " + text);
+         return false;
+     };
+     m.reap();
+-    std::string key = lower(name);
+     // The Lua socials' names (button_name): a script of such a name would share a social's config folder and
+     // browser owner.
+     if (key.starts_with(kSocialPrefix)) return refuse(std::format("{}: a script's name cannot start with \"{}\"", key, kSocialPrefix));
+@@ -1560,6 +1807,11 @@ bool ScriptHost::run(const std::string& name, const std::vector<std::string>& ar
+     lua_xmove(L, sc.co, 1); // the chunk onto the coroutine
+     sc.co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+     watch(sc.co);
++    if (key == "rgmercs" && m.env.rgmercs) {
++        m.env.rgmercs->clear_error();
++        m.env.rgmercs->set_script_status("running");
++        m.env.rgmercs->append_log("info", "Starting rgmercs script...");
++    }
+     m.say(std::format("[Lua] running {} ({})", key, plugin::caps_text(caps)));
+     log::info("lua: running {} from {}, sha256 {}, caps {}", key, entry->string(), to_hex(hash), plugin::caps_text(caps));
+     m.scripts.push_back(std::move(s));
+@@ -1574,6 +1826,10 @@ bool ScriptHost::Impl::kept(const Script& s) const {
+ void ScriptHost::Impl::end(Script& s, const std::string& why) {
+     s.stop_requested = true;
+     if (s.status == Script::Status::Running || s.status == Script::Status::Paused) s.status = Script::Status::Exited;
++    if (s.name == "rgmercs" && env.rgmercs) {
++        env.rgmercs->set_script_status("exited");
++        env.rgmercs->append_log("info", "rgmercs " + why);
++    }
+     say("[Lua] " + s.name + " " + why);
+ }
+ 
+@@ -1617,6 +1873,10 @@ bool ScriptHost::pause(std::string_view name, std::optional<bool> paused) {
+     if (impl_->refuse_control(*s)) return true;
+     bool now_paused = paused ? *paused : s->status != Script::Status::Paused;
+     s->status = now_paused ? Script::Status::Paused : Script::Status::Running;
++    if (s->name == "rgmercs" && impl_->env.rgmercs) {
++        impl_->env.rgmercs->set_script_status(now_paused ? "paused" : "running");
++        impl_->env.rgmercs->append_log("info", now_paused ? "rgmercs paused." : "rgmercs resumed.");
++    }
+     impl_->say(std::format("[Lua] {} {}", s->name, now_paused ? "paused" : "resumed"));
+     return true;
+ }
+@@ -1691,12 +1951,29 @@ void ScriptHost::Impl::reap() {
  void ScriptHost::pulse() {
      Impl& m = *impl_;
      Impl::Walk walk(m);
@@ -6494,11 +7390,32 @@ index ae753ef3..b9220393 100644
          if (s.main_done) { // a plugin whose main chunk returned: only its binds' threads
              ++s.busy;
              plugin::CallerScope scope(s.caps, s.name);
+@@ -1731,10 +2008,12 @@ void ScriptHost::pulse() {
+         } else if (st == LUA_OK) {
+             s.stop_requested = true; // the script's main chunk returned
+             s.status = Script::Status::Exited;
++            if (s.name == "rgmercs" && m.env.rgmercs) m.env.rgmercs->set_script_status("exited");
+             m.say("[Lua] " + s.name + " ended");
+         } else if (lua_touserdata(s.co, -1) == &kExitKey) {
+             s.stop_requested = true;
+             s.status = Script::Status::Exited;
++            if (s.name == "rgmercs" && m.env.rgmercs) m.env.rgmercs->set_script_status("exited");
+             m.say("[Lua] " + s.name + " ended");
+         } else {
+             const char* err = lua_tostring(s.co, -1);
+@@ -1803,6 +2082,7 @@ void ScriptHost::imgui() {
+ 
+ void ScriptHost::Impl::draw_windows(Script& s) {
+     if (s.stop_requested || s.windows.empty() || (s.caps & plugin::kCapUi) == 0) return;
++    if (s.name == "rgmercs" && env.rgmercs && env.rgmercs->suppress_script_ui()) return;
+     ++s.busy;
+     plugin::CallerScope scope(s.caps, s.name);
+     // A draw function may destroy or make windows (its own too): this frame draws the ones there were, those still
 diff --git a/src/mq/lua_mq.h b/src/mq/lua_mq.h
-index 35b417ac..677304ac 100644
+index 35b417ac..37cbcad9 100644
 --- a/src/mq/lua_mq.h
 +++ b/src/mq/lua_mq.h
-@@ -34,6 +34,7 @@
+@@ -34,11 +34,14 @@
  #include "plugin/policy.h"
  
  namespace hailstone::game { class ExtensionChain; }
@@ -6506,28 +7423,40 @@ index 35b417ac..677304ac 100644
  namespace hailstone::net { struct AppPacket; class GameConnection; }
  namespace hailstone::plugin { class UiBridge; class WebAccess; }
  
-@@ -75,6 +76,8 @@ struct ScriptEnv {
+ namespace hailstone::mq {
+ 
++class RGMercsBridge;
++
+ struct ScriptEnv {
+     plugin::Hooks* hooks = nullptr;
+     const plugin::Policy* policy = nullptr;
+@@ -75,6 +78,10 @@ struct ScriptEnv {
      // How long a script may run without a chance to yield before it is stopped, in real time; 0: kRunawayMs (5 s).
      // Only tests set it, so a runaway is stopped in milliseconds.
      std::int64_t runaway_ms = 0;
 +    // Hailstone 24: local IPC bus for require('actors') and cross-session routing.
 +    ipc::SessionBusClient* ipc_bus = nullptr;
++    // Hailstone 24: native RG Mercs state/settings/log bridge (non-owning, optional).
++    RGMercsBridge* rgmercs = nullptr;
  };
  
  // A Lua social's hot button pressed (game/lua_social.h). The social's Lua sees `button` = {social, bar, button,
 diff --git a/src/mq/lua_script.h b/src/mq/lua_script.h
-index 56ce26bb..33bc508c 100644
+index 56ce26bb..d90c9290 100644
 --- a/src/mq/lua_script.h
 +++ b/src/mq/lua_script.h
-@@ -22,6 +22,7 @@
+@@ -22,8 +22,10 @@
  #include "core/log.h"
  #include "core/sha256.h"
  #include "game/server_ext.h"
 +#include "ipc/session_bus.h"
  #include "mq/event_pattern.h"
  #include "mq/lua_mq.h"
++#include "mq/rgmercs_bridge.h"
  
-@@ -143,6 +144,7 @@ struct ScriptHost::Impl {
+ namespace hailstone::mq {
+ 
+@@ -143,6 +145,7 @@ struct ScriptHost::Impl {
      void resume_threads(Script& s);
      void draw_windows(Script& s);
      plugin::ButtonRules rules(const game::LuaSocial& lua) const;
@@ -6535,6 +7464,1135 @@ index 56ce26bb..33bc508c 100644
  };
  
  struct Script {
+@@ -250,6 +253,7 @@ struct Script {
+         if (status == Status::Failed || status == Status::Exited) return;
+         status = Status::Failed;
+         error = std::move(why);
++        if (name == "rgmercs" && host && host->env.rgmercs) host->env.rgmercs->set_script_error(error);
+         host->say(std::format("[Lua] {} ended with an error: {}", name, error));
+         log::warn("lua script {}: {}", name, error);
+         stop_requested = true;
+diff --git a/src/mq/rgmercs_bridge.cpp b/src/mq/rgmercs_bridge.cpp
+new file mode 100644
+index 00000000..b2565180
+--- /dev/null
++++ b/src/mq/rgmercs_bridge.cpp
+@@ -0,0 +1,942 @@
++#include "mq/rgmercs_bridge.h"
++
++#include <algorithm>
++#include <array>
++#include <cctype>
++#include <chrono>
++#include <cstdlib>
++#include <format>
++#include <fstream>
++#include <sstream>
++#include <system_error>
++#include <unordered_set>
++
++#include <sqlite3.h>
++
++#include "core/ini_file.h"
++#include "core/log.h"
++#include "platform/local_time.h"
++
++namespace hailstone::mq {
++
++namespace fs = std::filesystem;
++
++namespace {
++
++std::string to_lower_ascii(std::string_view s) {
++    std::string out(s);
++    for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
++    return out;
++}
++
++bool iequals_ascii(std::string_view a, std::string_view b) {
++    if (a.size() != b.size()) return false;
++    for (std::size_t i = 0; i < a.size(); ++i) {
++        if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i])))
++            return false;
++    }
++    return true;
++}
++
++std::string trim_ascii(std::string_view s) {
++    std::size_t b = 0;
++    while (b < s.size() && std::isspace(static_cast<unsigned char>(s[b]))) ++b;
++    std::size_t e = s.size();
++    while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1]))) --e;
++    return std::string(s.substr(b, e - b));
++}
++
++std::string unquote_ascii(std::string_view s) {
++    std::string t = trim_ascii(s);
++    if (t.size() >= 2 && ((t.front() == '"' && t.back() == '"') || (t.front() == '\'' && t.back() == '\''))) {
++        return t.substr(1, t.size() - 2);
++    }
++    return t;
++}
++
++bool contains_icase(std::string_view haystack, std::string_view needle) {
++    if (needle.empty()) return true;
++    const std::string h = to_lower_ascii(haystack);
++    const std::string n = to_lower_ascii(needle);
++    return h.find(n) != std::string::npos;
++}
++
++std::string quote_sqlite_ident(std::string_view ident) {
++    std::string out = "\"";
++    for (char c : ident) {
++        if (c == '"') out += "\"\"";
++        else out += c;
++    }
++    out += '"';
++    return out;
++}
++
++bool is_db_extension(const fs::path& p) {
++    const std::string ext = to_lower_ascii(p.extension().string());
++    return ext == ".db" || ext == ".sqlite" || ext == ".sqlite3";
++}
++
++bool is_lua_config_extension(const fs::path& p) {
++    return to_lower_ascii(p.extension().string()) == ".lua";
++}
++
++std::string normalize_token(std::string_view s) {
++    std::string out;
++    for (char c : s) {
++        if (std::isalnum(static_cast<unsigned char>(c))) {
++            out += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
++        }
++    }
++    return out;
++}
++
++} // namespace
++
++RGMercsBridge::RGMercsBridge() {
++    std::lock_guard<std::mutex> lock(mutex_);
++    init_defaults_locked();
++}
++
++void RGMercsBridge::init_defaults_locked() {
++    settings_.clear();
++    modules_.clear();
++
++    auto add_bool = [&](std::string key, std::string cat, bool def, std::string desc) {
++        SettingEntry e;
++        e.key = std::move(key);
++        e.category = std::move(cat);
++        e.type = "bool";
++        e.default_value = def ? "true" : "false";
++        e.value = e.default_value;
++        e.description = std::move(desc);
++        settings_.push_back(std::move(e));
++    };
++    auto add_int = [&](std::string key, std::string cat, int def, int mn, int mx, std::string desc) {
++        SettingEntry e;
++        e.key = std::move(key);
++        e.category = std::move(cat);
++        e.type = "int";
++        e.default_value = std::to_string(def);
++        e.value = e.default_value;
++        e.min_val = static_cast<double>(mn);
++        e.max_val = static_cast<double>(mx);
++        e.description = std::move(desc);
++        settings_.push_back(std::move(e));
++    };
++    auto add_str = [&](std::string key, std::string cat, std::string def, std::string desc) {
++        SettingEntry e;
++        e.key = std::move(key);
++        e.category = std::move(cat);
++        e.type = "string";
++        e.default_value = std::move(def);
++        e.value = e.default_value;
++        e.description = std::move(desc);
++        settings_.push_back(std::move(e));
++    };
++    auto add_choice = [&](std::string key, std::string cat, std::string def, std::vector<std::string> choices,
++                          std::string desc) {
++        SettingEntry e;
++        e.key = std::move(key);
++        e.category = std::move(cat);
++        e.type = "choice";
++        e.default_value = std::move(def);
++        e.value = e.default_value;
++        e.choices = std::move(choices);
++        e.description = std::move(desc);
++        settings_.push_back(std::move(e));
++    };
++
++    // Combat
++    add_bool("DoMelee", "Combat", true, "Engage enemies in melee combat when in range");
++    add_bool("AutoAttack", "Combat", true, "Automatically toggle attack on valid combat targets");
++    add_bool("StayOnTarget", "Combat", true, "Stick to and face target during melee combat");
++    add_str("StickHow", "Combat", "snaproll", "Stick command options (e.g. snaproll, !front, moveback)");
++    add_choice("CombatMode", "Combat", "Auto", {"Auto", "Melee", "Caster", "Tank", "Healer", "Hybrid"},
++               "Primary combat behavior profile");
++    add_bool("BurnNamed", "Combat", true, "Trigger burn abilities automatically on named NPCs");
++    add_bool("BurnAlways", "Combat", false, "Use burn cooldowns whenever ready in combat");
++    add_int("BurnCount", "Combat", 3, 1, 20, "Hostile XTarget count threshold to trigger AE/burn");
++    add_bool("UseAbilities", "Combat", true, "Use combat disciplines, skills, and abilities");
++    add_bool("UseAA", "Combat", true, "Use Alternate Advancement combat abilities");
++
++    // Targeting
++    add_bool("DoAssist", "Targeting", true, "Assist the designated Main Assist target");
++    add_choice("MASlot", "Targeting", "GroupMA", {"GroupMA", "RaidMA", "Tank", "Named", "Custom"},
++               "Source used to determine the Main Assist");
++    add_str("CustomMA", "Targeting", "", "Explicit character name when MASlot is set to Custom");
++    add_int("AssistRange", "Targeting", 100, 10, 400, "Maximum range to acquire Main Assist targets");
++    add_bool("AutoTarget", "Targeting", true, "Automatically select a hostile target if none selected");
++    add_int("AutoEngagePct", "Targeting", 99, 1, 100, "Target HP percentage threshold before engaging");
++    add_bool("SwitchWithMA", "Targeting", true, "Switch targets immediately if the Main Assist switches");
++    add_bool("PriorityTargetFirst", "Targeting", true, "Prioritize named or high-threat targets on XTarget");
++
++    // Healing
++    add_bool("DoHeals", "Healing", true, "Enable automated healing routines");
++    add_int("HealPct", "Healing", 75, 1, 99, "HP percentage to begin standard single-target heals");
++    add_int("EmergencyHealPct", "Healing", 40, 1, 99, "HP percentage to trigger fast/emergency heals");
++    add_int("GroupHealPct", "Healing", 75, 1, 99, "HP percentage threshold for group heal evaluation");
++    add_int("GroupHealCount", "Healing", 2, 1, 6, "Injured group members required before group healing");
++    add_int("PetHealPct", "Healing", 50, 0, 99, "Pet HP percentage threshold (0 disables pet heals)");
++    add_bool("UseHoTs", "Healing", true, "Maintain Heal-over-Time spells on injured targets");
++    add_bool("DoCures", "Healing", true, "Automatically cure detrimental poison/disease/curse effects");
++    add_bool("DoRez", "Healing", true, "Automatically resurrect fallen group or raid members");
++    add_bool("RezInCombat", "Healing", false, "Allow resurrection casts while in active combat");
++
++    // Buffs
++    add_bool("DoBuffs", "Buffs", true, "Maintain configured self, group, and pet buffs");
++    add_bool("BuffInCombat", "Buffs", false, "Allow buff refreshes during combat");
++    add_bool("DoSelfBuffs", "Buffs", true, "Maintain self-only spells and aura buffs");
++    add_bool("DoGroupBuffs", "Buffs", true, "Cast group and beneficial target buffs on allies");
++    add_bool("DoPetBuffs", "Buffs", true, "Keep group and summoned pets buffed");
++    add_int("BuffCheckInterval", "Buffs", 5, 1, 60, "Seconds between downtime buff checks");
++    add_bool("ClickyBuffs", "Buffs", true, "Use worn/inventory clicky buff items");
++
++    // Debuffs
++    add_bool("DoDebuffs", "Debuffs", true, "Cast configured debuffs on active targets");
++    add_bool("DoMez", "Debuffs", false, "Crowd-control unengaged XTarget adds with Mez");
++    add_int("MezMinLevel", "Debuffs", 1, 1, 125, "Minimum mob level to mez");
++    add_int("MezAECount", "Debuffs", 3, 1, 10, "Unmezzed add count before attempting AE Mez");
++    add_bool("DoSlow", "Debuffs", true, "Cast slow debuffs on engaged NPCs");
++    add_int("SlowPct", "Debuffs", 95, 1, 100, "Target HP percentage below which to cast Slow");
++    add_bool("DoSnare", "Debuffs", true, "Cast snare on fleeing or low-HP targets");
++    add_int("SnarePct", "Debuffs", 30, 1, 100, "Target HP percentage below which to apply Snare");
++    add_bool("DoTash", "Debuffs", true, "Apply magic resistance debuffs (Tash/Resists)");
++    add_bool("DoMalo", "Debuffs", true, "Apply elemental/malo resistance debuffs");
++
++    // Movement
++    add_bool("ChaseOn", "Movement", false, "Follow the configured chase target when out of combat");
++    add_str("ChaseTarget", "Movement", "", "Character name to follow when ChaseOn is enabled");
++    add_int("ChaseDistance", "Movement", 25, 5, 200, "Distance beyond which movement begins toward chase target");
++    add_int("ChaseStopDistance", "Movement", 15, 5, 150, "Distance at which chase movement stops");
++    add_bool("CampHard", "Movement", false, "Hold camp anchor strictly and return when idle");
++    add_bool("ReturnToCamp", "Movement", true, "Return to camp spot after combat ends");
++    add_int("CampRadius", "Movement", 30, 5, 200, "Allowed leash radius around camp anchor");
++    add_bool("UseNav", "Movement", true, "Prefer Hailstone nav mesh routing for movement");
++    add_int("NavBreakDist", "Movement", 200, 20, 1000, "Maximum distance before breaking nav follow");
++
++    // Loot
++    add_bool("DoLoot", "Loot", false, "Enable automated corpse looting after combat");
++    add_bool("LootInCombat", "Loot", false, "Allow looting while still on XTarget aggro");
++    add_int("LootRange", "Loot", 75, 10, 300, "Maximum radius to move to lootable corpses");
++    add_int("MinSellPrice", "Loot", 0, 0, 100000, "Minimum platinum value to loot non-quest items");
++    add_int("SaveBagSlots", "Loot", 1, 0, 20, "Minimum free inventory bag slots to preserve");
++    add_bool("LootNoDrop", "Loot", false, "Prompt/loot No-Drop items automatically when eligible");
++
++    // Class settings
++    add_bool("ShowClassModule", "Class", true, "Enable active class rotation and ability module");
++    add_choice("ClassMode", "Class", "Default", {"Default", "DPS", "Tank", "Healer", "Puller", "Assist"},
++               "Class module specialization mode");
++    add_bool("UseMercs", "Class", true, "Coordinate with mercenary AI/stance when active");
++    add_bool("StandWhenDone", "Class", true, "Stand automatically at full mana/endurance");
++    add_int("MedPct", "Class", 80, 0, 100, "Mana percentage threshold to meditate out of combat");
++    add_int("EndMedPct", "Class", 80, 0, 100, "Endurance percentage threshold to rest out of combat");
++    add_str("ClassPreset", "Class", "", "Optional named class configuration preset");
++
++    // Core modules matching standard RG Mercs workflow
++    const std::array<const char*, 9> kDefaultModules = {
++        "Main", "Combat", "Targeting", "Healing", "Buffs", "Debuffs", "Movement", "Loot", "Class",
++    };
++    for (const char* m : kDefaultModules) {
++        ModuleState ms;
++        ms.name = m;
++        ms.enabled = true;
++        ms.status = "Idle";
++        modules_.push_back(std::move(ms));
++    }
++}
++
++bool RGMercsBridge::is_under_root(const fs::path& root, const fs::path& candidate, bool allow_equal) {
++    if (root.empty() || candidate.empty()) return false;
++    std::error_code ec;
++    fs::path canon_root = fs::weakly_canonical(root, ec);
++    if (ec) return false;
++    fs::path resolved = candidate.is_relative() ? (canon_root / candidate) : candidate;
++    fs::path canon_cand = fs::weakly_canonical(resolved, ec);
++    if (ec) return false;
++    if (canon_cand == canon_root) return allow_equal;
++    const fs::path rel = canon_cand.lexically_relative(canon_root);
++    if (rel.empty() || rel == "." || *rel.begin() == "..") return false;
++    return true;
++}
++
++std::string RGMercsBridge::infer_category(std::string_view section_or_table, std::string_view key) {
++    const std::string s = to_lower_ascii(section_or_table);
++    const std::string k = to_lower_ascii(key);
++    auto match = [](std::string_view src, std::initializer_list<const char*> words) {
++        for (const char* w : words) {
++            if (src.find(w) != std::string_view::npos) return true;
++        }
++        return false;
++    };
++    if (iequals_ascii(section_or_table, "Combat") || match(k, {"melee", "attack", "stick", "burn", "combat"}))
++        return "Combat";
++    if (iequals_ascii(section_or_table, "Targeting") ||
++        match(k, {"assist", "target", "maslot", "customma", "engage"}))
++        return "Targeting";
++    if (iequals_ascii(section_or_table, "Healing") ||
++        match(k, {"heal", "cure", "rez", "hot", "emergency"}))
++        return "Healing";
++    if (iequals_ascii(section_or_table, "Buffs") || match(k, {"buff", "clicky", "aura"}))
++        return "Buffs";
++    if (iequals_ascii(section_or_table, "Debuffs") ||
++        match(k, {"debuff", "mez", "slow", "snare", "tash", "malo", "cripple"}))
++        return "Debuffs";
++    if (iequals_ascii(section_or_table, "Movement") ||
++        match(k, {"chase", "camp", "nav", "follow", "pull"}))
++        return "Movement";
++    if (iequals_ascii(section_or_table, "Loot") || match(k, {"loot", "sell", "bagslot", "corpse"}))
++        return "Loot";
++    if (iequals_ascii(section_or_table, "General") || match(s, {"general", "ui"}))
++        return "General";
++    return "Class";
++}
++
++std::string RGMercsBridge::infer_type(std::string_view value) {
++    const std::string t = to_lower_ascii(trim_ascii(value));
++    if (t == "true" || t == "false") return "bool";
++    if (!t.empty()) {
++        char* end_int = nullptr;
++        (void)std::strtoll(t.c_str(), &end_int, 10);
++        if (end_int && *end_int == '\0') return "int";
++        char* end_dbl = nullptr;
++        (void)std::strtod(t.c_str(), &end_dbl);
++        if (end_dbl && *end_dbl == '\0') return "float";
++    }
++    return "string";
++}
++
++std::string RGMercsBridge::normalize_value(std::string_view type, std::string_view raw) {
++    const std::string t = trim_ascii(raw);
++    if (type == "bool") {
++        const std::string low = to_lower_ascii(t);
++        if (low == "1" || low == "true" || low == "yes" || low == "on" || low == "enabled") return "true";
++        return "false";
++    }
++    if (type == "int") {
++        char* end = nullptr;
++        const long long v = std::strtoll(t.c_str(), &end, 10);
++        if (end != t.c_str() && *end == '\0') return std::to_string(v);
++        char* end_f = nullptr;
++        const double d = std::strtod(t.c_str(), &end_f);
++        if (end_f != t.c_str()) return std::to_string(static_cast<long long>(d));
++        return "0";
++    }
++    if (type == "float") {
++        char* end = nullptr;
++        const double d = std::strtod(t.c_str(), &end);
++        if (end != t.c_str()) return std::format("{:.3g}", d);
++        return "0";
++    }
++    return t;
++}
++
++std::string RGMercsBridge::current_timestamp() {
++    const auto now = std::chrono::system_clock::now();
++    const std::time_t tt = std::chrono::system_clock::to_time_t(now);
++    if (auto tm = platform::local_time(tt)) {
++        return std::format("{:02d}:{:02d}:{:02d}", tm->tm_hour, tm->tm_min, tm->tm_sec);
++    }
++    return "--:--:--";
++}
++
++RGMercsBridge::SettingEntry* RGMercsBridge::find_setting_locked(std::string_view key) {
++    for (auto& s : settings_) {
++        if (iequals_ascii(s.key, key)) return &s;
++    }
++    return nullptr;
++}
++
++const RGMercsBridge::SettingEntry* RGMercsBridge::find_setting_locked(std::string_view key) const {
++    for (const auto& s : settings_) {
++        if (iequals_ascii(s.key, key)) return &s;
++    }
++    return nullptr;
++}
++
++RGMercsBridge::ModuleState* RGMercsBridge::find_module_locked(std::string_view name) {
++    for (auto& m : modules_) {
++        if (iequals_ascii(m.name, name)) return &m;
++    }
++    return nullptr;
++}
++
++void RGMercsBridge::attach_character(const fs::path& data_dir, const fs::path& character_dir,
++                                     std::string character_name, std::string server_name, std::string class_name) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    if (data_dir_ == data_dir && character_dir_ == character_dir && character_name_ == character_name &&
++        server_name_ == server_name && class_name_ == class_name && !settings_path_.empty()) {
++        refresh_sources_locked();
++        return;
++    }
++    data_dir_ = data_dir;
++    character_dir_ = character_dir;
++    character_name_ = std::move(character_name);
++    server_name_ = std::move(server_name);
++    class_name_ = std::move(class_name);
++    imported_from_.clear();
++    imported_count_ = 0;
++    dirty_ = false;
++    pending_changes_.clear();
++    init_defaults_locked();
++
++    fs::path chosen;
++    if (!data_dir_.empty()) {
++        if (!character_dir_.empty() && is_under_root(data_dir_, character_dir_, false)) {
++            chosen = character_dir_ / "rgmercs_settings.ini";
++        } else {
++            chosen = data_dir_ / "scripts" / "config" / "rgmercs_hailstone.ini";
++        }
++    }
++    settings_path_ = std::move(chosen);
++    refresh_sources_locked();
++
++    std::error_code ec;
++    const bool has_existing = !settings_path_.empty() && fs::is_regular_file(settings_path_, ec);
++    if (has_existing) {
++        load_settings_locked();
++        append_log_locked("info", std::format("Loaded RG Mercs settings for {} ({}).",
++                                              character_name_.empty() ? "character" : character_name_,
++                                              settings_path_.filename().string()));
++    } else if (!available_dbs_.empty()) {
++        // First time on this character with an existing RG Mercs DB/config: perform safe one-time read-only import.
++        const ImportResult res = import_from_path_locked(fs::path(available_dbs_.front()));
++        if (res.ok) {
++            append_log_locked("info", std::format("Auto-imported {} RG Mercs settings from {}.",
++                                                  res.imported_count, res.source));
++        }
++    }
++}
++
++void RGMercsBridge::clear_character() {
++    std::lock_guard<std::mutex> lock(mutex_);
++    character_dir_.clear();
++    settings_path_.clear();
++    character_name_.clear();
++    server_name_.clear();
++    class_name_.clear();
++    imported_from_.clear();
++    imported_count_ = 0;
++    runtime_state_.clear();
++    dirty_ = false;
++    pending_changes_.clear();
++    init_defaults_locked();
++}
++
++void RGMercsBridge::refresh_sources_locked() {
++    available_dbs_.clear();
++    if (data_dir_.empty()) return;
++
++    const fs::path cfg_root = data_dir_ / "scripts" / "config";
++    std::error_code ec;
++    if (!fs::is_directory(cfg_root, ec)) return;
++
++    struct Candidate {
++        fs::path path;
++        int score = 0;
++    };
++    std::vector<Candidate> found;
++
++    const std::string char_tok = normalize_token(character_name_);
++    const std::string srv_tok = normalize_token(server_name_);
++
++    fs::recursive_directory_iterator it(cfg_root, fs::directory_options::skip_permission_denied, ec);
++    fs::recursive_directory_iterator end;
++    for (; !ec && it != end; it.increment(ec)) {
++        if (it.depth() > 4) {
++            it.disable_recursion_pending();
++            continue;
++        }
++        std::error_code fec;
++        if (!it->is_regular_file(fec)) continue;
++        const fs::path& p = it->path();
++        if (!is_under_root(data_dir_, p, false)) continue;
++        if (!is_db_extension(p) && !is_lua_config_extension(p)) continue;
++
++        const std::string name_low = to_lower_ascii(p.generic_string());
++        const std::string name_tok = normalize_token(p.stem().string() + p.parent_path().filename().string());
++        // Skip unrelated files in config/ root unless under rgmercs/ or explicitly named rgmercs
++        const bool in_rg = contains_icase(name_low, "rgmercs");
++        if (!in_rg) continue;
++
++        int score = is_db_extension(p) ? 100 : 20;
++        if (!char_tok.empty() && name_tok.find(char_tok) != std::string::npos) score += 200;
++        if (!srv_tok.empty() && name_tok.find(srv_tok) != std::string::npos) score += 50;
++        found.push_back({p, score});
++    }
++
++    std::sort(found.begin(), found.end(), [](const Candidate& a, const Candidate& b) {
++        if (a.score != b.score) return a.score > b.score;
++        return a.path.generic_string() < b.path.generic_string();
++    });
++    for (const auto& c : found) {
++        available_dbs_.push_back(c.path.string());
++    }
++}
++
++std::vector<fs::path> RGMercsBridge::discover_import_sources() const {
++    std::lock_guard<std::mutex> lock(mutex_);
++    std::vector<fs::path> out;
++    out.reserve(available_dbs_.size());
++    for (const auto& s : available_dbs_) out.emplace_back(s);
++    return out;
++}
++
++bool RGMercsBridge::load_settings() {
++    std::lock_guard<std::mutex> lock(mutex_);
++    return load_settings_locked();
++}
++
++bool RGMercsBridge::load_settings_locked() {
++    if (settings_path_.empty() || !is_under_root(data_dir_, settings_path_, false)) return false;
++    IniFile ini;
++    if (!ini.load(settings_path_)) return false;
++
++    if (auto s = ini.get("Meta", "ImportedFrom")) imported_from_ = *s;
++    imported_count_ = ini.get_int("Meta", "ImportedCount", imported_count_);
++    if (auto sup = ini.get("General", "SuppressLegacyScriptUI")) {
++        suppress_script_ui_ = to_lower_ascii(*sup) != "false" && *sup != "0";
++    }
++
++    for (const std::string& sec : ini.sections()) {
++        if (iequals_ascii(sec, "Meta")) continue;
++        if (iequals_ascii(sec, "Modules")) {
++            for (const std::string& key : ini.keys(sec)) {
++                const bool en = ini.get_int(sec, key, 1) != 0 ||
++                                iequals_ascii(ini.get_string(sec, key, "true"), "true");
++                if (ModuleState* ms = find_module_locked(key)) {
++                    ms->enabled = en;
++                    if (!en && ms->status == "Idle") ms->status = "Disabled";
++                } else {
++                    ModuleState added;
++                    added.name = key;
++                    added.enabled = en;
++                    added.status = en ? "Idle" : "Disabled";
++                    modules_.push_back(std::move(added));
++                }
++            }
++            continue;
++        }
++        if (iequals_ascii(sec, "General")) continue;
++        for (const std::string& key : ini.keys(sec)) {
++            const std::string raw = ini.get_string(sec, key, "");
++            if (SettingEntry* existing = find_setting_locked(key)) {
++                existing->value = normalize_value(existing->type, raw);
++            } else {
++                SettingEntry added;
++                added.key = key;
++                added.category = sec;
++                added.type = infer_type(raw);
++                added.default_value = normalize_value(added.type, raw);
++                added.value = added.default_value;
++                added.description = "Loaded character setting";
++                settings_.push_back(std::move(added));
++            }
++        }
++    }
++    dirty_ = false;
++    return true;
++}
++
++bool RGMercsBridge::save_settings() {
++    std::lock_guard<std::mutex> lock(mutex_);
++    return save_settings_locked();
++}
++
++bool RGMercsBridge::save_settings_locked() {
++    if (settings_path_.empty() || data_dir_.empty()) return false;
++    if (!is_under_root(data_dir_, settings_path_, false)) {
++        log::warn("rgmercs: refusing to write settings outside Hailstone data directory: {}", settings_path_.string());
++        return false;
++    }
++
++    std::error_code ec;
++    fs::create_directories(settings_path_.parent_path(), ec);
++    if (ec) return false;
++
++    IniFile ini;
++    ini.set("Meta", "Character", character_name_);
++    ini.set("Meta", "Server", server_name_);
++    ini.set("Meta", "Class", class_name_);
++    if (!imported_from_.empty()) {
++        ini.set("Meta", "ImportedFrom", imported_from_);
++        ini.set_int("Meta", "ImportedCount", imported_count_);
++    }
++
++    ini.set("General", "SuppressLegacyScriptUI", suppress_script_ui_ ? "true" : "false");
++
++    for (const auto& m : modules_) {
++        ini.set("Modules", m.name, m.enabled ? "true" : "false");
++    }
++
++    for (const auto& s : settings_) {
++        ini.set(s.category.empty() ? "Class" : s.category, s.key, s.value);
++    }
++
++    if (!ini.save(settings_path_)) return false;
++    dirty_ = false;
++    return true;
++}
++
++RGMercsBridge::ImportResult RGMercsBridge::import_best_source() {
++    std::lock_guard<std::mutex> lock(mutex_);
++    refresh_sources_locked();
++    if (available_dbs_.empty()) {
++        return {false, 0, {}, "No RG Mercs configuration database found in Hailstone data directory"};
++    }
++    return import_from_path_locked(fs::path(available_dbs_.front()));
++}
++
++RGMercsBridge::ImportResult RGMercsBridge::import_from_path(const fs::path& source) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    return import_from_path_locked(source);
++}
++
++RGMercsBridge::ImportResult RGMercsBridge::import_from_path_locked(const fs::path& source) {
++    ImportResult res;
++    res.source = source.string();
++
++    if (data_dir_.empty() || !is_under_root(data_dir_, source, false)) {
++        res.error = "Import path must stay inside Hailstone data directory";
++        return res;
++    }
++    std::error_code ec;
++    if (!fs::is_regular_file(source, ec)) {
++        res.error = "Import source file does not exist";
++        return res;
++    }
++
++    int count = 0;
++    auto apply_pair = [&](std::string_view sec_hint, std::string_view raw_key, std::string_view raw_val) {
++        const std::string key = trim_ascii(raw_key);
++        if (key.empty() || iequals_ascii(key, "id") || iequals_ascii(key, "character") ||
++            iequals_ascii(key, "server"))
++            return;
++        const std::string val = trim_ascii(raw_val);
++        if (SettingEntry* existing = find_setting_locked(key)) {
++            existing->value = normalize_value(existing->type, val);
++            existing->imported = true;
++            ++count;
++        } else {
++            SettingEntry entry;
++            entry.key = key;
++            entry.category = infer_category(sec_hint, key);
++            entry.type = infer_type(val);
++            entry.default_value = normalize_value(entry.type, val);
++            entry.value = entry.default_value;
++            entry.description = "Imported from RG Mercs configuration";
++            entry.imported = true;
++            settings_.push_back(std::move(entry));
++            ++count;
++        }
++    };
++
++    if (is_db_extension(source)) {
++        sqlite3* db = nullptr;
++        const int rc = sqlite3_open_v2(source.string().c_str(), &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nullptr);
++        if (rc != SQLITE_OK || !db) {
++            res.error = db ? sqlite3_errmsg(db) : "Cannot open SQLite database";
++            if (db) sqlite3_close(db);
++            return res;
++        }
++
++        std::vector<std::string> tables;
++        sqlite3_stmt* tbl_stmt = nullptr;
++        if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';", -1,
++                               &tbl_stmt, nullptr) == SQLITE_OK) {
++            while (sqlite3_step(tbl_stmt) == SQLITE_ROW) {
++                const unsigned char* txt = sqlite3_column_text(tbl_stmt, 0);
++                if (txt) tables.emplace_back(reinterpret_cast<const char*>(txt));
++            }
++        }
++        if (tbl_stmt) sqlite3_finalize(tbl_stmt);
++
++        for (const std::string& table : tables) {
++            const std::string qtable = quote_sqlite_ident(table);
++            const std::string query = "SELECT * FROM " + qtable + ";";
++            sqlite3_stmt* stmt = nullptr;
++            if (sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
++                if (stmt) sqlite3_finalize(stmt);
++                continue;
++            }
++            const int ncols = sqlite3_column_count(stmt);
++            int key_col = -1;
++            int val_col = -1;
++            int sec_col = -1;
++            int char_col = -1;
++            for (int c = 0; c < ncols; ++c) {
++                const char* cname_raw = sqlite3_column_name(stmt, c);
++                const std::string cname = cname_raw ? to_lower_ascii(cname_raw) : std::string();
++                if (key_col < 0 &&
++                    (cname == "key" || cname == "name" || cname == "setting" || cname == "setting_name" ||
++                     cname == "var" || cname == "option")) {
++                    key_col = c;
++                } else if (val_col < 0 &&
++                           (cname == "value" || cname == "val" || cname == "setting_value" || cname == "data")) {
++                    val_col = c;
++                } else if (sec_col < 0 && (cname == "category" || cname == "section" || cname == "module")) {
++                    sec_col = c;
++                } else if (char_col < 0 && (cname == "character" || cname == "char_name" || cname == "char")) {
++                    char_col = c;
++                }
++            }
++
++            while (sqlite3_step(stmt) == SQLITE_ROW) {
++                if (char_col >= 0 && !character_name_.empty()) {
++                    const unsigned char* row_char = sqlite3_column_text(stmt, char_col);
++                    if (row_char && *row_char && !iequals_ascii(reinterpret_cast<const char*>(row_char), character_name_) &&
++                        !iequals_ascii(reinterpret_cast<const char*>(row_char), "default")) {
++                        continue;
++                    }
++                }
++                if (key_col >= 0 && val_col >= 0) {
++                    const unsigned char* ktxt = sqlite3_column_text(stmt, key_col);
++                    const unsigned char* vtxt = sqlite3_column_text(stmt, val_col);
++                    const unsigned char* stxt = sec_col >= 0 ? sqlite3_column_text(stmt, sec_col) : nullptr;
++                    if (ktxt && vtxt) {
++                        const std::string sec = stxt ? reinterpret_cast<const char*>(stxt) : table;
++                        apply_pair(sec, reinterpret_cast<const char*>(ktxt), reinterpret_cast<const char*>(vtxt));
++                    }
++                } else if (ncols > 0) {
++                    // Wide settings table: each column represents a setting name.
++                    for (int c = 0; c < ncols; ++c) {
++                        if (c == char_col || c == sec_col) continue;
++                        const char* cname_raw = sqlite3_column_name(stmt, c);
++                        const unsigned char* vtxt = sqlite3_column_text(stmt, c);
++                        if (cname_raw && vtxt) {
++                            apply_pair(table, cname_raw, reinterpret_cast<const char*>(vtxt));
++                        }
++                    }
++                }
++            }
++            sqlite3_finalize(stmt);
++        }
++        sqlite3_close(db);
++    } else if (is_lua_config_extension(source)) {
++        // Safe data-only parser for RG Mercs pickled Lua setting tables (never executes Lua code).
++        std::ifstream in(source, std::ios::binary);
++        if (!in) {
++            res.error = "Cannot read Lua settings file";
++            return res;
++        }
++        std::string line;
++        std::string current_sec = "Class";
++        while (std::getline(in, line)) {
++            const std::string trimmed = trim_ascii(line);
++            if (trimmed.empty() || trimmed.starts_with("--")) continue;
++            const std::size_t eq = trimmed.find('=');
++            if (eq == std::string::npos) continue;
++            std::string lhs = trim_ascii(trimmed.substr(0, eq));
++            std::string rhs = trim_ascii(trimmed.substr(eq + 1));
++            if (!rhs.empty() && rhs.back() == ',') rhs.pop_back();
++            rhs = trim_ascii(rhs);
++            if (lhs.size() >= 2 && lhs.front() == '[' && lhs.back() == ']') {
++                lhs = unquote_ascii(lhs.substr(1, lhs.size() - 2));
++            }
++            if (rhs == "{" || rhs.starts_with("function")) {
++                if (!lhs.empty()) current_sec = lhs;
++                continue;
++            }
++            if (rhs == "}" || rhs == "nil") continue;
++            apply_pair(current_sec, lhs, unquote_ascii(rhs));
++        }
++    } else {
++        res.error = "Unsupported configuration format";
++        return res;
++    }
++
++    imported_from_ = source.filename().string();
++    imported_count_ = count;
++    dirty_ = true;
++    save_settings_locked();
++
++    res.ok = true;
++    res.imported_count = count;
++    res.source = imported_from_;
++    return res;
++}
++
++bool RGMercsBridge::set_setting(std::string_view key, std::string_view value, std::string_view category_hint,
++                                bool queue_for_script) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    if (key.empty()) return false;
++    std::string norm;
++    if (SettingEntry* existing = find_setting_locked(key)) {
++        norm = normalize_value(existing->type, value);
++        if (existing->value == norm) return true;
++        existing->value = norm;
++    } else {
++        SettingEntry added;
++        added.key = std::string(key);
++        added.category = category_hint.empty() ? infer_category({}, key) : std::string(category_hint);
++        added.type = infer_type(value);
++        norm = normalize_value(added.type, value);
++        added.default_value = norm;
++        added.value = norm;
++        added.description = "Custom / module setting";
++        settings_.push_back(std::move(added));
++    }
++
++    dirty_ = true;
++    if (queue_for_script) {
++        if (pending_changes_.size() < 256) pending_changes_.emplace_back(std::string(key), norm);
++    }
++    save_settings_locked();
++    return true;
++}
++
++std::optional<RGMercsBridge::SettingEntry> RGMercsBridge::get_setting(std::string_view key) const {
++    std::lock_guard<std::mutex> lock(mutex_);
++    if (const SettingEntry* e = find_setting_locked(key)) return *e;
++    return std::nullopt;
++}
++
++std::vector<RGMercsBridge::SettingEntry> RGMercsBridge::settings() const {
++    std::lock_guard<std::mutex> lock(mutex_);
++    return settings_;
++}
++
++void RGMercsBridge::reset_to_defaults() {
++    std::lock_guard<std::mutex> lock(mutex_);
++    for (auto& s : settings_) {
++        s.value = s.default_value;
++        s.imported = false;
++        if (pending_changes_.size() < 256) pending_changes_.emplace_back(s.key, s.value);
++    }
++    dirty_ = true;
++    save_settings_locked();
++}
++
++void RGMercsBridge::set_module(std::string_view name, bool enabled, std::string_view status, std::string_view detail,
++                               bool queue_for_script) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    if (name.empty()) return;
++    ModuleState* ms = find_module_locked(name);
++    if (!ms) {
++        modules_.push_back(ModuleState{std::string(name), enabled, {}, {}});
++        ms = &modules_.back();
++    }
++    ms->enabled = enabled;
++    if (!status.empty()) {
++        ms->status = std::string(status);
++    } else {
++        ms->status = enabled ? "Idle" : "Disabled";
++    }
++    if (!detail.empty() || status == "Idle" || status == "Running") ms->detail = std::string(detail);
++
++    if (queue_for_script && pending_changes_.size() < 256) {
++        pending_changes_.emplace_back("module:" + ms->name, enabled ? "true" : "false");
++    }
++    dirty_ = true;
++    save_settings_locked();
++}
++
++std::vector<RGMercsBridge::ModuleState> RGMercsBridge::modules() const {
++    std::lock_guard<std::mutex> lock(mutex_);
++    return modules_;
++}
++
++void RGMercsBridge::set_script_status(std::string_view status, std::string_view error_msg) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    script_status_ = std::string(status);
++    if (!error_msg.empty()) {
++        last_error_ = std::string(error_msg);
++        ++error_count_;
++    }
++}
++
++void RGMercsBridge::set_runtime_state(std::string_view state) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    runtime_state_ = std::string(state);
++}
++
++void RGMercsBridge::set_script_error(std::string_view error_msg) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    if (error_msg.empty()) return;
++    last_error_ = std::string(error_msg);
++    ++error_count_;
++    append_log_locked("error", error_msg);
++}
++
++void RGMercsBridge::clear_error() {
++    std::lock_guard<std::mutex> lock(mutex_);
++    last_error_.clear();
++}
++
++void RGMercsBridge::append_log(std::string_view level, std::string_view message) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    append_log_locked(level, message);
++}
++
++void RGMercsBridge::append_log_locked(std::string_view level, std::string_view message) {
++    if (message.empty()) return;
++    std::string lvl = level.empty() ? std::string("info") : to_lower_ascii(level);
++    if (lvl != "info" && lvl != "warn" && lvl != "error") lvl = "info";
++    if (lvl == "info") {
++        if (contains_icase(message, "error") || contains_icase(message, "failed") || contains_icase(message, "attempt to"))
++            lvl = "error";
++        else if (contains_icase(message, "warn"))
++            lvl = "warn";
++    }
++    if (lvl == "error") {
++        last_error_ = std::string(message);
++        ++error_count_;
++    }
++    while (logs_.size() >= kMaxLogs) logs_.pop_front();
++    logs_.push_back(LogEntry{current_timestamp(), std::move(lvl), std::string(message)});
++}
++
++void RGMercsBridge::clear_logs() {
++    std::lock_guard<std::mutex> lock(mutex_);
++    logs_.clear();
++    last_error_.clear();
++    error_count_ = 0;
++}
++
++std::vector<RGMercsBridge::LogEntry> RGMercsBridge::logs() const {
++    std::lock_guard<std::mutex> lock(mutex_);
++    return {logs_.begin(), logs_.end()};
++}
++
++bool RGMercsBridge::suppress_script_ui() const {
++    std::lock_guard<std::mutex> lock(mutex_);
++    return suppress_script_ui_;
++}
++
++void RGMercsBridge::set_suppress_script_ui(bool suppress) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    if (suppress_script_ui_ == suppress) return;
++    suppress_script_ui_ = suppress;
++    dirty_ = true;
++    save_settings_locked();
++}
++
++std::vector<std::pair<std::string, std::string>> RGMercsBridge::take_pending_changes() {
++    std::lock_guard<std::mutex> lock(mutex_);
++    auto out = std::move(pending_changes_);
++    pending_changes_.clear();
++    return out;
++}
++
++RGMercsBridge::Snapshot RGMercsBridge::snapshot() const {
++    std::lock_guard<std::mutex> lock(mutex_);
++    Snapshot s;
++    s.character = character_name_;
++    s.server = server_name_;
++    s.class_name = class_name_;
++    s.settings_path = settings_path_.string();
++    s.imported_from = imported_from_;
++    s.imported_count = imported_count_;
++    s.script_status = script_status_;
++    s.runtime_state = runtime_state_;
++    s.last_error = last_error_;
++    s.error_count = error_count_;
++    s.suppress_script_ui = suppress_script_ui_;
++    s.dirty = dirty_;
++    s.available_dbs = available_dbs_;
++    s.modules = modules_;
++    s.settings = settings_;
++    s.logs.assign(logs_.begin(), logs_.end());
++    return s;
++}
++
++} // namespace hailstone::mq
+diff --git a/src/mq/rgmercs_bridge.h b/src/mq/rgmercs_bridge.h
+new file mode 100644
+index 00000000..6e3e405d
+--- /dev/null
++++ b/src/mq/rgmercs_bridge.h
+@@ -0,0 +1,167 @@
++#pragma once
++
++// Hailstone-native bridge for RG Mercs: decouples gameplay/automation state from presentation.
++// Keeps bounded logs & error banner state, module toggles, typed RG Mercs settings persisted per character inside
++// Hailstone's data directory, read-only SQLite / Lua-table settings import, and a script-facing adapter queue.
++
++#include <cstdint>
++#include <deque>
++#include <filesystem>
++#include <mutex>
++#include <optional>
++#include <string>
++#include <string_view>
++#include <utility>
++#include <vector>
++
++namespace hailstone::mq {
++
++class RGMercsBridge {
++public:
++    struct SettingEntry {
++        std::string key;
++        std::string category; // Combat, Targeting, Healing, Buffs, Debuffs, Movement, Loot, Class, General
++        std::string type;     // bool, int, float, string, choice
++        std::string value;
++        std::string default_value;
++        std::string description;
++        double min_val = 0.0;
++        double max_val = 100.0;
++        std::vector<std::string> choices;
++        bool imported = false;
++    };
++
++    struct ModuleState {
++        std::string name;
++        bool enabled = true;
++        std::string status = "Idle"; // Idle, Running, Paused, Disabled, Error
++        std::string detail;
++    };
++
++    struct LogEntry {
++        std::string timestamp;
++        std::string level; // info, warn, error
++        std::string message;
++    };
++
++    struct ImportResult {
++        bool ok = false;
++        int imported_count = 0;
++        std::string source;
++        std::string error;
++    };
++
++    struct Snapshot {
++        std::string character;
++        std::string server;
++        std::string class_name;
++        std::string settings_path;
++        std::string imported_from;
++        int imported_count = 0;
++        std::string script_status; // "", "running", "paused", "exited", "error"
++        std::string runtime_state; // adapter status override / detail
++        std::string last_error;
++        int error_count = 0;
++        bool suppress_script_ui = true;
++        bool dirty = false;
++        std::vector<std::string> available_dbs;
++        std::vector<ModuleState> modules;
++        std::vector<SettingEntry> settings;
++        std::vector<LogEntry> logs;
++    };
++
++    static constexpr std::size_t kMaxLogs = 1000;
++
++    RGMercsBridge();
++
++    // Binds persistence to a character inside Hailstone's data_dir. Never writes outside `data_dir`.
++    void attach_character(const std::filesystem::path& data_dir, const std::filesystem::path& character_dir,
++                          std::string character_name, std::string server_name, std::string class_name);
++
++    void clear_character();
++
++    // Loads/saves settings from `settings_path_` (strictly inside `data_dir`).
++    bool load_settings();
++    bool save_settings();
++
++    // Scans <data_dir>/scripts/config for RG Mercs SQLite DBs and Lua data tables.
++    std::vector<std::filesystem::path> discover_import_sources() const;
++
++    // Imports settings read-only from `source` (SQLite .db/.sqlite/.sqlite3 or key=value .lua data file),
++    // verifying `source` is strictly inside `data_dir`. Never modifies the source file.
++    ImportResult import_from_path(const std::filesystem::path& source);
++    ImportResult import_best_source();
++
++    // Settings access (used by both native UI and Lua adapter).
++    bool set_setting(std::string_view key, std::string_view value, std::string_view category_hint = {},
++                     bool queue_for_script = true);
++    std::optional<SettingEntry> get_setting(std::string_view key) const;
++    std::vector<SettingEntry> settings() const;
++    void reset_to_defaults();
++
++    // Module state & toggles.
++    void set_module(std::string_view name, bool enabled, std::string_view status = {}, std::string_view detail = {},
++                    bool queue_for_script = true);
++    std::vector<ModuleState> modules() const;
++
++    // Script status, error banner & bounded log buffer.
++    void set_script_status(std::string_view status, std::string_view error_msg = {});
++    void set_runtime_state(std::string_view state);
++    void set_script_error(std::string_view error_msg);
++    void clear_error();
++
++    void append_log(std::string_view level, std::string_view message);
++    void clear_logs();
++    std::vector<LogEntry> logs() const;
++
++    // Presentation boundary: whether Hailstone suppresses RG Mercs' own MQ/ImGui script windows when native UI owns it.
++    bool suppress_script_ui() const;
++    void set_suppress_script_ui(bool suppress);
++
++    // Drains UI-initiated setting/module updates queued for a running RG Mercs adapter loop.
++    // Module toggles are returned with key "module:<Name>".
++    std::vector<std::pair<std::string, std::string>> take_pending_changes();
++
++    Snapshot snapshot() const;
++
++private:
++    void init_defaults_locked();
++    void refresh_sources_locked();
++    SettingEntry* find_setting_locked(std::string_view key);
++    const SettingEntry* find_setting_locked(std::string_view key) const;
++    ModuleState* find_module_locked(std::string_view name);
++    bool save_settings_locked();
++    bool load_settings_locked();
++    ImportResult import_from_path_locked(const std::filesystem::path& source);
++    void append_log_locked(std::string_view level, std::string_view message);
++
++    static bool is_under_root(const std::filesystem::path& root, const std::filesystem::path& candidate,
++                              bool allow_equal = false);
++    static std::string infer_category(std::string_view section_or_table, std::string_view key);
++    static std::string infer_type(std::string_view value);
++    static std::string normalize_value(std::string_view type, std::string_view raw);
++    static std::string current_timestamp();
++
++    mutable std::mutex mutex_;
++    std::filesystem::path data_dir_;
++    std::filesystem::path character_dir_;
++    std::filesystem::path settings_path_;
++    std::string character_name_;
++    std::string server_name_;
++    std::string class_name_;
++    std::string imported_from_;
++    int imported_count_ = 0;
++    std::string script_status_;
++    std::string runtime_state_;
++    std::string last_error_;
++    int error_count_ = 0;
++    bool suppress_script_ui_ = true;
++    bool dirty_ = false;
++    std::vector<std::string> available_dbs_;
++    std::vector<ModuleState> modules_;
++    std::vector<SettingEntry> settings_;
++    std::deque<LogEntry> logs_;
++    std::vector<std::pair<std::string, std::string>> pending_changes_;
++};
++
++} // namespace hailstone::mq
 diff --git a/src/mq/tlo.h b/src/mq/tlo.h
 index fba11ba1..5c9aa64e 100644
 --- a/src/mq/tlo.h
@@ -8444,28 +10502,10 @@ index 5cb73a6c..f24d515e 100644
  // Play (button, double-click or Enter) is returned for view.selected.
  ServerSelectAction server_select_screen(ServerSelectView& view);
 diff --git a/src/ui/lua/lua_imgui.cpp b/src/ui/lua/lua_imgui.cpp
-index c074d766..8e31d384 100644
+index c074d766..6770957d 100644
 --- a/src/ui/lua/lua_imgui.cpp
 +++ b/src/ui/lua/lua_imgui.cpp
-@@ -483,7 +483,16 @@ int SameLine(lua_State *L) { ImGui::SameLine(F(L, 1), F(L, 2, -1)); return 0; }
- int NewLine(lua_State *) { ImGui::NewLine(); return 0; }
- int Separator(lua_State *) { ImGui::Separator(); return 0; }
- int Spacing(lua_State *) { ImGui::Spacing(); return 0; }
--int Dummy(lua_State *L) { ImGui::Dummy(ImVec2(F(L, 1), F(L, 2))); return 0; }
-+int Dummy(lua_State *L) {
-+	if (lua_istable(L, 1)) {
-+		lua_getfield(L, 1, "x"); const float x = static_cast<float>(luaL_optnumber(L, -1, 0.0)); lua_pop(L, 1);
-+		lua_getfield(L, 1, "y"); const float y = static_cast<float>(luaL_optnumber(L, -1, 0.0)); lua_pop(L, 1);
-+		ImGui::Dummy(ImVec2(x, y));
-+	} else {
-+		ImGui::Dummy(ImVec2(F(L, 1), F(L, 2)));
-+	}
-+	return 0;
-+}
- int Indent(lua_State *L) { ImGui::Indent(F(L, 1)); return 0; }
- int Unindent(lua_State *L) { ImGui::Unindent(F(L, 1)); return 0; }
- int BeginGroup(lua_State *) { ImGui::BeginGroup(); return 0; }
-@@ -825,9 +834,14 @@ int GetIO(lua_State *L) {
+@@ -825,9 +825,14 @@ int GetIO(lua_State *L) {
  		lua_pushinteger(L, frame);
  		lua_rawsetp(L, LUA_REGISTRYINDEX, &kFrame);
  		ImGuiIO &io = ImGui::GetIO();
@@ -8480,7 +10520,7 @@ index c074d766..8e31d384 100644
  		lua_pushboolean(L, io.KeyCtrl); lua_setfield(L, real, "ctrl");
  		lua_pushboolean(L, io.KeyShift); lua_setfield(L, real, "shift");
  		lua_pushboolean(L, io.KeyAlt); lua_setfield(L, real, "alt");
-@@ -895,6 +909,49 @@ int PopStyleColor(lua_State *L) {
+@@ -895,6 +900,33 @@ int PopStyleColor(lua_State *L) {
  	}
  	return 0;
  }
@@ -8503,22 +10543,6 @@ index c074d766..8e31d384 100644
 +	lua_pushnumber(L, ImGui::GetFontSize());
 +	return 1;
 +}
-+int GetCursorPosY(lua_State *L) {
-+	lua_pushnumber(L, ImGui::GetCursorPosY());
-+	return 1;
-+}
-+int GetCursorPosX(lua_State *L) {
-+	lua_pushnumber(L, ImGui::GetCursorPosX());
-+	return 1;
-+}
-+int SetCursorPosY(lua_State *L) {
-+	ImGui::SetCursorPosY(F(L, 1));
-+	return 0;
-+}
-+int SetCursorPosX(lua_State *L) {
-+	ImGui::SetCursorPosX(F(L, 1));
-+	return 0;
-+}
 +int GetForegroundDrawList(lua_State *L) {
 +	lua_newtable(L);
 +	lua_pushcfunction(L, [](lua_State *) { return 0; });
@@ -8530,7 +10554,7 @@ index c074d766..8e31d384 100644
  int PushStyleVar(lua_State *L) {
  	int idx = I(L, 1);
  	if (idx < 0 || idx >= ImGuiStyleVar_COUNT) {
-@@ -1087,6 +1144,12 @@ void SetInts(lua_State *L, const char *table, std::initializer_list<std::pair<co
+@@ -1087,6 +1119,12 @@ void SetInts(lua_State *L, const char *table, std::initializer_list<std::pair<co
  		lua_pushinteger(L, v.second);
  		lua_setfield(L, -2, v.first);
  	}
@@ -8543,16 +10567,7 @@ index c074d766..8e31d384 100644
  	lua_setfield(L, -2, table);
  }
  
-@@ -1141,7 +1204,7 @@ void register_ui_api(lua_State *L) {
- 		{"SameLine", SameLine}, {"PushTextWrapPos", PushTextWrapPos}, {"PopTextWrapPos", PopTextWrapPos}, {"NewLine", NewLine}, {"Separator", Separator}, {"Spacing", Spacing},
- 		{"Dummy", Dummy}, {"Indent", Indent}, {"Unindent", Unindent}, {"BeginGroup", BeginGroup},
- 		{"EndGroup", EndGroup}, {"PushID", PushID}, {"PopID", PopID}, {"SetNextItemWidth", SetNextItemWidth},
--		{"GetContentRegionAvail", GetContentRegionAvail}, {"GetCursorPos", GetCursorPos}, {"SetCursorPos", SetCursorPos}, {"SetCursorScreenPos", SetCursorScreenPos}, {"GetScrollY", GetScrollY}, {"SetScrollY", SetScrollY}, {"GetScrollMaxY", GetScrollMaxY}, {"GetMousePos", GetMousePos}, {"GetWindowPos", GetWindowPos}, {"Foreground", Foreground},
-+		{"GetContentRegionAvail", GetContentRegionAvail}, {"GetCursorPos", GetCursorPos}, {"GetCursorPosX", GetCursorPosX}, {"GetCursorPosY", GetCursorPosY}, {"SetCursorPos", SetCursorPos}, {"SetCursorPosX", SetCursorPosX}, {"SetCursorPosY", SetCursorPosY}, {"SetCursorScreenPos", SetCursorScreenPos}, {"GetScrollY", GetScrollY}, {"SetScrollY", SetScrollY}, {"GetScrollMaxY", GetScrollMaxY}, {"GetMousePos", GetMousePos}, {"GetWindowPos", GetWindowPos}, {"Foreground", Foreground},
- 		{"GetWindowSize", GetWindowSize}, {"FindWindowRect", FindWindowRect}, {"PushClipRect", PushClipRect}, {"PopClipRect", PopClipRect},
- 		{"SetScrollHereY", SetScrollHereY}, {"IsWindowFocused", IsWindowFocused},
- 		{"IsWindowAppearing", IsWindowAppearing}, {"SetWindowFocus", SetWindowFocus}, {"IsItemFocused", IsItemFocused},
-@@ -1157,13 +1220,13 @@ void register_ui_api(lua_State *L) {
+@@ -1157,13 +1195,13 @@ void register_ui_api(lua_State *L) {
  		{"BeginDragDropSource", BeginDragDropSource}, {"SetDragDropPayload", SetDragDropPayload},
  		{"EndDragDropSource", EndDragDropSource}, {"BeginDragDropTarget", BeginDragDropTarget},
  		{"AcceptDragDropPayload", AcceptDragDropPayload}, {"EndDragDropTarget", EndDragDropTarget},
@@ -8920,6 +10935,367 @@ index 00000000..79610e7f
 +    CHECK(r2.accounts_imported == 1);
 +    CHECK(creds.load(platform::credential_server(r2.server_host, r2.server_port), "ezbox04") == "KickSecret!");
 +}
+diff --git a/tests/hailstone24/rgmercs_native_ui_test.cpp b/tests/hailstone24/rgmercs_native_ui_test.cpp
+new file mode 100644
+index 00000000..5abc9cfc
+--- /dev/null
++++ b/tests/hailstone24/rgmercs_native_ui_test.cpp
+@@ -0,0 +1,355 @@
++// Native Hailstone RGMercs UI & bridge boundary tests:
++// 1. Per-character settings persistence inside Hailstone data_dir + read-only SQLite/Lua import.
++// 2. Sandbox enforcement (rejects imports or writes outside canonical data_dir).
++// 3. ScriptHost + RGMercsBridge boundary: hailstone.rgmercs adapter, error/log capture, mq.imgui suppression.
++// 4. eq.RGMercs* Lua API, eq_call_caps gating, CascadeMenu row gating, and ui/modern/rgmercs.lua checks.
++
++#include <doctest/doctest.h>
++
++#include <algorithm>
++#include <chrono>
++#include <cstddef>
++#include <filesystem>
++#include <fstream>
++#include <memory>
++#include <set>
++#include <string>
++#include <string_view>
++#include <utility>
++#include <vector>
++
++#include <imgui.h>
++#include <lua.hpp>
++#include <sqlite3.h>
++
++#include "app/lua_eq.h"
++#include "app/lua_eq_caps.h"
++#include "app/lua_eq_menu.h"
++#include "app/lua_eq_plugins.h"
++#include "mq/commands.h"
++#include "mq/lua_mq.h"
++#include "mq/rgmercs_bridge.h"
++#include "mq/tlo.h"
++#include "mq_test_world.h"
++#include "plugin/hooks.h"
++#include "plugin/policy.h"
++#include "scratch_dir.h"
++
++#ifndef HAILSTONE_SOURCE_DIR
++#define HAILSTONE_SOURCE_DIR "."
++#endif
++
++namespace fs = std::filesystem;
++using namespace hailstone;
++
++namespace {
++
++void create_sample_rgmercs_sqlite(const fs::path& db_path) {
++    fs::create_directories(db_path.parent_path());
++    sqlite3* db = nullptr;
++    REQUIRE(sqlite3_open(db_path.string().c_str(), &db) == SQLITE_OK);
++    const char* ddl =
++        "CREATE TABLE IF NOT EXISTS CoreConfig (section TEXT, key TEXT, value TEXT);"
++        "INSERT INTO CoreConfig (section, key, value) VALUES "
++        "('Combat', 'DoMelee', 'false'),"
++        "('Targeting', 'AssistRange', '85'),"
++        "('Healing', 'MaxHealPct', '72');";
++    char* err = nullptr;
++    const int rc = sqlite3_exec(db, ddl, nullptr, nullptr, &err);
++    if (err) sqlite3_free(err);
++    sqlite3_close(db);
++    REQUIRE(rc == SQLITE_OK);
++}
++
++std::string read_file_bytes(const fs::path& p) {
++    std::ifstream in(p, std::ios::binary);
++    std::string out((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
++    return out;
++}
++
++std::string run_lua(lua_State* L, const std::string& code) {
++    if (luaL_dostring(L, code.c_str()) != LUA_OK) {
++        std::string err = lua_tostring(L, -1);
++        lua_settop(L, 0);
++        return "error: " + err;
++    }
++    std::string out = lua_isnil(L, -1) ? "nil" : luaL_tolstring(L, -1, nullptr);
++    lua_settop(L, 0);
++    return out;
++}
++
++} // namespace
++
++TEST_CASE("RGMercsBridge: read-only SQLite import, per-character INI persistence, and sandbox boundaries") {
++    test::ScratchDir root("rgmercs_bridge");
++    const fs::path data_dir = root.path() / "hailstone_data";
++    const fs::path char_dir = data_dir / "characters" / "ez_server_stabbinyah";
++    const fs::path external_dir = root.path() / "outside";
++    fs::create_directories(char_dir);
++    fs::create_directories(external_dir);
++
++    const fs::path db_path = data_dir / "scripts" / "config" / "rgmercs" / "ez_server_stabbinyah.db";
++    create_sample_rgmercs_sqlite(db_path);
++    const std::string db_before = read_file_bytes(db_path);
++
++    const fs::path outside_db = external_dir / "escape.db";
++    create_sample_rgmercs_sqlite(outside_db);
++
++    {
++        mq::RGMercsBridge bridge;
++        bridge.attach_character(data_dir, char_dir, "Stabbinyah", "EZ Server", "ROG");
++
++        const auto snap = bridge.snapshot();
++        CHECK(snap.character == "Stabbinyah");
++        CHECK(snap.server == "EZ Server");
++        CHECK(snap.class_name == "ROG");
++        CHECK(snap.imported_count >= 3);
++        REQUIRE_FALSE(snap.available_dbs.empty());
++
++        const auto do_melee = bridge.get_setting("DoMelee");
++        REQUIRE(do_melee.has_value());
++        CHECK(do_melee->value == "false");
++        CHECK(do_melee->imported);
++
++        const auto assist_range = bridge.get_setting("AssistRange");
++        REQUIRE(assist_range.has_value());
++        CHECK(assist_range->value == "85");
++
++        const auto heal_pct = bridge.get_setting("MaxHealPct");
++        REQUIRE(heal_pct.has_value());
++        CHECK(heal_pct->value == "72");
++
++        // SQLite source file must never be mutated.
++        CHECK(read_file_bytes(db_path) == db_before);
++
++        // Sandbox: refuse imports outside data_dir.
++        const auto bad_import = bridge.import_from_path(outside_db);
++        CHECK_FALSE(bad_import.ok);
++
++        // Modify a setting and save to per-character INI inside char_dir.
++        CHECK(bridge.set_setting("PullRange", "215", "Movement", true));
++        REQUIRE(bridge.save_settings());
++        CHECK(fs::exists(char_dir / "rgmercs_settings.ini"));
++    }
++
++    // Reload in a fresh bridge instance (simulates client restart).
++    {
++        mq::RGMercsBridge reloaded;
++        reloaded.attach_character(data_dir, char_dir, "Stabbinyah", "EZ Server", "ROG");
++        const auto pull_range = reloaded.get_setting("PullRange");
++        REQUIRE(pull_range.has_value());
++        CHECK(pull_range->value == "215");
++
++        const auto assist_range = reloaded.get_setting("AssistRange");
++        REQUIRE(assist_range.has_value());
++        CHECK(assist_range->value == "85");
++
++        // Re-attaching with a character_dir outside data_dir keeps settings_path inside data_dir.
++        mq::RGMercsBridge sandboxed;
++        sandboxed.attach_character(data_dir, external_dir / "rogue_outside", "Rogue", "EZ Server", "ROG");
++        CHECK(sandboxed.set_setting("DoMelee", "true", "Combat", false));
++        REQUIRE(sandboxed.save_settings());
++        CHECK_FALSE(fs::exists(external_dir / "rogue_outside" / "rgmercs_settings.ini"));
++        CHECK(fs::path(sandboxed.snapshot().settings_path).string().find(data_dir.string()) != std::string::npos);
++    }
++}
++
++TEST_CASE("RGMercsBridge + ScriptHost: hailstone.rgmercs adapter, error banner, and mq.imgui suppression") {
++    std::unique_ptr<ImGuiContext, void (*)(ImGuiContext*)> imgui_ctx(ImGui::CreateContext(), ImGui::DestroyContext);
++    mq_test::World world{"hailstone_rgmercs_native_ui_script"};
++    const fs::path data_dir = world.dir / "data";
++    const fs::path char_dir = data_dir / "characters" / "ez_server_stabbinyah";
++    const fs::path lua_dir = data_dir / "scripts";
++    const fs::path cfg_dir = data_dir / "scripts" / "config";
++    fs::create_directories(char_dir);
++    fs::create_directories(lua_dir);
++    fs::create_directories(cfg_dir);
++
++    {
++        std::ofstream out(lua_dir / "rgmercs.lua");
++        out << "local mq = require('mq')\n"
++               "local hailstone = require('hailstone')\n"
++               "DRAW_COUNT = 0\n"
++               "mq.imgui.init('RGMercsLegacy', function()\n"
++               "  DRAW_COUNT = DRAW_COUNT + 1\n"
++               "end)\n"
++               "hailstone.rgmercs.set_status('Adapter Running')\n"
++               "hailstone.rgmercs.log('info', 'Native adapter connected')\n"
++               "local pending = hailstone.rgmercs.take_pending_changes()\n"
++               "for k, v in pairs(pending) do\n"
++               "  hailstone.rgmercs.log('info', 'applied:' .. tostring(k) .. '=' .. tostring(v))\n"
++               "end\n"
++               "hailstone.rgmercs.set_setting('Combat', 'DoMelee', false)\n"
++               "hailstone.rgmercs.set_module('Healing', false, 'Disabled', 'Solo mode')\n"
++               "mq.delay(25)\n"
++               "if hailstone.rgmercs.get_setting('TriggerErr') == '1' then\n"
++               "  error('simulated native ui test error')\n"
++               "end\n";
++    }
++
++    plugin::Hooks hooks;
++    plugin::Policy policy;
++    plugin::Rules rules;
++    rules.configured = true;
++    rules.player_script_caps = plugin::kCapAll;
++    rules.social_mode = plugin::ButtonMode::Off;
++    policy.set(rules);
++
++    mq::Registry reg;
++    mq::register_game_tlos(reg);
++    mq::Context ctx;
++    ctx.registry = &reg;
++    ctx.conn = world.conn.get();
++    ctx.server_name = "EZ Server";
++    ctx.lua_dir = lua_dir.string();
++
++    mq::RGMercsBridge bridge;
++    bridge.attach_character(data_dir, char_dir, "Stabbinyah", "EZ Server", "ROG");
++    CHECK(bridge.set_setting("PullRange", "175", "Movement", true));
++
++    std::int64_t clock_ms = 0;
++    mq::ScriptEnv se;
++    se.hooks = &hooks;
++    se.policy = &policy;
++    se.registry = &reg;
++    se.context = [&]() -> const mq::Context& { return ctx; };
++    se.print = [](const std::string&) {};
++    se.run = [](const std::string&) {};
++    se.dirs = {lua_dir};
++    se.config_dir = cfg_dir;
++    se.now_ms = [&] { return clock_ms; };
++    se.rgmercs = &bridge;
++
++    mq::ScriptHost host(se);
++    std::string why;
++    REQUIRE(host.run("rgmercs", {}, &why));
++    host.pulse();
++    // With suppress_script_ui == true, mq.imgui draw callbacks for rgmercs are suppressed.
++    host.imgui();
++
++    const auto mid = bridge.snapshot();
++    CHECK(mid.script_status == "running");
++    CHECK(mid.runtime_state == "Adapter Running");
++    CHECK(mid.suppress_script_ui);
++
++    bool saw_adapter_log = false;
++    bool saw_pending_log = false;
++    for (const auto& l : mid.logs) {
++        if (l.message.find("Native adapter connected") != std::string::npos) saw_adapter_log = true;
++        if (l.message.find("applied:PullRange=175") != std::string::npos) saw_pending_log = true;
++    }
++    CHECK(saw_adapter_log);
++    CHECK(saw_pending_log);
++
++    const auto do_melee = bridge.get_setting("DoMelee");
++    REQUIRE(do_melee.has_value());
++    CHECK(do_melee->value == "false");
++
++    bool healing_disabled = false;
++    for (const auto& m : mid.modules) {
++        if (m.name == "Healing" && !m.enabled && m.status == "Disabled") healing_disabled = true;
++    }
++    CHECK(healing_disabled);
++
++    // Finish cleanly first.
++    clock_ms = 50;
++    host.pulse();
++    CHECK(bridge.snapshot().last_error.empty());
++
++    // Now run again with TriggerErr = 1 and confirm the error banner state captures the failure.
++    CHECK(bridge.set_setting("TriggerErr", "1", "Class", false));
++    REQUIRE(host.run("rgmercs", {}, &why));
++    clock_ms = 60;
++    host.pulse();
++    clock_ms = 100;
++    host.pulse();
++
++    const auto after_err = bridge.snapshot();
++    CHECK(after_err.script_status == "error");
++    CHECK(after_err.error_count >= 1);
++    CHECK(after_err.last_error.find("simulated native ui test error") != std::string::npos);
++}
++
++TEST_CASE("eq.RGMercs* Lua adapter, capability gating, CascadeMenu integration, and native rgmercs.lua validation") {
++    std::unique_ptr<ImGuiContext, void (*)(ImGuiContext*)> imgui_ctx(ImGui::CreateContext(), ImGui::DestroyContext);
++    test::ScratchDir scratch("rgmercs_eq");
++    const fs::path data_dir = scratch.path() / "data";
++    const fs::path char_dir = data_dir / "characters" / "ez_server_stabbinyah";
++    fs::create_directories(char_dir);
++
++    mq::RGMercsBridge bridge;
++    bridge.attach_character(data_dir, char_dir, "Stabbinyah", "EZ Server", "ROG");
++
++    std::vector<std::string> dispatched;
++    app::EqHost host;
++    host.in_game = true;
++    host.ui_ready = true;
++    host.rgmercs = &bridge;
++    host.rgmercs_server = "EZ Server";
++    host.run_rgmercs_command = [&](const std::string& cmd) {
++        dispatched.push_back(cmd);
++        return true;
++    };
++
++    app::EqApi api(host);
++    lua_State* L = luaL_newstate();
++    REQUIRE(L != nullptr);
++    luaL_openlibs(L);
++    lua_newtable(L);
++    api.register_functions(L);
++    lua_setglobal(L, "eq");
++
++    CHECK(run_lua(L, "local st = eq.RGMercsState(true) return st.character .. '@' .. st.server") == "Stabbinyah@EZ Server");
++    CHECK(run_lua(L, "return eq.RGMercsSetSetting('AssistRange', '90', 'Targeting')") == "true");
++    CHECK(run_lua(L, "return eq.RGMercsSaveSettings()") == "true");
++    CHECK(fs::exists(char_dir / "rgmercs_settings.ini"));
++    CHECK(run_lua(L, "return eq.RGMercsSetModule('Combat', false)") == "true");
++    CHECK(run_lua(L, "return eq.RGMercsCommand('pause')") == "true");
++    REQUIRE(dispatched.size() == 1);
++    CHECK(dispatched[0] == "/rgl pause");
++
++    CHECK(run_lua(L, "eq.RGMercsControl('suppress_ui_off') return eq.RGMercsState().suppress_script_ui") == "false");
++    CHECK(run_lua(L, "eq.RGMercsControl('suppress_ui_on') return eq.RGMercsState().suppress_script_ui") == "true");
++    CHECK(run_lua(L, "eq.RGMercsClearLogs() return #eq.RGMercsState().logs") == "0");
++
++    // Verify all 9 sections exist in defaults exposed to UI.
++    CHECK(run_lua(L, "local st = eq.RGMercsState() local seen = {} "
++                     "for _, s in ipairs(st.settings) do seen[s.category] = true end "
++                     "return tostring(seen.Combat and seen.Targeting and seen.Healing and seen.Buffs and "
++                     "seen.Debuffs and seen.Movement and seen.Loot and seen.Class)") == "true");
++
++    // Verify eq_call_caps classifies every eq.RGMercs* function.
++    CHECK(app::eq_call_caps("RGMercsState") == 0u);
++    CHECK(app::eq_call_caps("RGMercsControl") == plugin::kCapCommands);
++    CHECK(app::eq_call_caps("RGMercsSetSetting") == plugin::kCapCommands);
++    CHECK(app::eq_call_caps("RGMercsSaveSettings") == plugin::kCapCommands);
++    CHECK(app::eq_call_caps("RGMercsResetDefaults") == plugin::kCapCommands);
++    CHECK(app::eq_call_caps("RGMercsImportDb") == plugin::kCapCommands);
++    CHECK(app::eq_call_caps("RGMercsSetModule") == plugin::kCapCommands);
++    CHECK(app::eq_call_caps("RGMercsClearLogs") == plugin::kCapCommands);
++    CHECK(app::eq_call_caps("RGMercsCommand") == plugin::kCapCommands);
++
++    // CascadeMenu: "RGMercs" is offered only when the pack draws RGMercsWnd.
++    auto with_rgmercs = [](std::string_view screen) { return screen == "RGMercsWnd" || screen == "OptionsWindow"; };
++    app::CascadeMenu menu;
++    menu.load_text(app::CascadeMenu::hailstone_layout(), 0xffffffffu, 1,
++                   [&](int c) { return app::menu_command_offered(c, with_rgmercs); });
++    const auto top = menu.row_texts(0);
++    CHECK(std::find(top.begin(), top.end(), "RGMercs") != top.end());
++
++    // Validate ui/modern/rgmercs.lua compiles cleanly and avoids Zep / MacroQuest compatibility globals.
++    const fs::path ui_script = fs::path(HAILSTONE_SOURCE_DIR) / "ui/modern/rgmercs.lua";
++    REQUIRE(fs::exists(ui_script));
++    CHECK(luaL_loadfile(L, ui_script.string().c_str()) == LUA_OK);
++    lua_settop(L, 0);
++
++    const std::string src = read_file_bytes(ui_script);
++    CHECK(src.find("ui.window(\"RGMercs\"") != std::string::npos);
++    CHECK(src.find("Zep") == std::string::npos);
++    CHECK(src.find("IM_COL32") == std::string::npos);
++    CHECK(src.find("ImHashStr") == std::string::npos);
++    CHECK(src.find("GetForegroundDrawList") == std::string::npos);
++    CHECK(src.find("ConsoleWidget") == std::string::npos);
++
++    lua_close(L);
++}
 diff --git a/tests/hailstone24/rgmercs_tlo_test.cpp b/tests/hailstone24/rgmercs_tlo_test.cpp
 new file mode 100644
 index 00000000..51a3e4a6
@@ -9111,10 +11487,10 @@ index 00000000..51a3e4a6
 +}
 diff --git a/tests/hailstone24/rgmercs_validation.lua b/tests/hailstone24/rgmercs_validation.lua
 new file mode 100644
-index 00000000..3aed8027
+index 00000000..c125121a
 --- /dev/null
 +++ b/tests/hailstone24/rgmercs_validation.lua
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,154 @@
 +-- Smoke test exercising the core APIs required by DerpleDude/rgmercs in Hailstone 24.
 +local mq = require('mq')
 +local PackageMan = require('mq.PackageMan')
@@ -9211,6 +11587,23 @@ index 00000000..3aed8027
 +assert(io.open(mq.luaDir .. '/rgmercs_validation.lua', 'w') == nil, 'write into luaDir should be blocked')
 +assert(io.open('/etc/passwd', 'r') == nil, 'io.open absolute read escape should be blocked')
 +assert(io.open(mq.configDir .. '/../../outside.txt', 'w') == nil, 'io.open traversal write escape should be blocked')
++
++-- Test Codex RG Mercs compat additions (mkdir no-op, load text-only, randomseed, hashes, ImGui/ImAnim/Zep).
++assert(lfs.mkdir(mq.configDir) == true, 'lfs.mkdir on existing mq.configDir should succeed')
++assert(lfs.mkdir(cfg_dir) == true, 'lfs.mkdir on existing subdir should succeed')
++math.randomseed(123.456)
++local loader_fn = assert(load('return { x = 42 }', 'cfg', 't', {}))
++assert(loader_fn().x == 42, 'text load() failed')
++assert(load('\27LuaR', 'bin', 'b') == nil, 'binary bytecode load() must be rejected')
++assert(type(ImHashStr('rgmercs')) == 'number' and ImHashStr('rgmercs') == ImHashStr('rgmercs'), 'ImHashStr mismatch')
++assert(IM_COL32(255, 0, 0, 255) == 0xFF0000FF, 'IM_COL32 mismatch')
++assert(IamWaveType ~= nil and IamWaveType.Sine == 0, 'IamWaveType missing')
++assert(require('ImAnim').Oscillate(0, 0, 10) == 5, 'ImAnim.Oscillate mismatch')
++assert(type(ImGui.GetStyleColorName(ImGuiCol.Text)) == 'string', 'GetStyleColorName missing')
++assert(ImGui.GetFont() == 3, 'GetFont mismatch')
++assert(ImGui.GetForegroundDrawList().AddImage ~= nil, 'GetForegroundDrawList missing')
++assert(getmetatable(ImGuiCol).__index.Text == ImGuiCol.Text, 'ImGuiCol __index missing')
++assert(require('Zep').Console.new():CreateBuffer() ~= nil, 'Zep CreateBuffer missing')
 +
 +-- Test mq.DataType.new + mq.AddTopLevelObject (RG Mercs RGMercs TLO).
 +local rgType = mq.DataType.new('RGMercsType', {
@@ -10464,6 +12857,32 @@ index 00000000..a79dad68
 +#endif
 +    return run_sdl_gui(client);
 +}
+diff --git a/ui/modern/lib/escape.lua b/ui/modern/lib/escape.lua
+index 67a0ec84..2c6c6373 100644
+--- a/ui/modern/lib/escape.lua
++++ b/ui/modern/lib/escape.lua
+@@ -30,7 +30,7 @@ local DEFAULT_ON = {}
+ for _, key in ipairs({
+   "InventoryWindow", "AAWindow", "AbilityBookWnd", "SpellBookWnd", "MapViewWnd", "WorldContainer",
+   "InspectWnd", "SkillsWindow", "TaskWnd", "GuildManagementWnd", "FriendsWindow", "BankWnd", "BigBankWnd",
+-  "ScriptsWnd", "HelpWindow", "BookWindow", "NoteWindow", "TributeBenefitWnd", "TributeTrophyWnd",
++  "ScriptsWnd", "RGMercsWnd", "HelpWindow", "BookWindow", "NoteWindow", "TributeBenefitWnd", "TributeTrophyWnd",
+   "LeadershipWindow", "TitleWnd", "TrackingWnd", "MailWindow", "GroupSearchWnd", "BazaarSearchWnd",
+   "BarterSearchWnd",
+ }) do DEFAULT_ON[key] = true end
+diff --git a/ui/modern/lib/menuicons.lua b/ui/modern/lib/menuicons.lua
+index aa75b42e..fc34ec08 100644
+--- a/ui/modern/lib/menuicons.lua
++++ b/ui/modern/lib/menuicons.lua
+@@ -429,7 +429,7 @@ local BY_TEXT = {
+   ["Leadership"] = "leadership", ["Skills"] = "skills", ["Blocked Buffs"] = "blocked",
+   ["Blocked Pet Buffs"] = "blockedpet", ["Auras"] = "auras", ["Character"] = "character",
+   ["Inventory"] = "inventory", ["Advanced Inventory"] = "advinventory", ["Options"] = "options", ["Camp & Quit"] = "camp",
+-  ["Report a Bug"] = "bug", ["Web Browser"] = "globe", ["Lua Scripts"] = "script", ["Ability Book"] = "abilitybook", ["Aggro Meter"] = "aggro",
++  ["Report a Bug"] = "bug", ["Web Browser"] = "globe", ["Lua Scripts"] = "script", ["RGMercs"] = "script", ["Ability Book"] = "abilitybook", ["Aggro Meter"] = "aggro",
+   ["Help"] = "help", ["Everquest Help"] = "help", ["Mail"] = "mail", ["Mercenaries"] = "mercenary",
+   ["NPC Journal"] = "npcjournal", ["PvP Stats"] = "pvp", ["Storyline"] = "story", ["Tribute"] = "tribute",
+   ["Bazaar Search"] = "bazaar", ["Barter Search"] = "barter", ["Looking for Group"] = "lfgroup",
 diff --git a/ui/modern/login.lua b/ui/modern/login.lua
 index 835e00f5..d1bd49b7 100644
 --- a/ui/modern/login.lua
@@ -10510,6 +12929,527 @@ index 835e00f5..d1bd49b7 100644
      interfacePicker(view, s)
    end
    ui.SameLine()
+diff --git a/ui/modern/rgmercs.lua b/ui/modern/rgmercs.lua
+new file mode 100644
+index 00000000..4bdc811b
+--- /dev/null
++++ b/ui/modern/rgmercs.lua
+@@ -0,0 +1,499 @@
++-- RGMercs: Hailstone-native ImGui presentation window (RGMercsWnd).
++-- Decouples presentation from RG Mercs Lua gameplay/combat logic via eq.RGMercs* and RGMercsBridge.
++-- Built strictly on native Hailstone ui.* and hud.Dialog APIs.
++local hud = dofile("lib/hud.lua")
++local T = hud.T
++local C = T.color
++local WINDOW = "RGMercsWnd"
++
++local SECTIONS = {
++  { id = "Combat",         label = "Combat",         cat = "Combat",    mod = "Combat" },
++  { id = "Targeting",      label = "Targeting",      cat = "Targeting", mod = "Targeting" },
++  { id = "Healing",        label = "Healing",        cat = "Healing",   mod = "Healing" },
++  { id = "Buffs",          label = "Buffs",          cat = "Buffs",     mod = "Buffs" },
++  { id = "Debuffs",        label = "Debuffs",        cat = "Debuffs",   mod = "Debuffs" },
++  { id = "Movement",       label = "Movement",       cat = "Movement",  mod = "Movement" },
++  { id = "Loot",           label = "Loot",           cat = "Loot",      mod = "Loot" },
++  { id = "Class settings", label = "Class settings", cat = "Class",     mod = "Class", includeExtra = true },
++  { id = "Debug/logging",  label = "Debug/logging",  debug = true },
++}
++
++local KNOWN_CATS = {
++  Combat = true, Targeting = true, Healing = true, Buffs = true,
++  Debuffs = true, Movement = true, Loot = true, Class = true,
++}
++
++local STATUS_LABEL = {
++  running = "Running",
++  paused  = "Paused",
++  exited  = "Ended",
++  error   = "Error",
++}
++
++local activeSection = "Combat"
++local filterText = ""
++local cmdInput = ""
++local logFilter = ""
++local autoScroll = true
++local selectedDbIdx = 1
++local noticeText = ""
++local noticeErr = false
++local wasShown = false
++local textDrafts = {}
++
++local function colored(c, text)
++  ui.TextColored(c[1], c[2], c[3], 1, text)
++end
++
++local function setNotice(text, isErr)
++  noticeText = text or ""
++  noticeErr = isErr == true
++end
++
++local function toBool(v)
++  if type(v) == "boolean" then return v end
++  local s = tostring(v or ""):lower()
++  return s == "1" or s == "true" or s == "yes" or s == "on"
++end
++
++local function statusColor(st)
++  if st.status == "running" then return C.good end
++  if st.status == "paused" then return C.warn end
++  if st.status == "error" or st.last_error ~= "" then return C.danger end
++  return C.muted
++end
++
++local function statusDisplay(st)
++  if st.status ~= "" and STATUS_LABEL[st.status] then
++    return STATUS_LABEL[st.status]
++  end
++  if st.last_error ~= "" then return "Error" end
++  if not st.found then return "Not Found" end
++  if not st.allowed then return "Not Allowed" end
++  return "Stopped"
++end
++
++local function findModule(st, name)
++  if not name or not st.modules then return nil end
++  for _, m in ipairs(st.modules) do
++    if m.name == name then return m end
++  end
++  return nil
++end
++
++local function fileBasename(p)
++  if not p or p == "" then return "" end
++  return p:match("([^/\\]+)$") or p
++end
++
++local function drawSettingRow(e, s)
++  ui.PushID("set_" .. e.key)
++  ui.TableNextRow()
++
++  ui.TableNextColumn()
++  local label = e.key .. (e.imported and " *" or "")
++  colored(e.value ~= e.default_value and C.accent or C.text, label)
++  if ui.IsItemHovered() then
++    local tip = { e.key }
++    if e.description ~= "" then tip[#tip + 1] = e.description end
++    tip[#tip + 1] = "Category: " .. e.category .. "  |  Default: " .. e.default_value
++    if e.imported then tip[#tip + 1] = "Imported from existing RG Mercs config" end
++    ui.SetTooltip(table.concat(tip, "\n"))
++  end
++  if e.description ~= "" then
++    ui.TextDisabled(e.description)
++  end
++
++  ui.TableNextColumn()
++  ui.SetNextItemWidth(-1)
++  if e.type == "bool" then
++    local cur = toBool(e.value)
++    local nxt, changed = ui.Checkbox("##v", cur)
++    if changed then
++      eq.RGMercsSetSetting(e.key, nxt and "true" or "false", e.category)
++    end
++  elseif e.type == "choice" and e.choices and #e.choices > 0 then
++    if ui.BeginCombo("##v", e.value ~= "" and e.value or e.default_value, 0) then
++      for _, ch in ipairs(e.choices) do
++        if ui.Selectable(ch, ch == e.value, 0, 0, 0) then
++          eq.RGMercsSetSetting(e.key, ch, e.category)
++        end
++      end
++      ui.EndCombo()
++    end
++  elseif e.type == "int" then
++    local cur = math.floor(tonumber(e.value) or tonumber(e.default_value) or 0)
++    local lo = math.floor(e.min_val or 0)
++    local hi = math.floor(e.max_val or 100)
++    if hi <= lo then hi = lo + 100 end
++    if (hi - lo) <= 1000 then
++      local nxt, changed = ui.SliderInt("##v", cur, lo, hi)
++      if changed then
++        eq.RGMercsSetSetting(e.key, tostring(math.floor(nxt)), e.category)
++      end
++    else
++      local draft = textDrafts[e.key] or tostring(cur)
++      local nxt, changed = ui.InputText("##v", draft, 32, ui.InputTextFlags.CharsDecimal)
++      textDrafts[e.key] = nxt
++      if changed then
++        local num = tonumber(nxt)
++        if num then
++          local clamped = math.max(lo, math.min(hi, math.floor(num)))
++          eq.RGMercsSetSetting(e.key, tostring(clamped), e.category)
++        end
++      end
++    end
++  elseif e.type == "float" then
++    local cur = tonumber(e.value) or tonumber(e.default_value) or 0
++    local lo = tonumber(e.min_val) or 0
++    local hi = tonumber(e.max_val) or 100
++    if hi <= lo then hi = lo + 100 end
++    local nxt, changed = ui.SliderFloat("##v", cur, lo, hi)
++    if changed then
++      eq.RGMercsSetSetting(e.key, string.format("%.2f", nxt), e.category)
++    end
++  else
++    local cur = e.value or ""
++    local nxt, changed = ui.InputText("##v", cur, 256, 0)
++    if changed then
++      eq.RGMercsSetSetting(e.key, nxt, e.category)
++    end
++  end
++
++  ui.PopID()
++end
++
++local function drawConfigSection(st, sec, s)
++  if sec.mod then
++    local mod = findModule(st, sec.mod)
++    if mod then
++      local on, changed = ui.Checkbox("Enable " .. mod.name .. " module##modtoggle", mod.enabled)
++      if changed then
++        eq.RGMercsSetModule(mod.name, on)
++      end
++      ui.SameLine()
++      colored(mod.enabled and C.muted or C.faint, "Module state: " .. mod.status)
++    end
++  end
++
++  ui.SetNextItemWidth(240 * s)
++  filterText = ui.InputTextWithHint("##cfgfilter", "Filter settings (all categories when typing)...", filterText, 64)
++  if filterText ~= "" then
++    ui.SameLine()
++    if ui.SmallButton("Clear##cfgf") then filterText = "" end
++  end
++  ui.Separator()
++
++  local q = filterText:lower()
++  local rows = {}
++  for _, e in ipairs(st.settings or {}) do
++    local catMatch
++    if q ~= "" then
++      catMatch = true
++    elseif sec.includeExtra then
++      catMatch = (e.category == sec.cat) or not KNOWN_CATS[e.category]
++    else
++      catMatch = (e.category == sec.cat)
++    end
++    if catMatch then
++      if q == "" or e.key:lower():find(q, 1, true)
++         or e.description:lower():find(q, 1, true)
++         or e.category:lower():find(q, 1, true) then
++        rows[#rows + 1] = e
++      end
++    end
++  end
++
++  local tflags = ui.TableFlags.RowBg | ui.TableFlags.ScrollY | ui.TableFlags.SizingStretchProp | ui.TableFlags.BordersInnerH
++  if ui.BeginTable("##cfgtable", 2, tflags, 0, -24 * s) then
++    ui.TableSetupColumn("Setting", ui.TableColumnFlags.WidthStretch, 1.35)
++    ui.TableSetupColumn("Value", ui.TableColumnFlags.WidthStretch, 1.0)
++    ui.TableHeadersRow()
++    for _, e in ipairs(rows) do
++      drawSettingRow(e, s)
++    end
++    ui.EndTable()
++  end
++
++  if #rows == 0 then
++    ui.TextDisabled(q ~= "" and "No RG Mercs settings match the filter." or "No settings in this section yet.")
++  elseif sec.includeExtra and st.settings_path ~= "" then
++    ui.TextDisabled("Config file: " .. st.settings_path)
++  end
++end
++
++local function drawDebugSection(st, s)
++  ui.Text("Module & Script Diagnostics")
++  if st.settings_path ~= "" then
++    ui.TextDisabled("Per-character config: " .. st.settings_path)
++  end
++  if st.runtime_state ~= "" then
++    ui.TextDisabled("Runtime state: " .. st.runtime_state)
++  end
++
++  local mflags = ui.TableFlags.RowBg | ui.TableFlags.BordersInnerH | ui.TableFlags.SizingStretchProp
++  if ui.BeginTable("##modules", 3, mflags, 0, 125 * s) then
++    ui.TableSetupColumn("Module", ui.TableColumnFlags.WidthStretch, 1.0)
++    ui.TableSetupColumn("Enabled", ui.TableColumnFlags.WidthFixed, 70 * s)
++    ui.TableSetupColumn("Status", ui.TableColumnFlags.WidthStretch, 1.2)
++    ui.TableHeadersRow()
++    for _, m in ipairs(st.modules or {}) do
++      ui.PushID("mod_" .. m.name)
++      ui.TableNextRow()
++      ui.TableNextColumn()
++      ui.Text(m.name)
++      ui.TableNextColumn()
++      local on, changed = ui.Checkbox("##en", m.enabled)
++      if changed then eq.RGMercsSetModule(m.name, on) end
++      ui.TableNextColumn()
++      local mc = m.status == "Error" and C.danger or (m.enabled and C.good or C.faint)
++      colored(mc, m.detail ~= "" and (m.status .. " (" .. m.detail .. ")") or m.status)
++      ui.PopID()
++    end
++    ui.EndTable()
++  end
++
++  ui.Spacing()
++  ui.SeparatorText("Logs & Command Console")
++
++  ui.SetNextItemWidth(170 * s)
++  logFilter = ui.InputTextWithHint("##logfilter", "Filter logs...", logFilter, 64)
++  ui.SameLine()
++  if ui.SmallButton("Clear Logs") then
++    eq.RGMercsClearLogs()
++  end
++  ui.SameLine()
++  if ui.SmallButton("Copy Logs") then
++    local lines = {}
++    if st.last_error ~= "" then
++      lines[#lines + 1] = "[ERROR] " .. st.last_error
++    end
++    for _, l in ipairs(st.logs or {}) do
++      lines[#lines + 1] = string.format("[%s] [%s] %s", l.timestamp, (l.level or "info"):upper(), l.message)
++    end
++    ui.SetClipboardText(table.concat(lines, "\n"))
++    setNotice("Copied " .. tostring(#lines) .. " log lines to clipboard.", false)
++  end
++  ui.SameLine()
++  local scOn, scChanged = ui.Checkbox("Auto-scroll", autoScroll)
++  if scChanged then autoScroll = scOn end
++
++  local _, lh = ui.CalcTextSize("Ag")
++  local cmdBarH = lh + 18 * s
++  local lq = logFilter:lower()
++  ui.BeginChild("##rglogscroll", 0, -cmdBarH, true, 0)
++  local shownLogs = 0
++  for _, l in ipairs(st.logs or {}) do
++    local line = string.format("[%s] %s", l.timestamp, l.message)
++    if lq == "" or line:lower():find(lq, 1, true) or (l.level or ""):lower():find(lq, 1, true) then
++      shownLogs = shownLogs + 1
++      local lc = C.text
++      if l.level == "error" then lc = C.danger
++      elseif l.level == "warn" then lc = C.warn
++      end
++      ui.PushTextWrapPos(0)
++      colored(lc, line)
++      ui.PopTextWrapPos()
++    end
++  end
++  if shownLogs == 0 then
++    ui.TextDisabled("No RG Mercs log entries yet.")
++  end
++  if autoScroll and ui.GetScrollY() >= ui.GetScrollMaxY() - 20 then
++    ui.SetScrollHereY(1.0)
++  end
++  ui.EndChild()
++
++  ui.SetNextItemWidth(-95 * s)
++  local nextCmd, submitted = ui.InputTextWithHint("##rglcmd", "Send /rgl command (e.g. pause, pull, set ...)", cmdInput, 256,
++                                                ui.InputTextFlags.EnterReturnsTrue)
++  cmdInput = nextCmd
++  ui.SameLine()
++  local sendClicked = ui.Button("Send##rgl", 85 * s, 0)
++  if (sendClicked or submitted) and cmdInput ~= "" then
++    eq.RGMercsCommand(cmdInput)
++    cmdInput = ""
++  end
++end
++
++local WINDOW_OPTS = {
++  size = function() return 760, 560 end,
++  resizable = { 580, 400 },
++}
++
++local function drawWindow(x, y, w, h, s)
++  local st = eq.RGMercsState(not wasShown)
++  wasShown = true
++
++  -- Header: Character, Server, State, Lifecycle Controls
++  local charLabel = st.character ~= "" and st.character or (eq.Name and eq.Name() or "Unknown")
++  if st.class_name ~= "" then
++    charLabel = charLabel .. " (" .. st.class_name .. ")"
++  end
++  local srvLabel = st.server ~= "" and st.server or "Current Server"
++
++  colored(C.text, "RGMercs")
++  ui.SameLine()
++  ui.TextDisabled(" ·  " .. charLabel .. " @ " .. srvLabel)
++  ui.SameLine()
++  colored(statusColor(st), " [" .. statusDisplay(st) .. "]")
++  if st.dirty then
++    ui.SameLine()
++    colored(C.warn, " (unsaved)")
++  end
++
++  local live = (st.status == "running" or st.status == "paused")
++  if not live then
++    ui.BeginDisabled(not st.found or not st.allowed)
++    if ui.SmallButton("Start") then
++      local ok, why = eq.RGMercsControl("start")
++      setNotice(ok and "Started rgmercs." or (why or "Failed to start rgmercs."), not ok)
++    end
++    ui.EndDisabled()
++  else
++    ui.BeginDisabled(st.kept)
++    if ui.SmallButton("Stop") then
++      local ok, why = eq.RGMercsControl("stop")
++      setNotice(ok and "Stopped rgmercs." or (why or "Failed to stop rgmercs."), not ok)
++    end
++    ui.SameLine()
++    if ui.SmallButton(st.status == "paused" and "Resume" or "Pause") then
++      eq.RGMercsControl("pause")
++    end
++    ui.EndDisabled()
++  end
++
++  ui.SameLine()
++  ui.BeginDisabled(not st.found or not st.allowed or st.kept)
++  if ui.SmallButton("Reload") then
++    local ok, why = eq.RGMercsControl("reload")
++    setNotice(ok and "Reloaded rgmercs." or (why or "Failed to reload rgmercs."), not ok)
++  end
++  ui.EndDisabled()
++
++  ui.SameLine()
++  ui.BeginDisabled(not st.autorun_available)
++  local ar, arChanged = ui.Checkbox("Autorun", st.autorun)
++  if arChanged then
++    eq.RGMercsControl(ar and "autorun_on" or "autorun_off")
++  end
++  ui.EndDisabled()
++  if ui.IsItemHovered(ui.HoveredFlags.AllowWhenDisabled) then
++    ui.SetTooltip(st.autorun_available and "Auto-launch rgmercs when this character enters the world" or "Available once character enters world")
++  end
++
++  ui.SameLine()
++  local sup, supChanged = ui.Checkbox("Native UI only", st.suppress_script_ui)
++  if supChanged then
++    eq.RGMercsControl(sup and "suppress_ui_on" or "suppress_ui_off")
++  end
++  if ui.IsItemHovered() then
++    ui.SetTooltip("Suppress RG Mercs' built-in script ImGui windows and render with this Hailstone-native UI")
++  end
++
++  ui.SameLine()
++  if ui.SmallButton("Save") then
++    local ok = eq.RGMercsSaveSettings()
++    setNotice(ok and "Saved settings to character config." or "Unable to save settings (no character folder).", not ok)
++  end
++  ui.SameLine()
++  if ui.SmallButton("Reset") then
++    eq.RGMercsResetDefaults()
++    textDrafts = {}
++    setNotice("Reset RG Mercs settings to defaults (click Save to persist).", false)
++  end
++
++  -- Error Banner (visible without opening game chat)
++  local errText = st.last_error
++  if errText == "" and not st.found then
++    errText = "Script 'rgmercs' was not found in Hailstone's script folders."
++  elseif errText == "" and not st.allowed and st.why ~= "" then
++    errText = "Script execution blocked: " .. st.why
++  end
++
++  if errText ~= "" then
++    ui.Separator()
++    colored(C.danger, "Error: " .. errText)
++    ui.SameLine()
++    if ui.SmallButton("Debug Log") then activeSection = "Debug/logging" end
++    if st.last_error ~= "" then
++      ui.SameLine()
++      if ui.SmallButton("Dismiss") then eq.RGMercsControl("clear_error") end
++    end
++  end
++
++  -- Existing RG Mercs SQLite/Lua Migration Banner
++  local dbs = st.available_dbs or {}
++  if st.imported_from ~= "" then
++    colored(C.good, string.format("Migrated %d settings from %s", st.imported_count or 0, fileBasename(st.imported_from)))
++    if #dbs > 0 then
++      ui.SameLine()
++      if ui.SmallButton("Re-import") then
++        local path = dbs[selectedDbIdx] or dbs[1]
++        local ok, cnt, detail = eq.RGMercsImportDb(path)
++        textDrafts = {}
++        setNotice(ok and string.format("Imported %d settings from %s", cnt, fileBasename(detail)) or ("Import failed: " .. tostring(detail)), not ok)
++      end
++    end
++  elseif #dbs > 0 then
++    if selectedDbIdx > #dbs then selectedDbIdx = 1 end
++    colored(C.warn, "Existing RG Mercs config detected:")
++    ui.SameLine()
++    ui.SetNextItemWidth(220 * s)
++    if ui.BeginCombo("##dbpick", fileBasename(dbs[selectedDbIdx]), 0) then
++      for i, p in ipairs(dbs) do
++        if ui.Selectable(fileBasename(p) .. "##" .. i, i == selectedDbIdx, 0, 0, 0) then
++          selectedDbIdx = i
++        end
++      end
++      ui.EndCombo()
++    end
++    ui.SameLine()
++    if ui.SmallButton("Import Config (Read-Only)") then
++      local ok, cnt, detail = eq.RGMercsImportDb(dbs[selectedDbIdx])
++      textDrafts = {}
++      setNotice(ok and string.format("Imported %d settings from %s (Save to persist)", cnt, fileBasename(detail)) or ("Import failed: " .. tostring(detail)), not ok)
++    end
++  end
++
++  if noticeText ~= "" then
++    colored(noticeErr and C.danger or C.muted, noticeText)
++  end
++
++  ui.Separator()
++
++  -- Main Two-Pane Layout: Left Navigation + Right Content
++  local navW = 148 * s
++  ui.BeginChild("##rgnav", navW, 0, true, 0)
++  local activeObj = SECTIONS[1]
++  for _, sec in ipairs(SECTIONS) do
++    local isActive = (activeSection == sec.id)
++    local label = sec.label
++    if sec.debug and (st.error_count or 0) > 0 then
++      label = label .. " (" .. tostring(st.error_count) .. ")"
++    end
++    if ui.Selectable(label, isActive, 0, 0, 0) then
++      activeSection = sec.id
++    end
++    if activeSection == sec.id then activeObj = sec end
++  end
++  ui.EndChild()
++
++  ui.SameLine()
++
++  ui.BeginChild("##rgcontent", 0, 0, true, 0)
++  if activeObj.debug then
++    drawDebugSection(st, s)
++  else
++    drawConfigSection(st, activeObj, s)
++  end
++  ui.EndChild()
++end
++
++ui.window("RGMercs", function()
++  if not eq.InGame() then
++    wasShown = false
++    return
++  end
++  hud.Dialog(WINDOW, "RGMercs", WINDOW_OPTS, drawWindow)
++end)
+diff --git a/ui/modern/scripts.lua b/ui/modern/scripts.lua
+index 49fbfc27..ae15b4d7 100644
+--- a/ui/modern/scripts.lua
++++ b/ui/modern/scripts.lua
+@@ -102,6 +102,11 @@ local function drawWindow(x, y, w, h, s)
+           if ui.SmallButton("Run") then eq.ScriptRun(r.name, args) end
+           ui.EndDisabled()
+         end
++        if r.name == "rgmercs" then
++          ui.SameLine()
++          if ui.SmallButton("UI") then eq.ShowWindow("RGMercsWnd", true) end
++          if ui.IsItemHovered() then ui.SetTooltip("Open the Hailstone-native RGMercs window") end
++        end
+         ui.PopID()
+       end
+     end
 diff --git a/ui/modern/serverselect.lua b/ui/modern/serverselect.lua
 index d5776083..412972b0 100644
 --- a/ui/modern/serverselect.lua
