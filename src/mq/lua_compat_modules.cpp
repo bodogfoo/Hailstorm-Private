@@ -2051,6 +2051,13 @@ int luaopen_actors(lua_State* L) {
 constexpr const char* kLuaCompatScript = R"lua(
 local preloaded = ...
 
+-- MacroQuest commonly seeds with a fractional elapsed-time value; Lua 5.4
+-- requires an integer seed.
+do
+    local randomseed = math.randomseed
+    math.randomseed = function(seed) return randomseed(math.floor(tonumber(seed) or 0)) end
+end
+
 -- mq.PackageMan
 preloaded['mq.PackageMan'] = {
     Require = function(pkg, mod_name)
