@@ -2177,6 +2177,7 @@ local function new_zep_widget()
         SetFlags = function(self, f) self._flags = self._flags | (f or 0) end,
         ClearFlags = function(self, f) self._flags = self._flags & ~(f or 0) end,
         GetBuffer = function(self) return self end,
+        CreateBuffer = function(self) return new_zep_widget() end,
         Render = function(self)
             if ImGui and ImGui.TextUnformatted and #self._lines > 0 then
                 local start = math.max(1, #self._lines - 20)
