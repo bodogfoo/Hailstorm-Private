@@ -1,0 +1,142 @@
+{
+  "project": "Hailstone 24",
+  "target": "DerpleDude/rgmercs (RoF2 / EZ Server)",
+  "generated_at": "2026-11-15",
+  "entries": [
+    {
+      "id": "tlo-me-aa-status",
+      "category": "TLOs",
+      "symbol": "Me.AAPoints / AltAbility / MaxBuffSlots / Song / FindBuff / XTargetSlots / PctAggro",
+      "requirement": "Class rotation checks, self-buff maintenance, aggro thresholds, AA activation readiness",
+      "status": "Supported",
+      "implementation": "src/mq/tlo_game.cpp",
+      "notes": "Wired to GameConnection alt_adv(), eq_strings db_string(type 1), aggro(), and buff/song slots."
+    },
+    {
+      "id": "tlo-me-debuffs",
+      "category": "TLOs",
+      "symbol": "Me.Diseased / Poisoned / Cursed / Corrupted / Silenced / AmIGroupLeader / Mount / Mercenary",
+      "requirement": "Cure triggers, mount checks, and group leadership logic in utils/casting.lua & healing",
+      "status": "Supported",
+      "implementation": "src/mq/tlo_game.cpp",
+      "notes": "Scans active buffs/effects and mount/merc state; falls back cleanly to false/nil when absent."
+    },
+    {
+      "id": "tlo-spawn-aggro",
+      "category": "TLOs",
+      "symbol": "Spawn.Aggressive / Beneficial / FeetWet / FindBuff / PctAggro / SecondaryPctAggro / AggroHolder",
+      "requirement": "Target aggro monitoring and water checks during pulling/assisting",
+      "status": "Supported",
+      "implementation": "src/mq/tlo_game.cpp",
+      "notes": "Uses hailstone spawn/combat tables and aggro tracking packets."
+    },
+    {
+      "id": "tlo-raid-group",
+      "category": "TLOs",
+      "symbol": "Raid.Members / Leader / MainAssist / Member[] & Group.Injured / LowMana",
+      "requirement": "Multi-group & raid-wide heal/rez/buff coordination across 24 characters",
+      "status": "Supported",
+      "implementation": "src/mq/tlo_game.cpp",
+      "notes": "Full raid roster object + raidmember conversion to spawn; group health/mana threshold counters."
+    },
+    {
+      "id": "tlo-eq-nav-dannet",
+      "category": "TLOs",
+      "symbol": "EverQuest.Foreground / Ping / Path / ValidLoc, Nav.*, MoveTo.*, DanNet.Peers / Q / O",
+      "requirement": "Foreground detection, latency backoff, mesh movement checks, peer queries",
+      "status": "Supported",
+      "implementation": "src/mq/tlo_game.cpp, src/ipc/session_bus.cpp",
+      "notes": "EverQuest.Foreground tracks Hailstone ExecutionController state; DanNet queries cached AF_UNIX peer roster."
+    },
+    {
+      "id": "tlo-macroquest-lua",
+      "category": "TLOs",
+      "symbol": "MacroQuest.Path / BuildName / GameState & Lua.Script().Status() & InvSlot",
+      "requirement": "RG Mercs startup script inspection, config path lookup, and equipment slots",
+      "status": "Supported",
+      "implementation": "src/mq/tlo_game.cpp",
+      "notes": "Returns isolated Hailstone Lua/config directories and running Lua coroutine state."
+    },
+    {
+      "id": "lua-custom-datatype",
+      "category": "Lua Runtime",
+      "symbol": "mq.DataType.new() / mq.AddTopLevelObject('RGMercs', ...)",
+      "requirement": "Custom RGMercs TLO registration in rgmercs/utils/datatypes.lua",
+      "status": "Supported",
+      "implementation": "src/mq/lua_mq.cpp",
+      "notes": "Wrapped over mq.TLO metatable with Members, Methods, and ToString evaluation."
+    },
+    {
+      "id": "lua-lsqlite3",
+      "category": "Lua Modules",
+      "symbol": "require('lsqlite3') / PackageMan.Require('lsqlite3')",
+      "requirement": "Persistent settings & config DB in rgmercs/utils/config_db.lua",
+      "status": "Supported",
+      "implementation": "src/mq/lua_compat_modules.cpp",
+      "notes": "Native C SQLite3 binding incl. open, open_memory, exec, prepare, rows, nrows, urows, and 5-arg update_hook."
+    },
+    {
+      "id": "lua-lfs",
+      "category": "Lua Modules",
+      "symbol": "require('lfs') / PackageMan.Require('luafilesystem', 'lfs')",
+      "requirement": "Directory creation and module discovery under sandboxed config dir",
+      "status": "Supported",
+      "implementation": "src/mq/lua_compat_modules.cpp",
+      "notes": "Backed by std::filesystem with mkdir, rmdir, dir iterator, attributes, and path helpers."
+    },
+    {
+      "id": "lua-actors",
+      "category": "IPC & Actors",
+      "symbol": "require('actors') (register, send, dropbox routing, JSON Lua serializer)",
+      "requirement": "High-speed coordination between RG Mercs instances (healing, mezzing, pulls)",
+      "status": "Supported",
+      "implementation": "src/mq/lua_compat_modules.cpp, src/ipc/session_bus.cpp",
+      "notes": "Routes mailboxes across all 24 processes via local AF_UNIX SessionBusServer with self-loopback support."
+    },
+    {
+      "id": "lua-bit32-icons-set",
+      "category": "Lua Modules",
+      "symbol": "bit32 / mq.ICONS / mq.Set / mq.set / mq.PackageMan",
+      "requirement": "Bitmask config flags, FontAwesome icon constants, set collections",
+      "status": "Supported",
+      "implementation": "src/mq/lua_compat_modules.cpp",
+      "notes": "Pure Lua 5.4 bitwise math for bit32, preloaded module registry checked inside find_module()."
+    },
+    {
+      "id": "ipc-slash-commands",
+      "category": "IPC & Commands",
+      "symbol": "/bca /bcaa /bcz /bcaaz /bcg /bcaag /bct /bc /rc /dgt /dge /dga /dgae /dex /dquery /dobserve /switch",
+      "requirement": "MQ2EQBC, DanNet, and Hailstone foreground switcher command routing",
+      "status": "Supported",
+      "implementation": "src/mq/commands.cpp, src/ipc/session_bus.cpp",
+      "notes": "Normalizes EQBC double-slash //cmd -> /cmd and enforces explicit ACK tracking."
+    },
+    {
+      "id": "mq-autologin-importer",
+      "category": "Multibox Ops",
+      "symbol": "--import-mq-logins (login.db, MQ2AutoLogin.ini, caret lists)",
+      "requirement": "Zero-touch credential migration from MacroQuest without touching EQ/MQ installs",
+      "status": "Supported",
+      "implementation": "src/core/mq_login_import.cpp",
+      "notes": "Opens login.db SQLITE_OPEN_READONLY, applies MQ Next XOR decryption with --mq-master-pass, stores passwords in libsecret keyring only."
+    },
+    {
+      "id": "lua-implot-imanim-zep",
+      "category": "UI & Visuals",
+      "symbol": "ImPlot / ImAnim / Zep / mq.CreateTexture / mq.FindTextureAnimation",
+      "requirement": "Optional RG Mercs HUD charts, animated indicators, editor tabs, and icon textures",
+      "status": "Partial",
+      "implementation": "src/mq/lua_compat_modules.cpp, src/mq/lua_mq.cpp",
+      "notes": "API-compatible table shims prevent script load errors; advanced multi-series ImPlot graphs render via clean ImGui text/progress fallbacks; suppressed automatically in BACKGROUND_HEADLESS."
+    },
+    {
+      "id": "eq-legacy-mac-macros",
+      "category": "Automation",
+      "symbol": ".mac MacroQuest Script Engine",
+      "requirement": "Legacy non-Lua EQ macros",
+      "status": "Unsupported",
+      "implementation": "Upstream Hailstone policy",
+      "notes": "Hailstone executes MQ2Lua scripts (like RG Mercs) cleanly; legacy .mac files are not executed."
+    }
+  ]
+}
