@@ -1096,6 +1096,12 @@ void SetInts(lua_State *L, const char *table, std::initializer_list<std::pair<co
 		lua_pushinteger(L, v.second);
 		lua_setfield(L, -2, v.first);
 	}
+	// MacroQuest scripts enumerate constants through getmetatable(T).__index.
+	// Make the constant table serve as its own __index for compatibility.
+	lua_newtable(L);
+	lua_pushvalue(L, -2);
+	lua_setfield(L, -2, "__index");
+	lua_setmetatable(L, -2);
 	lua_setfield(L, -2, table);
 }
 
