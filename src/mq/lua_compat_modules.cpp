@@ -2121,6 +2121,13 @@ _G.ImHashStr = _G.ImHashStr or function(value)
     end
     return hash
 end
+_G.IM_COL32 = _G.IM_COL32 or function(r, g, b, a)
+    return bit32.bor(
+        bit32.band(math.floor(a or 255), 0xff) * 0x1000000,
+        bit32.band(math.floor(b or 0), 0xff) * 0x10000,
+        bit32.band(math.floor(g or 0), 0xff) * 0x100,
+        bit32.band(math.floor(r or 0), 0xff))
+end
 
 -- ImPlot lightweight safe shim (RG Mercs performance monitor)
 _G.ImAxis = _G.ImAxis or { X1 = 0, X2 = 1, X3 = 2, Y1 = 3, Y2 = 4, Y3 = 5 }
