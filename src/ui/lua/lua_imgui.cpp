@@ -928,6 +928,10 @@ int GetFontSize(lua_State *L) {
 	lua_pushnumber(L, ImGui::GetFontSize());
 	return 1;
 }
+int GetCursorPosY(lua_State *L) {
+	lua_pushnumber(L, ImGui::GetCursorPosY());
+	return 1;
+}
 int GetForegroundDrawList(lua_State *L) {
 	lua_newtable(L);
 	lua_pushcfunction(L, [](lua_State *) { return 0; });
@@ -1188,7 +1192,7 @@ void register_ui_api(lua_State *L) {
 		{"SameLine", SameLine}, {"PushTextWrapPos", PushTextWrapPos}, {"PopTextWrapPos", PopTextWrapPos}, {"NewLine", NewLine}, {"Separator", Separator}, {"Spacing", Spacing},
 		{"Dummy", Dummy}, {"Indent", Indent}, {"Unindent", Unindent}, {"BeginGroup", BeginGroup},
 		{"EndGroup", EndGroup}, {"PushID", PushID}, {"PopID", PopID}, {"SetNextItemWidth", SetNextItemWidth},
-		{"GetContentRegionAvail", GetContentRegionAvail}, {"GetCursorPos", GetCursorPos}, {"SetCursorPos", SetCursorPos}, {"SetCursorScreenPos", SetCursorScreenPos}, {"GetScrollY", GetScrollY}, {"SetScrollY", SetScrollY}, {"GetScrollMaxY", GetScrollMaxY}, {"GetMousePos", GetMousePos}, {"GetWindowPos", GetWindowPos}, {"Foreground", Foreground},
+		{"GetContentRegionAvail", GetContentRegionAvail}, {"GetCursorPos", GetCursorPos}, {"GetCursorPosY", GetCursorPosY}, {"SetCursorPos", SetCursorPos}, {"SetCursorScreenPos", SetCursorScreenPos}, {"GetScrollY", GetScrollY}, {"SetScrollY", SetScrollY}, {"GetScrollMaxY", GetScrollMaxY}, {"GetMousePos", GetMousePos}, {"GetWindowPos", GetWindowPos}, {"Foreground", Foreground},
 		{"GetWindowSize", GetWindowSize}, {"FindWindowRect", FindWindowRect}, {"PushClipRect", PushClipRect}, {"PopClipRect", PopClipRect},
 		{"SetScrollHereY", SetScrollHereY}, {"IsWindowFocused", IsWindowFocused},
 		{"IsWindowAppearing", IsWindowAppearing}, {"SetWindowFocus", SetWindowFocus}, {"IsItemFocused", IsItemFocused},
