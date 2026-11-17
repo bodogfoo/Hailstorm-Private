@@ -2111,6 +2111,17 @@ local icons = setmetatable(known_icons, {
 })
 preloaded['mq.ICONS'] = icons
 
+-- ImGui's global string hash helper used by RG Mercs for stable widget IDs.
+-- FNV-1a is deterministic and sufficient for the Lua-side ID namespace.
+_G.ImHashStr = _G.ImHashStr or function(value)
+    local hash = 2166136261
+    for i = 1, #tostring(value) do
+        hash = bit32.bxor(hash, string.byte(tostring(value), i))
+        hash = (hash * 16777619) % 4294967296
+    end
+    return hash
+end
+
 -- ImPlot lightweight safe shim (RG Mercs performance monitor)
 _G.ImAxis = _G.ImAxis or { X1 = 0, X2 = 1, X3 = 2, Y1 = 3, Y2 = 4, Y3 = 5 }
 _G.ImPlotLineFlags = _G.ImPlotLineFlags or { None = 0, Segments = 1024, Loop = 2048, SkipNaN = 4096, NoClip = 8192, Shaded = 16384 }
