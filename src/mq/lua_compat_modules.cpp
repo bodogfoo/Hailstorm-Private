@@ -2,13 +2,16 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <format>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -33,6 +36,11 @@ constexpr const char* kPreloadedKey = "hailstone.preloaded";
 constexpr const char* kActorHandlersKey = "hailstone.compat.actors";
 constexpr const char* kSqliteDbMeta = "hailstone.lsqlite3.db";
 constexpr const char* kSqliteStmtMeta = "hailstone.lsqlite3.stmt";
+constexpr const char* kSandboxFileMeta = "hailstone.io.file";
+
+inline constexpr std::size_t kSandboxMaxFileBytes = 8u << 20;
+inline constexpr std::size_t kSandboxMaxFiles = 1000;
+inline constexpr std::uintmax_t kSandboxMaxBytes = 64u << 20;
 
 struct CompatHolder {
     CompatEnv env;
@@ -49,6 +57,134 @@ int compat_gc(lua_State* L) {
     auto* h = static_cast<CompatHolder*>(lua_touserdata(L, 1));
     if (h) h->~CompatHolder();
     return 0;
+}
+
+// ---------------------------------------------------------------- Sandbox path & quota guards
+
+enum class PathAccess { Read, Write };
+
+std::string ascii_lower_trim_part(std::string_view s) {
+    while (!s.empty() && (s.back() == '.' || s.back() == ' ')) s.remove_suffix(1);
+    std::string out(s);
+    for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return out;
+}
+
+bool is_config_segment(const fs::path& rel) {
+    if (rel.empty()) return false;
+    return ascii_lower_trim_part(rel.begin()->generic_string()) == "config";
+}
+
+bool check_under_root(const fs::path& root, const fs::path& given_path, bool allow_root, bool reject_config_subdir,
+                      fs::path& out) {
+    if (root.empty()) return false;
+    std::error_code ec;
+    fs::path canon_root = fs::weakly_canonical(root, ec);
+    if (ec || canon_root.empty()) canon_root = root.lexically_normal();
+
+    fs::path cand = given_path.is_relative() ? (canon_root / given_path) : given_path;
+    fs::path canon_cand = fs::weakly_canonical(cand, ec);
+    if (ec) return false;
+
+    fs::path rel = canon_cand.lexically_relative(canon_root);
+    if (rel.empty() || rel.is_absolute()) return false;
+    if (rel == ".") {
+        if (!allow_root) return false;
+        out = std::move(canon_cand);
+        return true;
+    }
+    if (*rel.begin() == "..") return false;
+    if (reject_config_subdir && is_config_segment(rel)) return false;
+    out = std::move(canon_cand);
+    return true;
+}
+
+std::optional<fs::path> resolve_sandbox_path(lua_State* L, std::string_view given, PathAccess access, bool allow_root,
+                                             std::string& why) {
+    if (given.empty() || given.find('\0') != std::string_view::npos) {
+        why = "invalid path";
+        return std::nullopt;
+    }
+    CompatHolder* h = get_compat(L);
+    if (!h) {
+        why = "sandbox environment unavailable";
+        return std::nullopt;
+    }
+    if (access == PathAccess::Write && h->env.write_blocked && h->env.write_blocked()) {
+        why = "write blocked while dry-running or stopping";
+        return std::nullopt;
+    }
+
+    fs::path gp(given);
+    fs::path resolved;
+    if (check_under_root(h->env.config_dir, gp, allow_root, false, resolved)) {
+        return resolved;
+    }
+    if (access == PathAccess::Write) {
+        why = "write path is outside Hailstone mq.configDir";
+        return std::nullopt;
+    }
+
+    std::vector<fs::path> ro_roots;
+    if (!h->env.script_root.empty()) ro_roots.push_back(h->env.script_root);
+    for (const auto& d : h->env.read_dirs) {
+        if (!d.empty()) ro_roots.push_back(d);
+    }
+
+    if (gp.is_relative()) {
+        // For relative reads, prefer an existing file/dir under read-only script roots if not already handled,
+        // otherwise default to config_dir (so missing reads report ENOENT cleanly if confined there).
+        for (const auto& r : ro_roots) {
+            fs::path cand;
+            std::error_code ec;
+            if (check_under_root(r, gp, allow_root, true, cand) && fs::exists(cand, ec)) {
+                return cand;
+            }
+        }
+        if (check_under_root(h->env.config_dir, gp, allow_root, false, resolved)) {
+            return resolved;
+        }
+    } else {
+        for (const auto& r : ro_roots) {
+            if (check_under_root(r, gp, allow_root, true, resolved)) {
+                return resolved;
+            }
+        }
+    }
+
+    why = "path is outside Hailstone sandbox";
+    return std::nullopt;
+}
+
+struct SandboxDirUsage {
+    std::size_t files = 0;
+    std::uintmax_t bytes = 0;
+};
+
+SandboxDirUsage sandbox_dir_usage(const fs::path& dir, const fs::path& except) {
+    SandboxDirUsage u;
+    std::error_code ec;
+    fs::path root = fs::weakly_canonical(dir, ec);
+    if (ec || root.empty()) root = dir;
+    for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end && u.files <= kSandboxMaxFiles; it.increment(ec)) {
+        std::error_code fec;
+        if (!it->is_regular_file(fec) || it->path() == except) continue;
+        ++u.files;
+        const auto sz = it->file_size(fec);
+        if (!fec) u.bytes += sz;
+    }
+    return u;
+}
+
+std::FILE* open_stdio_file(const fs::path& p, const char* mode) {
+#if defined(_WIN32)
+    std::wstring wmode;
+    for (const char* q = mode; *q; ++q) wmode.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*q)));
+    return ::_wfopen(p.c_str(), wmode.c_str());
+#else
+    return std::fopen(p.c_str(), mode);
+#endif
 }
 
 // ---------------------------------------------------------------- JSON codec (for actors)
@@ -898,7 +1034,8 @@ int l_sqlite_db_gc(lua_State* L) {
 
 int l_sqlite_open_impl(lua_State* L, const char* path, int flags) {
     sqlite3* db = nullptr;
-    int rc = sqlite3_open_v2(path, &db, flags, nullptr);
+    int safe_flags = flags & ~SQLITE_OPEN_URI;
+    int rc = sqlite3_open_v2(path, &db, safe_flags, nullptr);
     if (rc != SQLITE_OK || !db) {
         std::string msg = db ? sqlite3_errmsg(db) : sqlite3_errstr(rc);
         if (db) sqlite3_close_v2(db);
@@ -918,7 +1055,33 @@ int l_sqlite_open_impl(lua_State* L, const char* path, int flags) {
 int l_sqlite_open(lua_State* L) {
     const char* path = luaL_checkstring(L, 1);
     int flags = static_cast<int>(luaL_optinteger(L, 2, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE));
-    return l_sqlite_open_impl(L, path, flags);
+    if (std::strcmp(path, ":memory:") == 0) {
+        return l_sqlite_open_impl(L, path, flags);
+    }
+    if ((flags & SQLITE_OPEN_URI) != 0 || std::strncmp(path, "file:", 5) == 0) {
+        lua_pushnil(L);
+        lua_pushinteger(L, SQLITE_PERM);
+        lua_pushstring(L, "sqlite3 URI filenames are disabled in Hailstone sandbox");
+        return 3;
+    }
+    const bool wants_write = (flags & (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE)) != 0;
+    std::string why;
+    auto resolved = resolve_sandbox_path(L, path, wants_write ? PathAccess::Write : PathAccess::Read, false, why);
+    if (!resolved) {
+        lua_pushnil(L);
+        lua_pushinteger(L, SQLITE_PERM);
+        lua_pushstring(L, why.c_str());
+        return 3;
+    }
+    if (wants_write) {
+        CompatHolder* h = get_compat(L);
+        if (h && !h->env.config_dir.empty()) {
+            std::error_code ec;
+            fs::create_directories(h->env.config_dir, ec);
+        }
+    }
+    std::string resolved_str = resolved->string();
+    return l_sqlite_open_impl(L, resolved_str.c_str(), flags);
 }
 
 int l_sqlite_open_memory(lua_State* L) {
@@ -949,6 +1112,8 @@ int luaopen_lsqlite3(lua_State* L) {
         lua_setfield(L, -2, "__index");
         lua_pushcfunction(L, l_sqlite_stmt_gc);
         lua_setfield(L, -2, "__gc");
+        lua_pushliteral(L, "lsqlite3.stmt");
+        lua_setfield(L, -2, "__metatable");
     }
     lua_pop(L, 1);
 
@@ -974,6 +1139,8 @@ int luaopen_lsqlite3(lua_State* L) {
         lua_setfield(L, -2, "__index");
         lua_pushcfunction(L, l_sqlite_db_gc);
         lua_setfield(L, -2, "__gc");
+        lua_pushliteral(L, "lsqlite3.db");
+        lua_setfield(L, -2, "__metatable");
     }
     lua_pop(L, 1);
 
@@ -1009,11 +1176,19 @@ int luaopen_lsqlite3(lua_State* L) {
     return 1;
 }
 
-// ---------------------------------------------------------------- lfs
+// ---------------------------------------------------------------- lfs (sandbox-confined)
 
 int l_lfs_attributes(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    const char* raw_path = luaL_checkstring(L, 1);
     const char* attr = luaL_optstring(L, 2, nullptr);
+    std::string why;
+    auto resolved = resolve_sandbox_path(L, raw_path, PathAccess::Read, true, why);
+    if (!resolved) {
+        lua_pushnil(L);
+        lua_pushstring(L, why.c_str());
+        return 2;
+    }
+    const fs::path& path = *resolved;
     std::error_code ec;
     fs::file_status st = fs::status(path, ec);
     if (ec || !fs::exists(st)) {
@@ -1030,7 +1205,7 @@ int l_lfs_attributes(lua_State* L) {
     std::int64_t mtime = 0;
 #if !defined(_WIN32)
     struct stat sb{};
-    if (::stat(path, &sb) == 0) mtime = static_cast<std::int64_t>(sb.st_mtime);
+    if (::stat(path.c_str(), &sb) == 0) mtime = static_cast<std::int64_t>(sb.st_mtime);
 #endif
 
     if (attr) {
@@ -1077,10 +1252,14 @@ int l_lfs_dir_gc(lua_State* L) {
 }
 
 int l_lfs_dir(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    const char* raw_path = luaL_checkstring(L, 1);
+    std::string why;
+    auto resolved = resolve_sandbox_path(L, raw_path, PathAccess::Read, true, why);
+    if (!resolved) return luaL_error(L, "cannot open %s: %s", raw_path, why.c_str());
+
     std::error_code ec;
-    fs::directory_iterator dit(path, ec);
-    if (ec) return luaL_error(L, "cannot open %s: %s", path, ec.message().c_str());
+    fs::directory_iterator dit(*resolved, ec);
+    if (ec) return luaL_error(L, "cannot open %s: %s", raw_path, ec.message().c_str());
 
     auto* it = static_cast<LfsDirIter*>(lua_newuserdatauv(L, sizeof(LfsDirIter), 0));
     new (it) LfsDirIter{};
@@ -1092,15 +1271,29 @@ int l_lfs_dir(lua_State* L) {
     lua_newtable(L);
     lua_pushcfunction(L, l_lfs_dir_gc);
     lua_setfield(L, -2, "__gc");
+    lua_pushliteral(L, "lfs.dir");
+    lua_setfield(L, -2, "__metatable");
     lua_setmetatable(L, -2);
     lua_pushcclosure(L, l_lfs_dir_next, 1);
     return 1;
 }
 
 int l_lfs_mkdir(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    const char* raw_path = luaL_checkstring(L, 1);
+    std::string why;
+    auto resolved = resolve_sandbox_path(L, raw_path, PathAccess::Write, false, why);
+    if (!resolved) {
+        lua_pushnil(L);
+        lua_pushstring(L, why.c_str());
+        return 2;
+    }
+    CompatHolder* h = get_compat(L);
+    if (h && !h->env.config_dir.empty()) {
+        std::error_code cec;
+        fs::create_directories(h->env.config_dir, cec);
+    }
     std::error_code ec;
-    bool ok = fs::create_directory(path, ec);
+    bool ok = fs::create_directory(*resolved, ec);
     if (ok) {
         lua_pushboolean(L, 1);
         return 1;
@@ -1111,9 +1304,16 @@ int l_lfs_mkdir(lua_State* L) {
 }
 
 int l_lfs_rmdir(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    const char* raw_path = luaL_checkstring(L, 1);
+    std::string why;
+    auto resolved = resolve_sandbox_path(L, raw_path, PathAccess::Write, false, why);
+    if (!resolved) {
+        lua_pushnil(L);
+        lua_pushstring(L, why.c_str());
+        return 2;
+    }
     std::error_code ec;
-    bool ok = fs::remove(path, ec);
+    bool ok = fs::remove(*resolved, ec);
     if (ok) {
         lua_pushboolean(L, 1);
         return 1;
@@ -1124,34 +1324,50 @@ int l_lfs_rmdir(lua_State* L) {
 }
 
 int l_lfs_currentdir(lua_State* L) {
-    std::error_code ec;
-    auto p = fs::current_path(ec);
-    if (ec) {
+    CompatHolder* h = get_compat(L);
+    if (!h || h->env.config_dir.empty()) {
         lua_pushnil(L);
-        lua_pushstring(L, ec.message().c_str());
+        lua_pushstring(L, "config directory unavailable");
         return 2;
     }
-    lua_pushstring(L, p.string().c_str());
+    std::error_code ec;
+    fs::path p = fs::weakly_canonical(h->env.config_dir, ec);
+    if (ec || p.empty()) p = h->env.config_dir;
+    std::string s = p.string();
+    lua_pushlstring(L, s.data(), s.size());
     return 1;
 }
 
 int l_lfs_chdir(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
-    std::error_code ec;
-    fs::current_path(path, ec);
-    if (ec) {
-        lua_pushnil(L);
-        lua_pushstring(L, ec.message().c_str());
-        return 2;
+    const char* raw_path = luaL_checkstring(L, 1);
+    CompatHolder* h = get_compat(L);
+    if (h && !h->env.config_dir.empty()) {
+        std::string why;
+        auto resolved = resolve_sandbox_path(L, raw_path, PathAccess::Read, true, why);
+        std::error_code ec;
+        fs::path root = fs::weakly_canonical(h->env.config_dir, ec);
+        if (ec || root.empty()) root = h->env.config_dir;
+        if (resolved && *resolved == root) {
+            lua_pushboolean(L, 1);
+            return 1;
+        }
     }
-    lua_pushboolean(L, 1);
-    return 1;
+    lua_pushnil(L);
+    lua_pushstring(L, "chdir is disabled in Hailstone sandbox");
+    return 2;
 }
 
 int l_lfs_touch(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    const char* raw_path = luaL_checkstring(L, 1);
+    std::string why;
+    auto resolved = resolve_sandbox_path(L, raw_path, PathAccess::Write, false, why);
+    if (!resolved) {
+        lua_pushnil(L);
+        lua_pushstring(L, why.c_str());
+        return 2;
+    }
 #if !defined(_WIN32)
-    if (::utime(path, nullptr) == 0) {
+    if (::utime(resolved->c_str(), nullptr) == 0) {
         lua_pushboolean(L, 1);
         return 1;
     }
@@ -1175,6 +1391,546 @@ int luaopen_lfs(lua_State* L) {
     };
     luaL_newlib(L, kFuncs);
     return 1;
+}
+
+// ---------------------------------------------------------------- Sandboxed io library
+
+struct LuaSandboxFile {
+    std::FILE* fp = nullptr;
+    bool closed = false;
+    bool writable = false;
+    std::size_t current_size = 0;
+    std::uintmax_t quota_remaining = 0;
+
+    void close_handle() {
+        if (fp) {
+            std::fclose(fp);
+            fp = nullptr;
+        }
+        closed = true;
+    }
+};
+
+LuaSandboxFile* check_sandbox_file(lua_State* L, int idx = 1) {
+    auto* f = static_cast<LuaSandboxFile*>(luaL_checkudata(L, idx, kSandboxFileMeta));
+    if (f->closed || !f->fp) luaL_error(L, "attempt to use a closed file");
+    return f;
+}
+
+bool valid_lua_file_mode(const char* mode, bool& is_write) {
+    if (!mode || !*mode) return false;
+    char base = mode[0];
+    if (base != 'r' && base != 'w' && base != 'a') return false;
+    const char* p = mode + 1;
+    bool plus = false;
+    if (*p == '+') {
+        plus = true;
+        ++p;
+    }
+    if (*p == 'b') {
+        ++p;
+        if (!plus && *p == '+') {
+            plus = true;
+            ++p;
+        }
+    }
+    if (*p != '\0') return false;
+    is_write = (base == 'w' || base == 'a' || plus);
+    return true;
+}
+
+int l_file_close(lua_State* L) {
+    auto* f = static_cast<LuaSandboxFile*>(luaL_checkudata(L, 1, kSandboxFileMeta));
+    if (f->closed || !f->fp) {
+        lua_pushnil(L);
+        lua_pushstring(L, "attempt to use a closed file");
+        return 2;
+    }
+    int rc = std::fclose(f->fp);
+    f->fp = nullptr;
+    f->closed = true;
+    if (rc == 0) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    lua_pushnil(L);
+    lua_pushstring(L, std::strerror(errno));
+    return 2;
+}
+
+int l_file_gc(lua_State* L) {
+    auto* f = static_cast<LuaSandboxFile*>(lua_touserdata(L, 1));
+    if (f) f->close_handle();
+    return 0;
+}
+
+int l_file_tostring(lua_State* L) {
+    auto* f = static_cast<LuaSandboxFile*>(luaL_checkudata(L, 1, kSandboxFileMeta));
+    if (f->closed || !f->fp) lua_pushliteral(L, "file (closed)");
+    else lua_pushfstring(L, "file (%p)", f->fp);
+    return 1;
+}
+
+int l_file_flush(lua_State* L) {
+    auto* f = check_sandbox_file(L);
+    if (std::fflush(f->fp) == 0) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    lua_pushnil(L);
+    lua_pushstring(L, std::strerror(errno));
+    return 2;
+}
+
+bool read_line(lua_State* L, std::FILE* fp, bool keep_eol) {
+    luaL_Buffer b;
+    luaL_buffinit(L, &b);
+    int ch = 0;
+    while ((ch = std::getc(fp)) != EOF && ch != '\n') {
+        luaL_addchar(&b, static_cast<char>(ch));
+    }
+    if (ch == '\n') {
+        if (keep_eol) luaL_addchar(&b, '\n');
+        luaL_pushresult(&b);
+        return true;
+    }
+    luaL_pushresult(&b);
+    if (lua_rawlen(L, -1) > 0) return true;
+    lua_pop(L, 1);
+    return false;
+}
+
+void read_all(lua_State* L, std::FILE* fp) {
+    luaL_Buffer b;
+    luaL_buffinit(L, &b);
+    char buf[4096];
+    for (;;) {
+        std::size_t n = std::fread(buf, 1, sizeof(buf), fp);
+        if (n > 0) luaL_addlstring(&b, buf, n);
+        if (n < sizeof(buf)) break;
+    }
+    luaL_pushresult(&b);
+}
+
+bool read_bytes(lua_State* L, std::FILE* fp, std::size_t count) {
+    if (count == 0) {
+        int ch = std::getc(fp);
+        if (ch == EOF) return false;
+        std::ungetc(ch, fp);
+        lua_pushliteral(L, "");
+        return true;
+    }
+    luaL_Buffer b;
+    luaL_buffinit(L, &b);
+    char buf[4096];
+    std::size_t rem = count;
+    while (rem > 0) {
+        std::size_t want = std::min(rem, sizeof(buf));
+        std::size_t n = std::fread(buf, 1, want, fp);
+        if (n > 0) {
+            luaL_addlstring(&b, buf, n);
+            rem -= n;
+        }
+        if (n < want) break;
+    }
+    luaL_pushresult(&b);
+    if (lua_rawlen(L, -1) > 0) return true;
+    lua_pop(L, 1);
+    return false;
+}
+
+bool read_number(lua_State* L, std::FILE* fp) {
+    std::string tok;
+    int ch = 0;
+    while ((ch = std::getc(fp)) != EOF && std::isspace(static_cast<unsigned char>(ch))) {
+    }
+    if (ch == EOF) return false;
+    while (ch != EOF && !std::isspace(static_cast<unsigned char>(ch)) && tok.size() < 200) {
+        tok.push_back(static_cast<char>(ch));
+        ch = std::getc(fp);
+    }
+    if (ch != EOF) std::ungetc(ch, fp);
+    char* end = nullptr;
+    double val = std::strtod(tok.c_str(), &end);
+    if (end == tok.c_str() || *end != '\0') return false;
+    lua_pushnumber(L, val);
+    return true;
+}
+
+int read_sandbox_args(lua_State* L, std::FILE* fp, int first_arg) {
+    int nargs = lua_gettop(L) - first_arg + 1;
+    std::clearerr(fp);
+    if (nargs <= 0) {
+        if (read_line(L, fp, false)) return 1;
+        lua_pushnil(L);
+        return 1;
+    }
+    luaL_checkstack(L, nargs + LUA_MINSTACK, "too many arguments");
+    int nres = 0;
+    bool ok = true;
+    for (int i = first_arg; i <= first_arg + nargs - 1 && ok; ++i) {
+        if (lua_type(L, i) == LUA_TNUMBER) {
+            lua_Integer cnt = luaL_checkinteger(L, i);
+            ok = (cnt >= 0) && read_bytes(L, fp, static_cast<std::size_t>(cnt));
+        } else {
+            const char* fmt = luaL_checkstring(L, i);
+            if (*fmt == '*') ++fmt;
+            switch (*fmt) {
+            case 'n': ok = read_number(L, fp); break;
+            case 'l': ok = read_line(L, fp, false); break;
+            case 'L': ok = read_line(L, fp, true); break;
+            case 'a':
+                read_all(L, fp);
+                ok = true;
+                break;
+            default: return luaL_argerror(L, i, "invalid format");
+            }
+        }
+        if (ok) ++nres;
+    }
+    if (std::ferror(fp)) {
+        lua_pop(L, nres);
+        lua_pushnil(L);
+        lua_pushstring(L, std::strerror(errno));
+        return 2;
+    }
+    if (!ok) {
+        lua_pushnil(L);
+        ++nres;
+    }
+    return nres;
+}
+
+int l_file_read(lua_State* L) {
+    auto* f = check_sandbox_file(L);
+    return read_sandbox_args(L, f->fp, 2);
+}
+
+int l_file_write(lua_State* L) {
+    auto* f = check_sandbox_file(L);
+    if (!f->writable) {
+        lua_pushnil(L);
+        lua_pushstring(L, "file is not open for writing");
+        return 2;
+    }
+    CompatHolder* h = get_compat(L);
+    if (h && h->env.write_blocked && h->env.write_blocked()) {
+        lua_pushnil(L);
+        lua_pushstring(L, "write blocked while dry-running or stopping");
+        return 2;
+    }
+    int nargs = lua_gettop(L);
+    for (int i = 2; i <= nargs; ++i) {
+        std::size_t len = 0;
+        const char* s = luaL_checklstring(L, i, &len);
+        if (len > 0) {
+            if (f->current_size + len > kSandboxMaxFileBytes || len > f->quota_remaining) {
+                lua_pushnil(L);
+                lua_pushstring(L, "Hailstone config quota exceeded");
+                return 2;
+            }
+            if (std::fwrite(s, 1, len, f->fp) != len) {
+                lua_pushnil(L);
+                lua_pushstring(L, std::strerror(errno));
+                return 2;
+            }
+            f->current_size += len;
+            f->quota_remaining -= len;
+        }
+    }
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+int l_file_seek(lua_State* L) {
+    static constexpr const char* kWhenceNames[] = {"set", "cur", "end", nullptr};
+    static constexpr int kWhenceModes[] = {SEEK_SET, SEEK_CUR, SEEK_END};
+    auto* f = check_sandbox_file(L);
+    int op = luaL_checkoption(L, 2, "cur", kWhenceNames);
+    lua_Integer offset = luaL_optinteger(L, 3, 0);
+    if (std::fseek(f->fp, static_cast<long>(offset), kWhenceModes[op]) != 0) {
+        lua_pushnil(L);
+        lua_pushstring(L, std::strerror(errno));
+        return 2;
+    }
+    long pos = std::ftell(f->fp);
+    if (pos < 0) {
+        lua_pushnil(L);
+        lua_pushstring(L, std::strerror(errno));
+        return 2;
+    }
+    lua_pushinteger(L, static_cast<lua_Integer>(pos));
+    return 1;
+}
+
+int l_file_setvbuf(lua_State* L) {
+    static constexpr const char* kModes[] = {"no", "full", "line", nullptr};
+    static constexpr int kModeVals[] = {_IONBF, _IOFBF, _IOLBF};
+    auto* f = check_sandbox_file(L);
+    int mode = luaL_checkoption(L, 2, nullptr, kModes);
+    std::size_t size = static_cast<std::size_t>(luaL_optinteger(L, 3, LUAL_BUFFERSIZE));
+    int rc = std::setvbuf(f->fp, nullptr, kModeVals[mode], size);
+    if (rc == 0) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    lua_pushnil(L);
+    lua_pushstring(L, std::strerror(errno));
+    return 2;
+}
+
+int l_file_lines_iter(lua_State* L) {
+    auto* f = static_cast<LuaSandboxFile*>(luaL_checkudata(L, lua_upvalueindex(1), kSandboxFileMeta));
+    bool to_close = lua_toboolean(L, lua_upvalueindex(2)) != 0;
+    int n_fmt = static_cast<int>(lua_tointeger(L, lua_upvalueindex(3)));
+    if (f->closed || !f->fp) return 0;
+
+    int base = lua_gettop(L);
+    for (int i = 1; i <= n_fmt; ++i) {
+        lua_pushvalue(L, lua_upvalueindex(3 + i));
+    }
+    int nres = read_sandbox_args(L, f->fp, base + 1);
+    if (nres >= 1 && lua_isnil(L, base + 1)) {
+        if (to_close) f->close_handle();
+        return 0;
+    }
+    return nres;
+}
+
+void push_lines_closure(lua_State* L, bool to_close, int first_fmt) {
+    int n_fmt = lua_gettop(L) - first_fmt + 1;
+    if (n_fmt < 0) n_fmt = 0;
+    lua_pushboolean(L, to_close ? 1 : 0);
+    lua_pushinteger(L, n_fmt);
+    for (int i = 0; i < n_fmt; ++i) {
+        lua_pushvalue(L, first_fmt + i);
+    }
+    lua_pushcclosure(L, l_file_lines_iter, 3 + n_fmt);
+}
+
+int l_file_lines(lua_State* L) {
+    check_sandbox_file(L);
+    lua_pushvalue(L, 1);
+    push_lines_closure(L, false, 2);
+    return 1;
+}
+
+int open_sandbox_file(lua_State* L, const char* raw_path, const char* mode) {
+    bool is_write = false;
+    if (!valid_lua_file_mode(mode, is_write)) {
+        return luaL_error(L, "invalid file mode '%s'", mode);
+    }
+    std::string why;
+    auto resolved = resolve_sandbox_path(L, raw_path, is_write ? PathAccess::Write : PathAccess::Read, false, why);
+    if (!resolved) {
+        lua_pushnil(L);
+        lua_pushstring(L, why.c_str());
+        return 2;
+    }
+
+    std::error_code ec;
+    if (fs::is_directory(*resolved, ec)) {
+        lua_pushnil(L);
+        lua_pushstring(L, "Is a directory");
+        return 2;
+    }
+
+    std::size_t current_size = 0;
+    std::uintmax_t quota_remaining = 0;
+    if (is_write) {
+        CompatHolder* h = get_compat(L);
+        if (!h || h->env.config_dir.empty()) {
+            lua_pushnil(L);
+            lua_pushstring(L, "config directory unavailable");
+            return 2;
+        }
+        fs::create_directories(h->env.config_dir, ec);
+        const bool exists = fs::exists(*resolved, ec);
+        const SandboxDirUsage used = sandbox_dir_usage(h->env.config_dir, *resolved);
+        if (!exists && used.files + 1 > kSandboxMaxFiles) {
+            lua_pushnil(L);
+            lua_pushstring(L, "Hailstone config file count limit reached");
+            return 2;
+        }
+        if (mode[0] != 'w' && exists) {
+            auto fsz = fs::file_size(*resolved, ec);
+            if (!ec) current_size = static_cast<std::size_t>(std::min<std::uintmax_t>(fsz, kSandboxMaxFileBytes));
+        }
+        if (used.bytes + current_size > kSandboxMaxBytes) {
+            lua_pushnil(L);
+            lua_pushstring(L, "Hailstone config size quota exceeded");
+            return 2;
+        }
+        quota_remaining = kSandboxMaxBytes - (used.bytes + current_size);
+    }
+
+    std::FILE* fp = open_stdio_file(*resolved, mode);
+    if (!fp) {
+        lua_pushnil(L);
+        lua_pushstring(L, std::strerror(errno));
+        return 2;
+    }
+
+    auto* f = static_cast<LuaSandboxFile*>(lua_newuserdatauv(L, sizeof(LuaSandboxFile), 0));
+    new (f) LuaSandboxFile{};
+    f->fp = fp;
+    f->writable = is_write;
+    f->current_size = current_size;
+    f->quota_remaining = quota_remaining;
+    luaL_setmetatable(L, kSandboxFileMeta);
+    return 1;
+}
+
+int l_io_open(lua_State* L) {
+    const char* raw_path = luaL_checkstring(L, 1);
+    const char* mode = luaL_optstring(L, 2, "r");
+    return open_sandbox_file(L, raw_path, mode);
+}
+
+int l_io_close(lua_State* L) {
+    if (lua_isnoneornil(L, 1)) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    return l_file_close(L);
+}
+
+int l_io_type(lua_State* L) {
+    luaL_checkany(L, 1);
+    auto* f = static_cast<LuaSandboxFile*>(luaL_testudata(L, 1, kSandboxFileMeta));
+    if (!f) lua_pushnil(L);
+    else if (f->closed || !f->fp) lua_pushliteral(L, "closed file");
+    else lua_pushliteral(L, "file");
+    return 1;
+}
+
+int l_io_lines(lua_State* L) {
+    if (lua_isnoneornil(L, 1)) {
+        return luaL_error(L, "io.lines requires a filename in Hailstone sandbox");
+    }
+    const char* raw_path = luaL_checkstring(L, 1);
+    int nres = open_sandbox_file(L, raw_path, "r");
+    if (lua_isnil(L, -nres)) {
+        return luaL_error(L, "%s", lua_tostring(L, -nres + 1));
+    }
+    int file_idx = lua_gettop(L);
+    int n_fmt = file_idx - 2; // index 1 is raw_path, 2..file_idx-1 are optional read formats
+    if (n_fmt < 0) n_fmt = 0;
+    luaL_checkstack(L, 4 + n_fmt, "too many arguments");
+    lua_pushvalue(L, file_idx);
+    lua_pushboolean(L, 1);
+    lua_pushinteger(L, n_fmt);
+    for (int i = 2; i < file_idx; ++i) {
+        lua_pushvalue(L, i);
+    }
+    lua_pushcclosure(L, l_file_lines_iter, 3 + n_fmt);
+    return 1;
+}
+
+int l_io_flush(lua_State* L) {
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int l_io_write(lua_State* L) {
+    CompatHolder* h = get_compat(L);
+    int nargs = lua_gettop(L);
+    std::string out;
+    for (int i = 1; i <= nargs; ++i) {
+        std::size_t len = 0;
+        const char* s = luaL_checklstring(L, i, &len);
+        out.append(s, len);
+    }
+    if (h && h->env.say && !out.empty()) h->env.say(out);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int l_io_disabled(lua_State* L) {
+    lua_pushnil(L);
+    lua_pushstring(L, "operation disabled in Hailstone sandbox");
+    return 2;
+}
+
+int luaopen_io_sandbox(lua_State* L) {
+    if (luaL_newmetatable(L, kSandboxFileMeta)) {
+        static const luaL_Reg kFileMethods[] = {
+            {"close", l_file_close},
+            {"flush", l_file_flush},
+            {"lines", l_file_lines},
+            {"read", l_file_read},
+            {"seek", l_file_seek},
+            {"setvbuf", l_file_setvbuf},
+            {"write", l_file_write},
+            {nullptr, nullptr},
+        };
+        luaL_newlib(L, kFileMethods);
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, l_file_gc);
+        lua_setfield(L, -2, "__gc");
+        lua_pushcfunction(L, l_file_gc);
+        lua_setfield(L, -2, "__close");
+        lua_pushcfunction(L, l_file_tostring);
+        lua_setfield(L, -2, "__tostring");
+        lua_pushliteral(L, "FILE*");
+        lua_setfield(L, -2, "__metatable");
+    }
+    lua_pop(L, 1);
+
+    static const luaL_Reg kIoFuncs[] = {
+        {"open", l_io_open},
+        {"close", l_io_close},
+        {"type", l_io_type},
+        {"lines", l_io_lines},
+        {"flush", l_io_flush},
+        {"write", l_io_write},
+        {"read", l_io_disabled},
+        {"input", l_io_disabled},
+        {"output", l_io_disabled},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kIoFuncs);
+    return 1;
+}
+
+void register_safe_package_and_debug(lua_State* L) {
+    // Minimal safe package table: exposes package.config and package.loaded (aliased to hailstone.loaded)
+    // without native C library loading (package.loadlib / cpath).
+    lua_newtable(L);
+#if defined(_WIN32)
+    lua_pushliteral(L, "\\\n;\n?\n!\n-\n");
+#else
+    lua_pushliteral(L, "/\n;\n?\n!\n-\n");
+#endif
+    lua_setfield(L, -2, "config");
+    lua_pushliteral(L, "");
+    lua_setfield(L, -2, "path");
+    lua_pushliteral(L, "");
+    lua_setfield(L, -2, "cpath");
+    lua_getfield(L, LUA_REGISTRYINDEX, "hailstone.loaded");
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+    }
+    lua_setfield(L, -2, "loaded");
+    lua_newtable(L);
+    lua_setfield(L, -2, "preload");
+    lua_newtable(L);
+    lua_setfield(L, -2, "searchers");
+    lua_setglobal(L, "package");
+
+    // Minimal safe debug subset: only debug.traceback and debug.getinfo; no debug.getregistry,
+    // debug.setmetatable, debug.sethook, or upvalue/local mutators.
+    lua_pushcfunction(L, luaopen_debug);
+    lua_pushliteral(L, LUA_DBLIBNAME);
+    lua_call(L, 1, 1);
+    lua_newtable(L);
+    for (const char* keep : {"traceback", "getinfo"}) {
+        lua_getfield(L, -2, keep);
+        lua_setfield(L, -2, keep);
+    }
+    lua_setglobal(L, LUA_DBLIBNAME);
+    lua_pop(L, 1);
 }
 
 // ---------------------------------------------------------------- actors (IPC bridged)
@@ -1454,6 +2210,11 @@ void register_compat_modules(lua_State* L, const CompatEnv& env) {
     lua_setglobal(L, "bit32");
     lua_setfield(L, -2, "bit32");
 
+    luaopen_io_sandbox(L);
+    lua_pushvalue(L, -1);
+    lua_setglobal(L, "io");
+    lua_setfield(L, -2, "io");
+
     luaopen_lsqlite3(L);
     lua_setfield(L, -2, "lsqlite3");
 
@@ -1462,6 +2223,8 @@ void register_compat_modules(lua_State* L, const CompatEnv& env) {
 
     luaopen_actors(L);
     lua_setfield(L, -2, "actors");
+
+    register_safe_package_and_debug(L);
 
     // Lua compat shims
     if (luaL_loadbufferx(L, kLuaCompatScript, std::strlen(kLuaCompatScript), "=hailstone_compat", "t") == LUA_OK) {

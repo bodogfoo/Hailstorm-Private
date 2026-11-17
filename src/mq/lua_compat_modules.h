@@ -1,8 +1,10 @@
 #pragma once
 
 // Hailstone 24 MacroQuest / RG Mercs Lua Compatibility Modules:
-//   - lsqlite3 (native SQLite3 binding incl. update_hook with userdata arg)
-//   - lfs (LuaFileSystem: attributes, dir, mkdir, rmdir, currentdir, chdir, touch)
+//   - lsqlite3 (native SQLite3 binding incl. update_hook with userdata arg; sandbox-confined)
+//   - lfs (LuaFileSystem: attributes, dir, mkdir, rmdir, currentdir, chdir, touch; sandbox-confined)
+//   - io (sandboxed file I/O confined to mq.configDir / read-only luaDir; no io.popen / io.tmpfile)
+//   - package / debug safe subsets (package.config, package.loaded, debug.getinfo, debug.traceback)
 //   - actors (bridged to hailstone::ipc::SessionBusClient + local loopback)
 //   - bit32 (Lua 5.1/5.2 compat bitwise library used by RG Mercs config_db.lua)
 //   - mq.PackageMan, mq.ICONS, mq.set / mq.Set
@@ -11,6 +13,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include <lua.hpp>
 
@@ -23,12 +26,16 @@ struct CompatEnv {
     std::function<std::string()> character_name;
     std::function<std::string()> server_name;
     std::function<void(const ipc::ActorPacket&)> loopback_push;
+    std::function<void(const std::string&)> say;
+    std::function<bool()> write_blocked;
     std::string script_name;
-    std::filesystem::path config_dir;
+    std::filesystem::path config_dir;                  // writable (+ readable): mq.configDir
+    std::filesystem::path script_root;                 // read-only: script directory
+    std::vector<std::filesystem::path> read_dirs;      // read-only: script search directories
 };
 
-// Registers built-in C/Lua modules into Lua's `hailstone.preloaded` registry table and globals (`bit32`).
-// Must be called when opening a script's Lua state before running kPrelude or the script chunk.
+// Registers built-in C/Lua modules into Lua's `hailstone.preloaded` registry table and globals (`bit32`, `io`,
+// `package`, `debug`). Must be called when opening a script's Lua state before running kPrelude or the script chunk.
 void register_compat_modules(lua_State* L, const CompatEnv& env);
 
 // Delivers a single inbound ActorPacket to all matching `actors.register(...)` handlers in `L`.
