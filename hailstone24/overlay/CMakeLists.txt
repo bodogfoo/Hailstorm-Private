@@ -1105,6 +1105,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/hailstone24/login_autoselect_test.cpp
     tests/hailstone24/rgmercs_tlo_test.cpp
     tests/hailstone24/rgmercs_native_ui_test.cpp
+    tests/hailstone24/rgmercs_trusted_loader_test.cpp
     tests/mq_event_pattern_test.cpp
     tests/lua_social_test.cpp
     tests/code_syntax_test.cpp

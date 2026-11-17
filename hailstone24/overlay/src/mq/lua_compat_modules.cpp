@@ -115,7 +115,11 @@ std::optional<fs::path> resolve_sandbox_path(lua_State* L, std::string_view give
         return std::nullopt;
     }
 
-    fs::path gp(given);
+    std::string norm(given);
+#if !defined(_WIN32)
+    std::replace(norm.begin(), norm.end(), '\\', '/');
+#endif
+    fs::path gp(norm);
     fs::path resolved;
     if (check_under_root(h->env.config_dir, gp, allow_root, false, resolved)) {
         return resolved;
@@ -1898,9 +1902,88 @@ int luaopen_io_sandbox(lua_State* L) {
     return 1;
 }
 
-void register_safe_package_and_debug(lua_State* L) {
-    // Minimal safe package table: exposes package.config and package.loaded (aliased to hailstone.loaded)
-    // without native C library loading (package.loadlib / cpath).
+int l_package_searchpath(lua_State* L) {
+    const char* name_c = luaL_checkstring(L, 1);
+    const char* path_c = luaL_checkstring(L, 2);
+    const char* sep_c = luaL_optstring(L, 3, ".");
+    const char* rep_c = luaL_optstring(L, 4, "/");
+
+    CompatHolder* h = get_compat(L);
+    std::string rel_name(name_c);
+    const std::string sep(sep_c);
+    const std::string rep(rep_c);
+    if (!sep.empty()) {
+        std::size_t pos = 0;
+        while ((pos = rel_name.find(sep, pos)) != std::string::npos) {
+            rel_name.replace(pos, sep.size(), rep);
+            pos += rep.size();
+        }
+    }
+    std::replace(rel_name.begin(), rel_name.end(), '\\', '/');
+
+    std::string tried;
+    std::string_view rest(path_c);
+    while (true) {
+        while (!rest.empty() && rest.front() == ';') rest.remove_prefix(1);
+        if (rest.empty()) break;
+        const std::size_t semi = rest.find(';');
+        const std::string_view tmpl = semi == std::string_view::npos ? rest : rest.substr(0, semi);
+        rest = semi == std::string_view::npos ? std::string_view{} : rest.substr(semi + 1);
+        if (tmpl.empty()) continue;
+
+        std::string cand(tmpl);
+        std::size_t pos = 0;
+        while ((pos = cand.find('?', pos)) != std::string::npos) {
+            cand.replace(pos, 1, rel_name);
+            pos += rel_name.size();
+        }
+        std::replace(cand.begin(), cand.end(), '\\', '/');
+
+        std::string why;
+        auto resolved = resolve_sandbox_path(L, cand, PathAccess::Read, false, why);
+        std::error_code ec;
+        bool allowed_script_file = resolved.has_value() && fs::is_regular_file(*resolved, ec);
+        if (allowed_script_file && h && !h->env.config_dir.empty()) {
+            fs::path dummy;
+            if (check_under_root(h->env.config_dir, *resolved, true, false, dummy)) {
+                allowed_script_file = false;
+            }
+        }
+        if (allowed_script_file) {
+            const std::string s = resolved->string();
+            lua_pushlstring(L, s.data(), s.size());
+            return 1;
+        }
+        tried += "\n\tno file '" + cand + "'";
+    }
+
+    lua_pushnil(L);
+    lua_pushlstring(L, tried.data(), tried.size());
+    return 2;
+}
+
+std::string build_safe_package_path(const CompatEnv& env) {
+    std::vector<fs::path> roots;
+    if (!env.script_root.empty()) roots.push_back(env.script_root);
+    for (const auto& d : env.read_dirs) {
+        if (!d.empty()) roots.push_back(d);
+    }
+    std::string out;
+    auto add_tmpl = [&](const std::string& t) {
+        if (!out.empty()) out += ';';
+        out += t;
+    };
+    for (const auto& r : roots) {
+        add_tmpl((r / "?.lua").generic_string());
+        add_tmpl((r / "?" / "init.lua").generic_string());
+    }
+    return out;
+}
+
+void register_safe_package_and_debug(lua_State* L, const CompatEnv& env) {
+    // Safe package table: exposes package.config, read-only package.path templates,
+    // sandboxed package.searchpath, package.loaded (aliased to hailstone.loaded), preload,
+    // and searchers without native C library loading (package.loadlib / cpath).
     lua_newtable(L);
 #if defined(_WIN32)
     lua_pushliteral(L, "\\\n;\n?\n!\n-\n");
@@ -1908,10 +1991,13 @@ void register_safe_package_and_debug(lua_State* L) {
     lua_pushliteral(L, "/\n;\n?\n!\n-\n");
 #endif
     lua_setfield(L, -2, "config");
-    lua_pushliteral(L, "");
+    const std::string pkg_path = build_safe_package_path(env);
+    lua_pushlstring(L, pkg_path.data(), pkg_path.size());
     lua_setfield(L, -2, "path");
     lua_pushliteral(L, "");
     lua_setfield(L, -2, "cpath");
+    lua_pushcfunction(L, l_package_searchpath);
+    lua_setfield(L, -2, "searchpath");
     lua_getfield(L, LUA_REGISTRYINDEX, "hailstone.loaded");
     if (lua_isnil(L, -1)) {
         lua_pop(L, 1);
@@ -2114,6 +2200,8 @@ local icons = setmetatable(known_icons, {
     end,
 })
 preloaded['mq.ICONS'] = icons
+preloaded['mq.Icons'] = icons
+preloaded['mq.icons'] = icons
 
 -- ImGui global string hash & color helpers used by RG Mercs
 _G.ImHashStr = _G.ImHashStr or function(value)
@@ -2257,7 +2345,7 @@ void register_compat_modules(lua_State* L, const CompatEnv& env) {
     luaopen_actors(L);
     lua_setfield(L, -2, "actors");
 
-    register_safe_package_and_debug(L);
+    register_safe_package_and_debug(L, env);
 
     // Lua compat shims
     if (luaL_loadbufferx(L, kLuaCompatScript, std::strlen(kLuaCompatScript), "=hailstone_compat", "t") == LUA_OK) {

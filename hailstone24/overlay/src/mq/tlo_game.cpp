@@ -1873,6 +1873,7 @@ void register_game_tlos(Registry& r) {
     add(g.macroquest, "BuildType", [](const Context&, const Value&, std::string_view) { return V::string("Release"); });
     add(g.macroquest, "GameState", g.everquest->members.at("GameState"));
     add(g.macroquest, "Path", [](const Context& c, const Value&, std::string_view) { return V::string(c.lua_dir); });
+    add(g.macroquest, "Server", g.everquest->members.at("Server"));
 
     Type& lua_t = const_cast<Type&>(*g.lua);
     lua_t.to_value = [](const Context& c, const Value&) { return V::string(c.lua_dir); };

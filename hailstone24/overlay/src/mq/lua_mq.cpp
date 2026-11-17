@@ -917,13 +917,46 @@ void ScriptHost::Impl::migrate_config_dir(const Script& s) const {
 
 namespace {
 
+std::string normalize_path_separators(std::string_view given) {
+    std::string out(given);
+#if !defined(_WIN32)
+    std::replace(out.begin(), out.end(), '\\', '/');
+#endif
+    return out;
+}
+
+bool is_under_dir(const fs::path& dir, const fs::path& file, bool allow_equal) {
+    if (dir.empty()) return false;
+    std::error_code ec;
+    fs::path d = fs::weakly_canonical(dir, ec);
+    if (ec || d.empty()) d = dir.lexically_normal();
+    fs::path f = fs::weakly_canonical(file, ec);
+    if (ec || f.empty()) f = file.lexically_normal();
+    std::string dk = windows_file_key(d.generic_string()), fk = windows_file_key(f.generic_string());
+    while (dk.size() > 1 && dk.back() == '/') dk.pop_back();
+    while (fk.size() > 1 && fk.back() == '/') fk.pop_back();
+    if (fk == dk) return allow_equal;
+    if (dk == "/") return fk.size() > 1 && fk.front() == '/';
+    return fk.size() > dk.size() + 1 && fk.compare(0, dk.size(), dk) == 0 && fk[dk.size()] == '/';
+}
+
+bool is_config_target(const Script& s, const fs::path& file) {
+    if (is_under_dir(s.host->env.config_dir, file, true)) return true;
+    if (!s.root.empty() && in_config_dir(s.root, file)) return true;
+    for (const auto& d : s.host->dirs()) {
+        if (in_config_dir(d, file)) return true;
+    }
+    return false;
+}
+
 // A path inside the script's config directory (relative paths are relative to it); nullopt outside it.
 std::optional<fs::path> config_path(lua_State* L, const char* given) {
+    if (!given || !*given) return std::nullopt;
     const fs::path base = script_config_dir(Script::of(L));
     if (base.empty()) return std::nullopt;
     std::error_code ec;
     fs::path root = fs::weakly_canonical(base, ec);
-    fs::path p = fs::path(given);
+    fs::path p(normalize_path_separators(given));
     if (p.is_relative()) p = root / p;
     p = fs::weakly_canonical(p, ec);
     auto rel = p.lexically_relative(root);
@@ -1038,6 +1071,124 @@ int l_load_config(lua_State* L) {
     return 1;
 }
 
+// What trusted_script_path found on disk: text, chunk name, whether the path targeted an approved script root.
+struct TrustedScriptFile {
+    bool found = false;
+    bool handled = false;
+    std::string text, chunk, msg;
+};
+
+// Resolves an approved script-root file for executable loading (never config files under mq.configDir or config/).
+void resolve_trusted_script_file(lua_State* L, const Script& s, std::string_view given, TrustedScriptFile& out) {
+    if (given.empty() || given.find('\0') != std::string_view::npos) return;
+    const std::string norm = normalize_path_separators(given);
+    const fs::path gp(norm);
+    std::error_code ec;
+
+    // 1. Files that belong to mq.configDir (existing relative config files, or any path inside env.config_dir)
+    // ALWAYS stay exclusively on the restricted data-only config loader.
+    if (auto cp = config_path(L, norm.c_str()); cp && fs::exists(*cp, ec)) {
+        return;
+    }
+    if (gp.is_absolute() && !s.host->env.config_dir.empty()) {
+        const fs::path cand_abs = fs::weakly_canonical(gp, ec);
+        if (!ec && is_under_dir(s.host->env.config_dir, cand_abs, true)) {
+            return;
+        }
+    }
+
+    std::vector<fs::path> roots;
+    if (!s.root.empty()) roots.push_back(s.root);
+    for (const auto& d : s.host->dirs()) {
+        if (!d.empty()) roots.push_back(d);
+    }
+
+    for (const auto& r : roots) {
+        fs::path canon_r = fs::weakly_canonical(r, ec);
+        if (ec || canon_r.empty()) continue;
+
+        fs::path cand = gp.is_relative() ? (canon_r / gp) : gp;
+        fs::path canon_cand = fs::weakly_canonical(cand, ec);
+        if (ec || canon_cand.empty()) continue;
+
+        fs::path rel = canon_cand.lexically_relative(canon_r);
+        if (rel.empty() || rel == "." || rel.is_absolute() || *rel.begin() == "..") continue;
+        if (is_config_target(s, canon_cand)) continue;
+        if (!fs::is_regular_file(canon_cand, ec)) continue;
+
+        // From here on, this path targets a real file inside an approved script root.
+        out.handled = true;
+        auto text = read_file(canon_cand);
+        if (!text) {
+            out.msg = "cannot open " + canon_cand.string();
+            return;
+        }
+        const Sha256Digest h = sha256(*text);
+        const std::uint32_t file_caps =
+            s.host->env.policy ? s.host->env.policy->caps(plugin::FileKind::Script, h) : 0;
+        if (file_caps == 0) {
+            out.msg = std::format("script file '{}' ({}) may not run: {}", given, canon_cand.string(),
+                                  s.host->env.policy ? s.host->env.policy->refusal(plugin::FileKind::Script)
+                                                     : std::string("no rules"));
+            return;
+        }
+        if ((file_caps & s.caps) != s.caps) {
+            out.msg = std::format(
+                "script file '{}' ({}) may not run in {}: the file may do only '{}', the script '{}'", given,
+                canon_cand.string(), s.name, plugin::caps_text(file_caps), plugin::caps_text(s.caps));
+            return;
+        }
+        out.found = true;
+        out.text = std::move(*text);
+        out.chunk = "@" + canon_cand.string();
+        return;
+    }
+}
+
+// load_trusted(path [, mode [, env]]): loads an approved executable Lua file from sc.root or script dirs
+// in the active environment (with mq, require, ImGui, and compat modules available), unless explicit `env` is given.
+// Returns (chunk, nil, true) on success, (nil, err, handled) on failure.
+int l_load_trusted_script(lua_State* L) {
+    std::size_t given_len = 0;
+    const char* given_c = luaL_checklstring(L, 1, &given_len);
+    const char* mode = lua_isnoneornil(L, 2) ? "t" : luaL_checkstring(L, 2);
+    if (std::strchr(mode, 't') == nullptr) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "attempt to load a binary chunk (Hailstone accepts text Lua only)");
+        lua_pushboolean(L, 1);
+        return 3;
+    }
+
+    const Script& s = Script::of(L);
+    TrustedScriptFile& f = plugin::lua_keep<TrustedScriptFile>(L);
+    plugin::cxx_guard(L, [&] { resolve_trusted_script_file(L, s, std::string_view(given_c, given_len), f); });
+    if (!f.found) {
+        lua_pushnil(L);
+        lua_pushlstring(L, f.msg.data(), f.msg.size());
+        lua_pushboolean(L, f.handled ? 1 : 0);
+        f = TrustedScriptFile{};
+        lua_remove(L, -4); // the box
+        return 3;
+    }
+
+    const bool loaded = luaL_loadbufferx(L, f.text.data(), f.text.size(), f.chunk.c_str(), "t") == LUA_OK;
+    f = TrustedScriptFile{};
+    lua_remove(L, -2); // the box
+    if (!loaded) {
+        lua_pushnil(L);
+        lua_insert(L, -2);
+        lua_pushboolean(L, 1);
+        return 3;
+    }
+    if (!lua_isnoneornil(L, 3)) {
+        lua_pushvalue(L, 3);
+        lua_setupvalue(L, -2, 1);
+    }
+    lua_pushnil(L);
+    lua_pushboolean(L, 1);
+    return 3;
+}
+
 // What search_module found on disk: the module's text and chunk name, or why there is none.
 struct ModuleFile {
     bool found = false;
@@ -1048,25 +1199,47 @@ struct ModuleFile {
 // the script. Calls no Lua.
 void search_module(const Script& s, std::string_view given, ModuleFile& out) {
     const std::string name(given);
-    std::string rel = name;
+    std::string norm = normalize_path_separators(name);
+    bool had_lua_ext = false;
+    if (norm.size() > 4 && iequals(std::string_view(norm).substr(norm.size() - 4), ".lua")) {
+        norm.resize(norm.size() - 4);
+        had_lua_ext = true;
+    }
+    std::string rel = norm;
     std::replace(rel.begin(), rel.end(), '.', '/');
+
+    std::vector<std::string> rel_variants{rel};
+    if ((had_lua_ext || norm.find('/') != std::string::npos) && norm != rel) {
+        rel_variants.insert(rel_variants.begin(), norm);
+    }
+
     // Inside the folders only: no "..", nothing absolute or rooted (operator/ would take it in place of the folder).
-    if (const fs::path rel_path(rel); rel.find("..") == std::string::npos && !rel.empty() && rel.front() != '/' &&
-                                   rel.front() != '\\' && !rel_path.has_root_name() && !rel_path.is_absolute()) {
+    for (const std::string& rpath : rel_variants) {
+        const fs::path rel_path(rpath);
+        if (rpath.find("..") != std::string::npos || rpath.empty() || rpath.front() == '/' ||
+            rpath.front() == '\\' || rel_path.has_root_name() || rel_path.is_absolute()) {
+            continue;
+        }
         std::vector<fs::path> roots{s.root};
         for (const auto& d : s.host->dirs()) roots.push_back(d);
         for (const auto& r : roots) {
-            for (const fs::path& cand : {r / (rel + ".lua"), r / rel / "init.lua"}) {
-                const auto& dirs = s.host->dirs();
-                if (std::any_of(dirs.begin(), dirs.end(), [&](const fs::path& d) { return in_config_dir(d, cand); }))
-                    continue;
-                auto text = read_file(cand);
+            if (r.empty()) continue;
+            std::error_code ec;
+            const fs::path canon_r = fs::weakly_canonical(r, ec);
+            if (ec || canon_r.empty()) continue;
+            for (const fs::path& cand : {canon_r / (rpath + ".lua"), canon_r / rpath / "init.lua"}) {
+                const fs::path canon_cand = fs::weakly_canonical(cand, ec);
+                if (ec || canon_cand.empty()) continue;
+                const fs::path crel = canon_cand.lexically_relative(canon_r);
+                if (crel.empty() || crel == "." || crel.is_absolute() || *crel.begin() == "..") continue;
+                if (is_config_target(s, canon_cand)) continue;
+                auto text = read_file(canon_cand);
                 if (!text) continue;
                 Sha256Digest h = sha256(*text);
                 const std::uint32_t module_caps =
                     s.host->env.policy ? s.host->env.policy->caps(plugin::FileKind::Script, h) : 0;
                 if (module_caps == 0) {
-                    out.msg = std::format("module '{}' ({}) may not run: {}", name, cand.string(),
+                    out.msg = std::format("module '{}' ({}) may not run: {}", name, canon_cand.string(),
                                           s.host->env.policy ? s.host->env.policy->refusal(plugin::FileKind::Script)
                                                              : std::string("no rules"));
                     return;
@@ -1077,12 +1250,12 @@ void search_module(const Script& s, std::string_view given, ModuleFile& out) {
                 if ((module_caps & s.caps) != s.caps) {
                     out.msg = std::format(
                         "module '{}' ({}) may not run in {}: the module may do only '{}', the script '{}'", name,
-                        cand.string(), s.name, plugin::caps_text(module_caps), plugin::caps_text(s.caps));
+                        canon_cand.string(), s.name, plugin::caps_text(module_caps), plugin::caps_text(s.caps));
                     return;
                 }
                 out.found = true;
                 out.text = std::move(*text);
-                out.chunk = "@" + cand.string();
+                out.chunk = "@" + canon_cand.string();
                 return;
             }
         }
@@ -1104,7 +1277,18 @@ int find_module(lua_State* L, const char* given) {
     if (lua_istable(L, -1)) {
         lua_getfield(L, -1, given);
         lua_remove(L, -2);
-        if (!lua_isnil(L, -1)) return 2;
+        if (!lua_isnil(L, -1)) return lua_isfunction(L, -1) ? 1 : 2;
+    }
+    lua_pop(L, 1);
+    lua_getglobal(L, "package");
+    if (lua_istable(L, -1)) {
+        lua_getfield(L, -1, "preload");
+        lua_remove(L, -2);
+        if (lua_istable(L, -1)) {
+            lua_getfield(L, -1, given);
+            lua_remove(L, -2);
+            if (!lua_isnil(L, -1)) return lua_isfunction(L, -1) ? 1 : 2;
+        }
     }
     lua_pop(L, 1);
     if (std::strcmp(given, "mq") == 0) {
@@ -1125,6 +1309,25 @@ int find_module(lua_State* L, const char* given) {
     m = ModuleFile{}; // (its text now, not when the collector comes)
     lua_remove(L, -2);
     return found;
+}
+
+int l_package_searcher(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    lua_settop(L, 1);
+    const int found = find_module(L, name);
+    if (found == 1) return 1;
+    if (found == 2) {
+        // Wrap pre-resolved value in a zero/one-arg loader closure per Lua package.searchers protocol.
+        lua_pushcclosure(
+            L,
+            [](lua_State* S) -> int {
+                lua_pushvalue(S, lua_upvalueindex(1));
+                return 1;
+            },
+            1);
+        return 1;
+    }
+    return 1; // error string
 }
 
 int l_require(lua_State* L) {
@@ -1148,12 +1351,13 @@ int l_require(lua_State* L) {
 
 // The Lua half of the mq module and MQ's ImGui table over the client's `ui` (ui/lua/lua_imgui.cpp).
 constexpr const char* kPrelude = R"lua(
-local mq, load_config = ...
+local mq, load_config, load_trusted = ...
 
--- loadfile(path) / dofile(path): mq.pickle's data back, from under mq.configDir. The file is run with an empty
--- environment, and loadfile hands out only what it returned, as data: a value that is or holds a function (a
--- closure the file made, a string method it took) refuses the file. A script writes these files as it likes
--- (mq.pickle), so a function from one would be code no server's rules looked at (docs/plugins.md).
+-- loadfile(path [, mode [, env]]) / dofile(path):
+--   * Approved script-root files (e.g. RG Mercs class_configs/*.lua) are loaded via the separate trusted-script
+--     loader in the active environment (with mq, require, ImGui, and compatibility modules).
+--   * Config files under mq.configDir use the restricted data-only loader (empty environment; only pure data
+--     without functions/closures/userdata is returned).
 do
     local type, next, pcall, error, tostring = type, next, pcall, error, tostring
     local pack, unpack = table.pack, table.unpack
@@ -1167,7 +1371,13 @@ do
         end
         return true
     end
-    function loadfile(path)
+    function loadfile(path, mode, env)
+        if type(path) ~= 'string' then
+            return nil, 'loadfile: string path expected'
+        end
+        local tchunk, terr, handled = load_trusted(path, mode, env)
+        if tchunk then return tchunk end
+        if handled then return nil, terr end
         local chunk, err = load_config(path)
         if not chunk then return nil, err end
         local r = pack(pcall(chunk))
@@ -1732,6 +1942,16 @@ bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
     cenv.script_root = sc.root;
     cenv.read_dirs = dirs();
     register_compat_modules(L, cenv);
+    lua_getglobal(L, "package");
+    if (lua_istable(L, -1)) {
+        lua_getfield(L, -1, "searchers");
+        if (lua_istable(L, -1)) {
+            lua_pushcfunction(L, l_package_searcher);
+            lua_rawseti(L, -2, 1);
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
     register_hailstone(L);
     if (luaL_loadbufferx(L, kPrelude, std::strlen(kPrelude), "=mq", "t") != LUA_OK) {
         std::string err = lua_tostring(L, -1);
@@ -1740,8 +1960,9 @@ bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
         return false;
     }
     lua_insert(L, -2);
-    lua_pushcfunction(L, l_load_config); // (the prelude's alone: loadfile and dofile check what it loads)
-    if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+    lua_pushcfunction(L, l_load_config);          // restricted data-only loader for mq.configDir
+    lua_pushcfunction(L, l_load_trusted_script);  // separate trusted-script loader for approved script roots
+    if (lua_pcall(L, 3, 0, 0) != LUA_OK) {
         std::string err = lua_tostring(L, -1);
         sc.close();
         why = "internal error: " + err;

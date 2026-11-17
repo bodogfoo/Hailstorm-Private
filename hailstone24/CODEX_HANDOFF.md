@@ -11,6 +11,7 @@
   - **9 Navigation Sections**: `Combat`, `Targeting`, `Healing`, `Buffs`, `Debuffs`, `Movement`, `Loot`, `Class settings`, and `Debug/logging` (module enable/status table, bounded scrolling log viewer with Clear & Copy to clipboard, and `/rgl` command sender).
   - **Decoupled Adapter Boundary (`src/mq/rgmercs_bridge.{h,cpp}`, `src/app/lua_eq_rgmercs.cpp`, `hailstone.rgmercs`)**: Keeps RG Mercs gameplay/combat logic separate from presentation via `eq.RGMercs*` on the UI side and `hailstone.rgmercs` (`using_native_ui`, `get_setting`, `get_settings`, `set_setting`, `set_module`, `log`, `set_status`, `clear_error`, `take_pending_changes`) on the script side; suppresses `mq.imgui` script draw callbacks for `rgmercs` when `suppress_script_ui` is enabled.
   - **Sandboxed Per-Character Persistence & Read-Only Migration**: Persists settings to `<character_dir>/rgmercs_settings.ini` strictly confined inside canonical `data_dir`. Scans `<data_dir>/scripts/config` for existing RG Mercs SQLite DBs (`SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX`, no URI) and Lua config tables for one-time auto-import or manual re-import.
+  - **Trusted Script-Root Loader (`l_load_trusted_script`)**: Separates approved script-root executable loading (for RG Mercs `class_configs/*.lua` and helper chunks, with server policy/capability checks, `mq`, `require`, `ImGui`, and compat modules in the active environment, plus `package.path`/`package.searchpath`/`package.searchers` and `.lua`/slash `require`) from the restricted data-only config loader (`mq.configDir`/`mq.pickle`).
   - **Script Runtime Foundation**: Native C `lsqlite3` & `lfs`, sandboxed `io` (`mq.configDir`), safe `package`/`debug`, IPC-bridged `actors`, `bit32`, `mq.DataType.new`, `mq.AddTopLevelObject`, `mq.PackageMan`, `ImGui.Dummy` arg fix, and `Raid`, `AltAbility`, `InvSlot`, `MacroQuest`, `Lua`, `DanNet`, `Mercenary`, `Nav` TLOs.
 
 ---
@@ -49,7 +50,7 @@ cmake --build build -j"$(nproc)"
 
 ## 3. Run Unit & Integration Tests
 ```bash
-ctest --test-dir build --output-on-failure -R "ExecutionController|FramePace|SessionBus|MQ AutoLogin|Login auto-select|Server select|RG Mercs|RGMercsBridge|eq.RGMercs|EQ menu|GPU IPC"
+ctest --test-dir build --output-on-failure -R "ExecutionController|FramePace|SessionBus|MQ AutoLogin|Login auto-select|Server select|RG Mercs|RGMercsBridge|TrustedScriptLoader|eq.RGMercs|EQ menu|GPU IPC"
 # Or run the full upstream + Hailstone 24 suite:
 ./build/hailstone_tests
 ```
