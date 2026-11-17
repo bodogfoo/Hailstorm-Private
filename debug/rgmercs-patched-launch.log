@@ -1,0 +1,158 @@
+[info] data folder /home/john/.local/share/hailstone24: --data-dir
+[info] Vulkan instance extensions: VK_KHR_surface VK_KHR_xlib_surface VK_KHR_portability_enumeration
+[info] GPU: Intel(R) Graphics (BMG G31) (Vulkan 1.4.354), BC textures: yes, textures per array: 33554416 (update after bind)
+[info] pipeline cache /home/john/.local/share/hailstone24/cache/pipelines.bin: 2459300 bytes
+[info] asset folder /home/john/Games/EZ-RoF2-clean-20260828 (--game-dir / EQ_GAME_DIR)
+[info] scene: 4x MSAA, upscaler fsr1, render scale 1.00 (1280x720), tonemap 1, exposure +0.00 EV, shadows 2048, light shadows 8 x 512, grade +0.00 / 1.00 / 1.00
+[info] ui: Lua started, scripts in /home/john/src/hailstone24-auto-src/build/hailstone/ui/modern
+[info] audio: pipewire at 48000 Hz, 3072 frame buffer (3072 asked)
+[info] audio: 3205 sound names, 24 music selections, 732 races
+[info] spell particles: 2578 emitter definitions, 675 effects, density 0.00, opacity 1.00
+[info] sky: 110 colour maps, 74 colour sets, 49 weather patterns, 144 sky settings, 0 area fogs
+[info] auto-login: logging in saved account pumpkin
+[info] server ez-server: assets /home/john/.local/share/hailstone24/servers/ez-server/assets
+[info] Updates: checking https://github.com/projecthailstone/hailstone-client/releases/latest/download/hailstone-update.txt for a release newer than 0.7.1-beta
+[info] gamepad: X360 Controller (xbox)
+[info] window title: EZ Server
+[info] Update check: 0.7.1-beta is the newest release
+[info] auto-login: joining world '[] EZ Server - Custom Zones, Vendors, Quests, Items, etc'
+[info] chat: [MQ2Example] loaded
+[info] chat: [Plugin] MQ2Example loaded (read,commands,target,actions,move,chat,events,ui,packets,extend,login,net,web)
+[info] plugin MQ2Example loaded from /home/john/src/hailstone24-auto-src/build/hailstone/plugins/MQ2Example.so (sha256 55b44a4c7b852330a0d9fd145fd11f023a6b6623ad56ba3430e18d5108ecd9ac, caps read,commands,target,actions,move,chat,events,ui,packets,extend,login,net,web)
+[info] world: PvP rule set 0
+[info] world: membership level 2
+[info] auto-login: entering world as 'Stabbinyah'
+[info] character select: loading the scene (clz)
+[info] audio: clz: 0 emitters, 0 music entries
+[info] clz: 13 environment emitters
+[info] smoothed ground: 0 triangles drawn as 0, 0 curved edges, at most 0.00 units off
+[info] zone particles: 13 emitters (0 flames, 0 kinds measured) from 625 cloud definitions
+[info] zone fires: 0 flames, 0 lights added for them
+[info] world atlas: clz: not visited on this server
+[info] zone renderer: 5 plants sway in the wind
+[info] zone renderer: no land round the zone (831 terrain triangles, too little level ground)
+[info] zone renderer prepared: 28 textures (5 MB), 8332 vertices (0 MB), 25800 indices (0 MB), 0 instances
+[info] nav: 4 tiles read from /home/john/.local/share/hailstone24/cache/navmesh/ez-server/clz.navmesh
+[info] zone clz loaded in 132 ms (5185 triangles)
+[info] memory archives: global: 113 archives, mapped 134.55 MiB, heap 0.00 MiB, parsed WLD estimate 29.76 MiB
+[info] appearance data: 78 NPC tints, 0 item tints, 21278 hero's forge tags, 335 adjustments, 42 customization entries
+[info] character archives: 113 global (with Luclin models) in 1467 ms
+[info] memory archives: clz: 0 archives, mapped 0.00 MiB, heap 0.00 MiB, parsed WLD estimate 0.00 MiB
+[info] sky: 2 cloud layers for clz
+[info] sky 1: 4 draws, 532 triangles, 7 textures
+[info] character select: Stabbinyah (race 6 gender 0 face 2 hair 2 / 15 beard 255 / 255 eyes 1 / 1 heritage 0 tattoo 0 details 0)
+[info] appearance Stabbinyah: race 6 gender 0 class 9 size 0.0 texture 255 helm 255 face 2 hair 2 / 15 beard 255 / 255 eyes 1 / 1 heritage 0 tattoo 0 details 0 material [0,2,2,2,23,3,2,10762,10716] tint [4283133550,4278190080,4280156210,4278190080,4278190080,4292664540,4278190080,0,0] hero_forge [0,0,0,0,0,0,0,0,0] npc_tint 0
+[info] model player: race 6 gender 0 class 9, Height 5.00, at z 3.19 (avatar 2.40, view 4.77)
+[info] clouds: noise made (128^3 shape, 32^3 detail, 512^2 weather)
+[info] chat: Tier 12.5 - Direwind Cliffs is now open, Tier 13 due soon.
+[[warn] lua script rgmercs: ....local/share/hailstone24/scripts/rgmercs/utils/files.lua:12: attempt to index a nil value (global 'io')
+[warn] lua script rgmercs: ....local/share/hailstone24/scripts/rgmercs/utils/files.lua:12: attempt to index a nil value (global 'io')
+  stack traceback:
+  	....local/share/hailstone24/scripts/rgmercs/utils/files.lua:12: in field 'file_exists'
+  	...local/share/hailstone24/scripts/rgmercs/utils/config.lua:3047: in field 'GetConfigFileName'
+  	...local/share/hailstone24/scripts/rgmercs/utils/config.lua:4497: in method 'ConvertToDb'
+  	...local/share/hailstone24/scripts/rgmercs/utils/config.lua:3079: in method 'LoadSettings'
+  	...e/john/.local/share/hailstone24/scripts/rgmercs/init.lua:33: in main chunk
+info] zone server 148.113.203.173:7136
+[info] settings: the character's, /home/john/.local/share/hailstone24/servers/ez-server/characters/__ EZ Server - Custom Zones_ Vendors_ Quests_ Items_ etc/Stabbinyah/hailstone.ini
+[info] scene: 4x MSAA, upscaler fsr1, render scale 1.00 (1280x720), tonemap 1, exposure +0.00 EV, shadows 2048, light shadows 8 x 512, grade +0.00 / 1.00 / 1.00
+[info] zone entry: spell file crc 0x3cf0536e, assoc crc 0x4f353196
+[info] spells: 0 in the book, gems empty
+[info] inventory: 30 items (61740 bytes)
+[info] weather: OP_Weather kind 0xff intensity 0
+[info] game time 23:24, sky hour 23.40
+[info] server files: no answer (a server without Hailstone's script)
+[info] server rules: none (no hailstone.cfg): plugins and scripts run freely
+[info] audio: qrg: 14 emitters, 2 music entries
+[info] smoothed ground: 8668 triangles drawn as 43876, 2329 curved edges, at most 0.73 units off
+[info] qrg: zone flora: 175 tiles (4232 pieces of ground) may grow plants by flora/default.txt (a lawn, 0 donor archives); 15 ms
+[info] zone fires: 25 flames, 0 lights added for them
+[info] zone renderer: 93 plants sway in the wind
+[info] zone renderer: 718 water and lava surface triangles
+[info] zone renderer: the land's trees: TREE16_ACTORDEF (25 placed, 47 units tall)
+[info] zone renderer: the land's trees: TREE10_ACTORDEF (17 placed, 47 units tall)
+[info] zone renderer: the land's trees: TREE18_ACTORDEF (15 placed, 29 units tall)
+[info] zone renderer: the land's trees, 1687 of 3 kinds of the zone's (spacing 391: 130 in the woods, 587 elsewhere), 0 where an atlas zone's own stand, in 15 ms
+[info] zone renderer: the land round the zone, 69810 triangles (57146 ground 'Xgrass1.BMP', 12664 rock 'rock1.BMP', 0 water), level ground (-2799 -1133) to (650 1399) at 0, relief 59, shaped by 0 neighbours' ground
+[info] zone renderer: 148 lights in a 19x14 grid of 64-unit cells
+[info] zone renderer prepared: 98 textures (3 MB), 116231 vertices (8 MB), 502896 indices (1 MB), 1687 instances
+[info] nav: 396 tiles read from /home/john/.local/share/hailstone24/cache/navmesh/ez-server/qrg.navmesh
+[info] zone qrg loaded in 333 ms (126695 triangles)
+[info] memory archives: qrg: 1 archives, mapped 2.35 MiB, heap 0.00 MiB, parsed WLD estimate 0.21 MiB
+[info] character models kept from the last zone: 1 meshes, 26 textures
+[info] 4 doors
+[info] chat: You have entered The Surefall Glade.
+[info] chat server: connecting to 148.113.203.173:7778 as EZ (Linux) x4 Exp.Stabbinyah
+[info] chat: [MQ2Example] zoned
+[info] hot buttons: /home/john/.local/share/hailstone24/servers/ez-server/characters/__ EZ Server - Custom Zones_ Vendors_ Quests_ Items_ etc/Stabbinyah/hotbuttons.ini
+[info] chat: [Lua] running rgmercs (read,commands,target,actions,move,chat,events,ui,packets,extend,login,net,web)
+[info] lua: running rgmercs from /home/john/.local/share/hailstone24/scripts/rgmercs/init.lua, sha256 981d2034836e046a9d15c1619dad84ab52c5533c6ec8309f7a92ed66b4303e82, caps read,commands,target,actions,move,chat,events,ui,packets,extend,login,net,web
+[info] chat history: 332 lines from /home/john/.local/share/hailstone24/servers/ez-server/characters/__ EZ Server - Custom Zones_ Vendors_ Quests_ Items_ etc/Stabbinyah/chat_history.txt
+[info] ui: window places from /home/john/.local/share/hailstone24/servers/ez-server/characters/__ EZ Server - Custom Zones_ Vendors_ Quests_ Items_ etc/Stabbinyah/UI.ini (defaults /home/john/Games/EZ-RoF2-clean-20260828/defaults.ini)
+[info] window title: EZ Server - Stabbinyah
+[info] chat: \x07r[\x07x\x07gRGMercs\x07w:\x07oINFO   \x07x \x07w<\x07t9.292\x07w> \x07w(\x07ounknown_file\x07w::\x07ounknown_func()\x07w:\x07o0\x07x\x07w)\x07r]\x07x\x07w >>> \x07x\x07yCharacter not found in DB, converting settings to DB...
+[info] chat: [Lua] rgmercs ended with an error: ....local/share/hailstone24/scripts/rgmercs/utils/files.lua:12: attempt to index a nil value (global 'io')
+[info] character model HSF: from hsf_chr.s3d (no global or zone archive has it)
+[info] appearance Stabbinyah: race 6 gender 0 class 9 size 0.0 texture 255 helm 0 face 2 hair 2 / 15 be[warn] chat server: the chat server closed the link before answering the login
+[warn] character texture i_chrome01_e.dds: missing or invalid environment map
+ard 255 / 255 eyes 1 / 1 heritage 0 tattoo 0 details 0 material [0,2,2,2,23,3,2,10762,10716] tint [4283133550,4278190080,4280156210,4278190080,4278190080,4292664540,4278197810,4278190080,4278190080] hero_forge [0,0,0,0,0,0,0,0,0] npc_tint 0
+[info] map: qrg (1221 lines, 24 labels, maps dir "")
+[info] neighbour zone qeytoqrg (4): 3 line cells, box (-640 96 0)-(-616 136 16), seam +y at 96.0, open sky 0%: indoor zone; first offset (-5825.7 12.0 0.0), spread (0.0 0.0 0.0), 1 targets, axis +y, face 96.0
+[info] neighbour zones: 1 lines to other zones, 0 drawable, found in 0.1 ms
+[info] chat: Norosun joined the raid.
+[info] chat: Oyloe joined the raid.
+[info] chat: Crowdcontrol joined the raid.
+[info] chat: Buffnstuff joined the raid.
+[info] chat: Shesstabbinyah joined the raid.
+[info] chat: Vivosun joined the raid.
+[info] chat: Yavaha joined the raid.
+[info] chat: Gatupy joined the raid.
+[info] chat: Beeboppaloopa joined the raid.
+[info] chat: Kucodion joined the raid.
+[info] chat: Fastlikebruce joined the raid.
+[info] chat: Frankdatank joined the raid.
+[info] chat: Raxes joined the raid.
+[info] chat: Unos joined the raid.
+[info] chat: Jedia joined the raid.
+[info] chat: Dunos joined the raid.
+[info] chat: Lunosty joined the raid.
+[info] chat: Rogerwho joined the raid.
+[info] chat: Rogertwo joined the raid.
+[info] chat: Rogerone joined the raid.
+[info] chat: Rogette joined the raid.
+[info] chat: Onfone joined the raid.
+[info] chat: Rogerroger joined the raid.
+[info] chat: Norosun is now the leader of your raid.
+[info] weather: OP_Weather kind 0x0 intensity 0
+[info] chat: Welcome to The Surefall Glade!
+[info] chat:  
+[info] chat: Welcome back to EZ Server! If you have been gone from EZ server for awhile or need a 'refresher', please take a moment to speak to Lorekeeper of EZServer to orient yourself with our world again!
+[info] chat:  
+[info] position history: 6 entries sent (packet 1)
+[info] effect packet 0: effect 413 caster 189 target 189 (1000 / 0 / 3000 ms, full true)
+[info] effect packet 0: effect 413 caster 169 target 169 (1000 / 0 / 3000 ms, full true)
+[info] effect packet 0: effect 413 caster 166 target 166 (1000 / 0 / 3000 ms, full true)
+[info] effect packet 0: effect 413 caster 162 target 162 (1000 / 0 / 3000 ms, full true)
+[info] effect packet 0: effect 413 caster 161 target 161 (1000 / 0 / 3000 ms, full true)
+[info] effect packet 0: effect 413 caster 152 target 152 (1000 / 0 / 3000 ms, full true)
+[info] effect packet 0: effect 413 caster 150 target 150 (1000 / 0 / 3000 ms, full true)
+[info] effect packet 0: effect 413 caster 147 target 147 (1000 / 0 / 3000 ms, full true)
+[info] effect packet 0: effect 413 caster 144 target 144 (1000 / 0 / 3000 ms, full true)
+[info] zone-in: loading screen up 8791 ms (zone loaded at 5582 ms, zone-in done at 5603 ms, then 47 frames in 3188 ms, 134 appearances waiting at most)
+[info] memory checkpoint: zone-in: settled appearances: resident 1018.77 MiB
+[info] memory GPU: zone-in: settled appearances: heap 0 (device-local), allocation bytes 633.52 MiB, 2304 allocations
+[info] memory GPU: zone-in: settled appearances: heap 1 (host), allocation bytes 4.49 MiB, 29 allocations
+[info] memory character WLDs: 23 / 114 materialized, index and decoded estimate 151.16 MiB (retained after use: 121.19 of 128 MiB)
+[info] memory character WLD activity: 91 decodes, 68 releases (current archives, cumulative)
+[info] memory character caches: 34 models 132.13 MiB, 81 appearances 12.41 MiB, 74 item copies 2.11 MiB (payload estimates)
+[info] memory model breakdown: animation/skeleton 128.93 MiB, geometry/materials 3.17 MiB, other 0.03 MiB
+[info] ui: EQ menu: 5 rows left out (not offered by this client): Zone Guide, Trophies, Leave Real Estate, Help, Claims
+[info] chat: [Lua] running rgmercs (read,commands,target,actions,move,chat,events,ui,packets,extend,login,net,web)
+[info] lua: running rgmercs from /home/john/.local/share/hailstone24/scripts/rgmercs/init.lua, sha256 981d2034836e046a9d15c1619dad84ab52c5533c6ec8309f7a92ed66b4303e82, caps read,commands,target,actions,move,chat,events,ui,packets,extend,login[warn] lua script rgmercs: ....local/share/hailstone24/scripts/rgmercs/utils/files.lua:12: attempt to index a nil value (global 'io')
+[warn] lua script rgmercs: ....local/share/hailstone24/scripts/rgmercs/utils/files.lua:12: attempt to index a nil value (global 'io')
+  stack traceback:
+  	....local/share/hailstone24/scripts/rgmercs/utils/files.lua:12: in field 'file_exists'
+  	...local/share/hailstone24/scripts/rgmercs/utils/config.lua:3047: in field 'GetConfigFileName'
+  	...local/share/hailstone24/scripts/rgmercs/utils/config.lua:4497: in method 'ConvertToDb'
+  	...local/share/hailstone24/scripts/rgmercs/utils/config.lua:3079: in method 'LoadSettings'
+  	...e/john/.local/share/hailstone24/scripts/rgmercs/init.lua:33: in main chunk
