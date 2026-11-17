@@ -832,6 +832,7 @@ int GetIO(lua_State *L) {
 		lua_pushnumber(L, io.DisplaySize.x); lua_setfield(L, real, "width");
 		lua_pushnumber(L, io.DisplaySize.y); lua_setfield(L, real, "height");
 		lua_pushnumber(L, io.Framerate); lua_setfield(L, real, "fps");
+		lua_pushnumber(L, io.DeltaTime); lua_setfield(L, real, "DeltaTime");
 		lua_pushboolean(L, io.KeyCtrl); lua_setfield(L, real, "ctrl");
 		lua_pushboolean(L, io.KeyShift); lua_setfield(L, real, "shift");
 		lua_pushboolean(L, io.KeyAlt); lua_setfield(L, real, "alt");
