@@ -910,6 +910,10 @@ int GetFont(lua_State *L) {
 	lua_pushinteger(L, 3);
 	return 1;
 }
+int GetFontSize(lua_State *L) {
+	lua_pushnumber(L, ImGui::GetFontSize());
+	return 1;
+}
 int PushStyleVar(lua_State *L) {
 	int idx = I(L, 1);
 	if (idx < 0 || idx >= ImGuiStyleVar_COUNT) {
@@ -1184,7 +1188,7 @@ void register_ui_api(lua_State *L) {
 		{"DrawLine", DrawLine}, {"DrawCircleFilled", DrawCircleFilled}, {"DrawCircle", DrawCircle},
 		{"DrawTriangleFilled", DrawTriangleFilled},
 		{"DrawRectFilled", DrawRectFilled}, {"DrawText", DrawText}, {"DrawImage", DrawImage}, {"GetCursorScreenPos", GetCursorScreenPos},
-		{"GetFont", GetFont}, {"PushFont", PushFont}, {"PopFont", PopFont}, {"PushChatFont", PushChatFont}, {"ChatFontSize", ChatFontSize},
+		{"GetFont", GetFont}, {"GetFontSize", GetFontSize}, {"PushFont", PushFont}, {"PopFont", PopFont}, {"PushChatFont", PushChatFont}, {"ChatFontSize", ChatFontSize},
 		{nullptr, nullptr}};
 	luaL_newlib(L, fns);
 	SetInts(L, "WindowFlags", {{"None", ImGuiWindowFlags_None}, {"NoTitleBar", ImGuiWindowFlags_NoTitleBar},
