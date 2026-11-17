@@ -1281,7 +1281,7 @@ int l_lfs_dir(lua_State* L) {
 int l_lfs_mkdir(lua_State* L) {
     const char* raw_path = luaL_checkstring(L, 1);
     std::string why;
-    auto resolved = resolve_sandbox_path(L, raw_path, PathAccess::Write, false, why);
+    auto resolved = resolve_sandbox_path(L, raw_path, PathAccess::Write, true, why);
     if (!resolved) {
         lua_pushnil(L);
         lua_pushstring(L, why.c_str());
