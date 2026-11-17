@@ -483,7 +483,16 @@ int SameLine(lua_State *L) { ImGui::SameLine(F(L, 1), F(L, 2, -1)); return 0; }
 int NewLine(lua_State *) { ImGui::NewLine(); return 0; }
 int Separator(lua_State *) { ImGui::Separator(); return 0; }
 int Spacing(lua_State *) { ImGui::Spacing(); return 0; }
-int Dummy(lua_State *L) { ImGui::Dummy(ImVec2(F(L, 1), F(L, 2))); return 0; }
+int Dummy(lua_State *L) {
+	if (lua_istable(L, 1)) {
+		lua_getfield(L, 1, "x"); const float x = static_cast<float>(luaL_optnumber(L, -1, 0.0)); lua_pop(L, 1);
+		lua_getfield(L, 1, "y"); const float y = static_cast<float>(luaL_optnumber(L, -1, 0.0)); lua_pop(L, 1);
+		ImGui::Dummy(ImVec2(x, y));
+	} else {
+		ImGui::Dummy(ImVec2(F(L, 1), F(L, 2)));
+	}
+	return 0;
+}
 int Indent(lua_State *L) { ImGui::Indent(F(L, 1)); return 0; }
 int Unindent(lua_State *L) { ImGui::Unindent(F(L, 1)); return 0; }
 int BeginGroup(lua_State *) { ImGui::BeginGroup(); return 0; }
