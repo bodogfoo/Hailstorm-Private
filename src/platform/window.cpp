@@ -150,6 +150,7 @@ Window::Window(const WindowDesc& desc) {
     SDL_WindowFlags flags = SDL_WINDOW_VULKAN | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     if (desc.resizable) flags |= SDL_WINDOW_RESIZABLE;
     if (desc.maximized) flags |= SDL_WINDOW_MAXIMIZED;
+    if (desc.hidden) flags |= SDL_WINDOW_HIDDEN;
     SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, desc.title.c_str());
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, desc.width);
@@ -729,6 +730,26 @@ void Window::set_text_input(bool on) {
 }
 
 bool Window::focused() const { return (SDL_GetWindowFlags(window_) & SDL_WINDOW_INPUT_FOCUS) != 0; }
+
+void Window::set_visible(bool visible) {
+    if (!window_) return;
+    if (visible) {
+        SDL_ShowWindow(window_);
+    } else {
+        SDL_HideWindow(window_);
+    }
+}
+
+bool Window::visible() const {
+    return window_ && (SDL_GetWindowFlags(window_) & SDL_WINDOW_HIDDEN) == 0;
+}
+
+void Window::raise_and_focus() {
+    if (!window_) return;
+    if (SDL_GetWindowFlags(window_) & SDL_WINDOW_HIDDEN) SDL_ShowWindow(window_);
+    if (SDL_GetWindowFlags(window_) & SDL_WINDOW_MINIMIZED) SDL_RestoreWindow(window_);
+    SDL_RaiseWindow(window_);
+}
 
 WindowMode Window::mode() const {
     if (!(SDL_GetWindowFlags(window_) & SDL_WINDOW_FULLSCREEN)) return WindowMode::Windowed;

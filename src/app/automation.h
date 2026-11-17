@@ -34,6 +34,7 @@ namespace hailstone::mq { class ScriptHost; class Registry; struct Context; }
 namespace hailstone::game { class ExtensionChain; }
 namespace hailstone::plugin { class UiBridge; class WebAccess; }
 namespace hailstone::nav { class NavControl; }
+namespace hailstone::ipc { class SessionBusClient; }
 
 namespace hailstone::app {
 
@@ -68,6 +69,8 @@ struct AutomationEnv {
     std::function<bool(mq::AbilityKind, std::string_view)> use_ability; // hailstone.use_ability; null: none
     std::function<std::optional<bool>(std::uint32_t spawn)> can_see;
     std::function<std::optional<bool>(const std::array<float, 3>&, const std::array<float, 3>&)> line_of_sight;
+    // Hailstone 24 session IPC bus (non-owning, optional): used by /bca, /bcaa, /bc, /rc, /dgt, /switch, and Lua actors.
+    ipc::SessionBusClient* ipc_bus = nullptr;
 };
 
 class Automation {
@@ -110,6 +113,8 @@ public:
     // Inside the ImGui frame: the scripts' and plugins' windows, the server plugins' question when no UI pack window
     // stands in for it ("PluginConsent", eq.ReplaceWindow), and with `dev` the "Plugins & Lua" window.
     void imgui(bool dev);
+    // Execute a command line from IPC or automation on this client.
+    void run_command(const std::string& line);
     // Before the connection goes: the plugins unload, the scripts stop.
     void shutdown();
 

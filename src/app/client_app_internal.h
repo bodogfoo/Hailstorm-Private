@@ -20,6 +20,9 @@
 #include "app/input_script.h"
 #include "app/zone_settle.h"
 #include "app/server_links.h"
+#include "app/execution_state.h"
+#include "app/frame_pace.h"
+#include "ipc/session_bus.h"
 
 #include <algorithm>
 #include <atomic>
@@ -177,13 +180,14 @@ constexpr int kMaxCameraZoomSetting = 150;
 inline platform::WindowDesc window_desc(const ClientOptions& o) {
     platform::WindowDesc d{.width = o.window_width, .height = o.window_height};
     d.pad_input_in_background = !o.input_script.empty();
+    d.hidden = o.headless_bg;
     if (o.window_width != 1280 || o.window_height != 720) return d; // --window-size
     Config c;
     if (!c.load(default_config_path())) return d;
     d.width = std::max(320, c.get_int("window.width", d.width));
     d.height = std::max(240, c.get_int("window.height", d.height));
     if (c.get("window.x") && c.get("window.y")) d.position = {{c.get_int("window.x", 0), c.get_int("window.y", 0)}};
-    d.maximized = c.get_bool("window.maximized", false);
+    d.maximized = !o.headless_bg && c.get_bool("window.maximized", false);
     return d;
 }
 
@@ -269,6 +273,18 @@ public:
         shader_dir_ = platform::shaders_dir();
         config_path_ = default_config_path();
         config_.load(config_path_);
+        {
+            const int bg_hz = opts_.bg_tick_hz > 0
+                                  ? opts_.bg_tick_hz
+                                  : config_.get_int("multibox.bg_tick_hz", kBackgroundTickHz);
+            const std::string gpu_str = !opts_.gpu_mode.empty()
+                                            ? opts_.gpu_mode
+                                            : config_.get_string("multibox.gpu_mode", "cached");
+            execution_.configure(opts_.headless_bg, bg_hz, parse_gpu_retention_mode(gpu_str));
+            if (opts_.headless_bg) {
+                vk_.suspend_for_background();
+            }
+        }
         if (opts_.clip_plane != 15) clip_plane_arg_ = opts_.clip_plane;
         if (opts_.max_fps > 0) max_fps_arg_ = opts_.max_fps;
         // The asset folder: --game-dir or EQ_GAME_DIR, else hailstone.ini assets.path, else the picker asks.
@@ -467,9 +483,64 @@ public:
             if (!collision_) return std::nullopt;
             return collision_->line_of_sight(glm::vec3(a[0], a[1], a[2]), glm::vec3(b[0], b[1], b[2]));
         };
+        aenv.ipc_bus = &bus_;
         automation_ = std::make_unique<Automation>(aenv);
+        {
+            const std::string bus_sock = !opts_.ipc_socket.empty()
+                                             ? opts_.ipc_socket
+                                             : config_.get_string("multibox.ipc_socket", "");
+            const std::string sid = !opts_.session_id.empty()
+                                        ? opts_.session_id
+                                        : (!opts_.account.empty()
+                                               ? opts_.account
+                                               : (!opts_.auto_character.empty()
+                                                      ? opts_.auto_character
+                                                      : std::format("session-{}", static_cast<unsigned>(platform::process_id()))));
+            session_id_ = sid;
+            bus_.set_on_state_control([this](const ipc::StateControlPacket& ctrl) {
+                apply_execution_state(ctrl.desired_state);
+            });
+            bus_.set_on_command([this](const ipc::CommandPacket& cmd) {
+                ipc::CommandAckPacket ack;
+                ack.seq = cmd.seq;
+                ack.session_id = session_id_;
+                if (automation_) {
+                    automation_->run_command(cmd.command);
+                    ack.ok = true;
+                    ack.message = "ok";
+                } else {
+                    ack.ok = false;
+                    ack.message = "automation unavailable";
+                }
+                return ack;
+            });
+            if (!bus_sock.empty() || !opts_.session_id.empty() || opts_.headless_bg ||
+                config_.get_bool("multibox.auto_connect_bus", true)) {
+                bus_.connect(bus_sock.empty() ? ipc::default_bus_socket_path() : bus_sock, session_id_);
+            }
+        }
         automation_->hooks().add_command(plugin::Hooks::kClient, "/lighting",
                                          [this](std::string_view args) { lighting_command(args); });
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/switch", [this](std::string_view args) {
+            while (!args.empty() && args.front() == ' ') args.remove_prefix(1);
+            if (args.empty()) {
+                if (conn_) conn_->ui_message("Usage: /switch <character|session_id|fg|bg>");
+                return;
+            }
+            if (args == "fg" || args == "foreground") {
+                apply_execution_state(ExecutionState::ForegroundFull);
+                return;
+            }
+            if (args == "bg" || args == "background") {
+                apply_execution_state(ExecutionState::BackgroundHeadless);
+                return;
+            }
+            if (bus_.connected()) {
+                bus_.request_switch_foreground(std::string(args));
+            } else if (conn_) {
+                conn_->ui_message("[Hailstone24] Not connected to session bus; start hailstone24_broker.");
+            }
+        });
         stats_ui_->set_open(opts_.show_stats);
         // The performance window (app/perf_ui.h): Ctrl+Shift+P, /perf, or ui.perf_window=1.
         perf_ui_.set_open(config_.get_bool("ui.perf_window", false));
@@ -561,6 +632,7 @@ public:
         // The isometric camera when it was the one in use (hailstone.ini camera.iso, /camera).
         if (config_.get_bool("camera.iso", false)) set_camera_type(game::kCameraIsometric);
         game::reset_camera_defaults(cameras_);
+        login_view_.auto_login = opts_.auto_login || config_.get_bool("login.auto_login", false);
         if (opts_.login_launch.token_requested) {
             token_login_worker.finish();
             if (token_login_worker.error) std::rethrow_exception(token_login_worker.error);
@@ -590,6 +662,15 @@ public:
             start_login();
         } else if (!opts_.account.empty()) {
             start_account_login();
+        } else if (login_view_.auto_login) {
+            if (!login_view_.host.empty() && !login_view_.username.empty() && !login_view_.password.empty()) {
+                log::info("auto-login: logging in saved account {}", login_view_.username);
+                start_login();
+            } else if (opts_.auto_login) {
+                const std::string why = "Auto-login needs a saved server, account, and keyring password.";
+                log::warn("--auto-login: {}", why);
+                login_view_.status = {why, true};
+            }
         }
     }
 
@@ -1042,6 +1123,13 @@ private:
     platform::Window window_;
     std::string window_title_; // what update_window_title() set last
     render::VkContext vk_;
+    ExecutionController execution_;
+    ipc::SessionBusClient bus_;
+    std::string session_id_;
+    Clock::time_point last_telemetry_at_{};
+    Clock::time_point last_drawn_time_{};
+    void apply_execution_state(ExecutionState target);
+    void publish_bus_telemetry();
     // Declared after vk_, so it is destroyed before the Vulkan device it holds objects of: draw_nameplates makes it at its
     // first use.
     std::unique_ptr<NameplateLayer> plate_layer_; // draw_nameplates, made at its first use
@@ -1078,6 +1166,7 @@ private:
     // The server select's rows in the order it lists them (ui::server_list_order): row -> index into servers_.
     std::vector<std::size_t> server_rows_;
     bool auto_play_sent_ = false;
+    bool auto_kick_sent_ = false;
     bool token_login_active_ = false; // through world/character selection; no keyring/account persistence
     // The login view is the launcher's (ui::begin_launcher_login_view) until back_to_login restores the normal one,
     // on the saved server picked before it when the ticket's server was not a saved one.

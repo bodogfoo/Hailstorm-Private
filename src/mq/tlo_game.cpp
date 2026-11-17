@@ -16,6 +16,7 @@
 #include "game/inventory.h"
 #include "game/spells.h"
 #include "game/world_state.h"
+#include "ipc/session_bus.h"
 #include "mq/calc.h"
 #include "mq/spawn_search.h"
 #include "mq/tlo.h"
@@ -31,7 +32,8 @@ using net::GameConnection;
 
 struct Types {
     const Type *spawn, *character, *cls, *race, *heading, *spell, *buff, *timestamp, *item, *zone, *group, *member,
-        *everquest, *window, *plugin, *time, *gametime, *navigation, *stick;
+        *everquest, *window, *plugin, *time, *gametime, *navigation, *stick, *raid, *raidmember, *altability,
+        *invslot, *macroquest, *lua, *luascript, *macro, *moveto, *moveutils, *dannet, *mercenary;
 };
 
 Types g; // set once by register_game_tlos (the types live in the registry that registered them)
@@ -367,7 +369,12 @@ const game::GroupMember* member_of(const Context& c, const Value& v) {
 // ---------------------------------------------------------------- registration helpers
 
 template <typename F> void add(const Type* t, const char* name, F fn) {
-    const_cast<Type*>(t)->members[name] = MemberFn(std::move(fn));
+    if constexpr (std::is_invocable_r_v<V, F, const Context&, const Value&, std::string_view>) {
+        const_cast<Type*>(t)->members[name] = MemberFn(std::move(fn));
+    } else {
+        const_cast<Type*>(t)->members[name] = [fn = std::move(fn)](const Context& c, const Value& v,
+                                                                     std::string_view) -> V { return fn(c, v); };
+    }
 }
 
 // A spawn member reading only the spawn.
@@ -610,6 +617,31 @@ void register_spawn() {
             if (x.spawn_id == s.id) return V::boolean(true);
         return V::boolean(false);
     });
+    spawn_member("Aggressive", [](const Context&, const game::Spawn& s, std::string_view) {
+        return V::boolean(s.is_npc && !s.is_corpse);
+    });
+    spawn_member("Beneficial", [](const Context&, const game::Spawn& s, std::string_view) {
+        return V::boolean(!s.is_npc || s.mercenary);
+    });
+    spawn_member("FeetWet", [](const Context&, const game::Spawn& s, std::string_view) {
+        return V::boolean(s.feet_wet != 0);
+    });
+    spawn_member("FindBuff", [find_buff](const Context& c, const game::Spawn& s, std::string_view index) {
+        return find_buff(c, s, index, false);
+    });
+    spawn_member("PctAggro", [](const Context& c, const game::Spawn& s, std::string_view) {
+        if (c.conn->world().target_id == s.id) return V::integer(c.conn->aggro().pct[0]);
+        return V::integer(0);
+    });
+    spawn_member("SecondaryPctAggro", [](const Context& c, const game::Spawn& s, std::string_view) {
+        if (c.conn->world().target_id == s.id) return V::integer(c.conn->aggro().pct[1]);
+        return V::integer(0);
+    });
+    spawn_member("AggroHolder", [](const Context& c, const game::Spawn& s, std::string_view) -> V {
+        if (c.conn->world().target_id == s.id && c.conn->aggro().target_id != 0)
+            return spawn_value(spawn_of(c, c.conn->aggro().target_id));
+        return V::nil();
+    });
 }
 
 void register_character() {
@@ -661,10 +693,12 @@ void register_character() {
         return V::number(c.player_status().aa_exp * 100.0 / 330.0);
     });
     me_member("AAPoints", [](const Context&, const GameConnection& c, std::string_view) {
-        return c.profile() ? V::integer(c.profile()->aa_points) : V::nil();
+        if (c.alt_adv().points > 0) return V::integer(c.alt_adv().points);
+        return c.profile() ? V::integer(c.profile()->aa_points) : V::integer(0);
     });
     me_member("AAPointsSpent", [](const Context&, const GameConnection& c, std::string_view) {
-        return c.profile() ? V::integer(c.profile()->aa_points_spent) : V::nil();
+        if (c.alt_adv().spent > 0) return V::integer(c.alt_adv().spent);
+        return c.profile() ? V::integer(c.profile()->aa_points_spent) : V::integer(0);
     });
     me_member("Buff", [](const Context& ctx, const GameConnection&, std::string_view index) -> V {
         if (index.empty()) return V::integer(static_cast<std::int64_t>(buff_slots(ctx, false).size()));
@@ -804,6 +838,156 @@ void register_character() {
             if (o.pet_owner_id == c.world().player_id && !o.is_corpse) return spawn_value(&o);
         return V::nil();
     });
+    me_member("AAPointsTotal", [](const Context&, const GameConnection& c, std::string_view) {
+        const auto pts = c.alt_adv().points > 0 ? static_cast<std::int64_t>(c.alt_adv().points)
+                                                : (c.profile() ? static_cast<std::int64_t>(c.profile()->aa_points) : 0);
+        const auto spent = c.alt_adv().spent > 0 ? static_cast<std::int64_t>(c.alt_adv().spent)
+                                                 : (c.profile() ? static_cast<std::int64_t>(c.profile()->aa_points_spent) : 0);
+        return V::integer(pts + spent);
+    });
+    me_member("AltAbility", [](const Context&, const GameConnection& c, std::string_view index) -> V {
+        if (index.empty()) return V::nil();
+        std::int64_t id = 0;
+        if (parse_int(index, id)) {
+            if (const auto* aa = c.alt_adv().get(static_cast<std::uint32_t>(id)))
+                return V::object(g.altability, aa->id);
+            if (const auto* aa = c.alt_adv().owned_rank(static_cast<std::int32_t>(id)))
+                return V::object(g.altability, aa->id);
+        }
+        for (const auto& [aid, aa] : c.alt_adv().table) {
+            std::string nm = c.strings().db_string(static_cast<std::uint32_t>(aa.title_sid), 1);
+            if (!nm.empty() && iequals(nm, index)) {
+                const auto* owned = c.alt_adv().owned_rank(aa.group);
+                return V::object(g.altability, owned ? owned->id : aid);
+            }
+        }
+        return V::nil();
+    });
+    me_member("Ability", [](const Context& ctx, const GameConnection&, std::string_view index) -> V {
+        if (!ctx.ability || index.empty()) return V::nil();
+        auto a = ctx.ability(AbilityKind::Skill, index);
+        return a ? V::string(a->name) : V::nil();
+    });
+    me_member("CombatAbility", [](const Context& ctx, const GameConnection&, std::string_view index) -> V {
+        if (!ctx.ability || index.empty()) return V::nil();
+        auto a = ctx.ability(AbilityKind::Discipline, index);
+        return a ? V::string(a->name) : V::nil();
+    });
+    me_member("AbilityTimerTotal", [](const Context& ctx, const GameConnection&, std::string_view index) -> V {
+        if (!ctx.ability || index.empty()) return V::nil();
+        auto a = ctx.ability(AbilityKind::Skill, index);
+        return a ? V::object(g.timestamp, std::max<std::int64_t>(a->reuse_ms, 0)) : V::nil();
+    });
+    me_member("GemTimer", [](const Context& ctx, const GameConnection& c, std::string_view index) -> V {
+        const auto& st = c.spell_state();
+        std::int64_t n = 0;
+        int gem = -1;
+        if (parse_int(index, n)) gem = static_cast<int>(n) - 1;
+        else {
+            for (int i = 0; i < game::kSpellGems; ++i) {
+                const game::SpellData* s = spell_data(ctx, st.gems[static_cast<std::size_t>(i)].spell);
+                if (s && iequals(s->name, index)) { gem = i; break; }
+            }
+        }
+        if (gem < 0 || gem >= game::kSpellGems) return V::object(g.timestamp, 0);
+        const std::uint32_t now = GameConnection::eq_time();
+        const std::uint32_t ready = st.gems[static_cast<std::size_t>(gem)].ready;
+        const std::int64_t rem = ready > now ? static_cast<std::int64_t>(ready - now) : 0;
+        return V::object(g.timestamp, rem);
+    });
+    me_member("SpellInCooldown", [](const Context&, const GameConnection& c, std::string_view) {
+        return V::boolean(GameConnection::eq_time() < c.spell_state().recovery_ready || c.spell_state().casting.casting());
+    });
+    me_member("BardSongPlaying", [](const Context& ctx, const GameConnection& c, std::string_view) {
+        const auto& cast = c.spell_state().casting;
+        if (!cast.casting()) return V::boolean(false);
+        const game::SpellData* d = spell_data(ctx, cast.spell);
+        return V::boolean(d && c.bard_song(*d));
+    });
+    me_member("MaxBuffSlots", [](const Context&, const GameConnection&, std::string_view) {
+        return V::integer(game::kBuffSlots);
+    });
+    me_member("Song", [](const Context& ctx, const GameConnection&, std::string_view index) -> V {
+        return buff_by_index(ctx, index, true);
+    });
+    me_member("FindBuff", [](const Context& ctx, const GameConnection&, std::string_view index) -> V {
+        return buff_by_index(ctx, index, false);
+    });
+    me_member("PetBuff", [](const Context&, const GameConnection&, std::string_view) { return V::nil(); });
+    me_member("BlockedBuff", [](const Context&, const GameConnection&, std::string_view) { return V::nil(); });
+    me_member("BlockedPetBuff", [](const Context&, const GameConnection&, std::string_view) { return V::nil(); });
+    me_member("Diseased", [](const Context& ctx, const GameConnection& c, std::string_view) {
+        const game::Spawn* m = c.world().player();
+        return m ? buff_with_effect(ctx, *m, 35, [](std::int32_t v) { return v > 0; }) : V::nil();
+    });
+    me_member("Poisoned", [](const Context& ctx, const GameConnection& c, std::string_view) {
+        const game::Spawn* m = c.world().player();
+        return m ? buff_with_effect(ctx, *m, 36, [](std::int32_t v) { return v > 0; }) : V::nil();
+    });
+    me_member("Cursed", [](const Context& ctx, const GameConnection& c, std::string_view) {
+        const game::Spawn* m = c.world().player();
+        return m ? buff_with_effect(ctx, *m, 116, [](std::int32_t v) { return v > 0; }) : V::nil();
+    });
+    me_member("Corrupted", [](const Context& ctx, const GameConnection& c, std::string_view) {
+        const game::Spawn* m = c.world().player();
+        return m ? buff_with_effect(ctx, *m, 369, [](std::int32_t v) { return v > 0; }) : V::nil();
+    });
+    me_member("Silenced", [](const Context& ctx, const GameConnection& c, std::string_view) {
+        const game::Spawn* m = c.world().player();
+        return m ? buff_with_effect(ctx, *m, 96, [](std::int32_t) { return true; }) : V::nil();
+    });
+    me_member("AmIGroupLeader", [](const Context&, const GameConnection& c, std::string_view) {
+        return V::boolean(c.group().active && c.group().is_leader(c.character_name()));
+    });
+    me_member("TargetOfTarget", [](const Context& ctx, const GameConnection& c, std::string_view) {
+        return spawn_value(spawn_of(ctx, c.target_of_target()));
+    });
+    me_member("PctAggro", [](const Context&, const GameConnection& c, std::string_view) {
+        return V::integer(c.aggro().pct[0]);
+    });
+    me_member("XTargetSlots", [](const Context&, const GameConnection& c, std::string_view) {
+        return V::integer(static_cast<std::int64_t>(c.xtargets().slots.size()));
+    });
+    me_member("AutoFire", [](const Context&, const GameConnection&, std::string_view) { return V::boolean(false); });
+    me_member("IsBerserk", [](const Context&, const GameConnection&, std::string_view) { return V::boolean(false); });
+    me_member("ActiveDisc", [](const Context&, const GameConnection&, std::string_view) { return V::nil(); });
+    me_member("CanMount", [](const Context&, const GameConnection&, std::string_view) { return V::boolean(true); });
+    me_member("Mount", [](const Context&, const GameConnection& c, std::string_view) -> V {
+        const game::Spawn* m = c.world().player();
+        return (m && m->mount_id != 0) ? V::integer(m->mount_id) : V::nil();
+    });
+    me_member("Mercenary", [](const Context&, const GameConnection& c, std::string_view) -> V {
+        return c.merc().has_mercenary ? V::object(g.mercenary, 0) : V::nil();
+    });
+    me_member("HaveExpansion", [](const Context&, const GameConnection&, std::string_view) { return V::boolean(true); });
+    me_member("Haste", [](const Context&, const GameConnection&, std::string_view) { return V::integer(100); });
+    me_member("SpellRankCap", [](const Context&, const GameConnection&, std::string_view) { return V::integer(3); });
+    me_member("Instance", [](const Context&, const GameConnection& c, std::string_view) { return V::integer(c.zone_instance()); });
+    me_member("HeadWet", [](const Context&, const GameConnection& c, std::string_view) {
+        const game::Spawn* m = c.world().player();
+        return V::boolean(m && m->body_wet != 0);
+    });
+    me_member("Hovering", [](const Context&, const GameConnection& c, std::string_view) {
+        const game::Spawn* m = c.world().player();
+        return V::boolean(m && m->fly_mode == 2);
+    });
+    me_member("Zoning", [](const Context&, const GameConnection& c, std::string_view) {
+        return V::boolean(c.state() == net::ConnectionState::Zoning || c.state() == net::ConnectionState::ZoneConnecting ||
+                          c.state() == net::ConnectionState::ZoneEntering);
+    });
+    me_member("ItemReady", [](const Context&, const GameConnection&, std::string_view) { return V::boolean(true); });
+    me_member("Skill", [](const Context&, const GameConnection&, std::string_view) { return V::integer(0); });
+    me_member("Fellowship", [](const Context&, const GameConnection&, std::string_view) { return V::nil(); });
+    me_member("GroupAssistTarget", [](const Context& ctx, const GameConnection& c, std::string_view) {
+        for (const auto& s : c.group().slots) {
+            if (s.main_assist) {
+                if (const game::Spawn* sp = spawn_named(ctx, s.name)) return spawn_value(sp);
+            }
+        }
+        return V::nil();
+    });
+    me_member("RaidAssistTarget", [](const Context&, const GameConnection&, std::string_view) { return V::nil(); });
+    me_member("GroupMarkNPC", [](const Context&, const GameConnection&, std::string_view) { return V::nil(); });
 }
 
 // Me.AbilityReady and the rest: an ability by name through Context::ability (the Ability Book's view).
@@ -1062,6 +1246,36 @@ void register_group() {
     add(g.group, "MainTank", role(&game::GroupMember::main_tank));
     add(g.group, "MainAssist", role(&game::GroupMember::main_assist));
     add(g.group, "Puller", role(&game::GroupMember::puller));
+    add(g.group, "Injured", [](const Context& c, const Value&, std::string_view index) {
+        std::int64_t threshold = 80;
+        parse_int(index, threshold);
+        std::int64_t count = 0;
+        for (const game::GroupMember* gm : group_members(c)) {
+            if (!gm) {
+                const auto hp = c.conn->own_hp();
+                if (hp.max > 0 && (hp.cur * 100 / hp.max) < threshold) ++count;
+            } else if (const game::Spawn* sp = spawn_named(c, gm->name)) {
+                if (!sp->is_corpse && sp->hp_percent < threshold) ++count;
+            }
+        }
+        return V::integer(count);
+    });
+    add(g.group, "LowMana", [](const Context& c, const Value&, std::string_view index) {
+        std::int64_t threshold = 50;
+        parse_int(index, threshold);
+        std::int64_t count = 0;
+        for (const game::GroupMember* gm : group_members(c)) {
+            if (!gm) {
+                const auto& ps = c.conn->player_status();
+                if (ps.max_mana > 0 && (ps.mana * 100 / ps.max_mana) < threshold) ++count;
+            } else if (const game::Spawn* sp = spawn_named(c, gm->name)) {
+                const auto& mp = c.conn->group().mana_percent;
+                auto it = mp.find(sp->id);
+                if (it != mp.end() && it->second < threshold) ++count;
+            }
+        }
+        return V::integer(count);
+    });
 
     Type& mem = const_cast<Type&>(*g.member);
     mem.parent = g.spawn;
@@ -1116,6 +1330,7 @@ void register_misc_types() {
     add(g.zone, "ShortName", [](const Context& c, const Value&, std::string_view) {
         return c.conn ? V::string(c.conn->world().zone_short_name) : V::nil();
     });
+    add(g.zone, "Indoor", [](const Context&, const Value&, std::string_view) { return V::boolean(false); });
 
     Type& eq = const_cast<Type&>(*g.everquest);
     eq.to_value = [](const Context&, const Value&) { return V::string("EverQuest"); };
@@ -1135,6 +1350,14 @@ void register_misc_types() {
     });
     add(g.everquest, "Server", [](const Context& c, const Value&, std::string_view) { return V::string(c.server_name); });
     add(g.everquest, "UIScale", [](const Context&, const Value&, std::string_view) { return V::number(1.0); });
+    add(g.everquest, "Foreground", [](const Context& c, const Value&, std::string_view) {
+        return V::boolean(!c.foreground || c.foreground());
+    });
+    add(g.everquest, "Ping", [](const Context&, const Value&, std::string_view) { return V::integer(0); });
+    add(g.everquest, "Path", [](const Context& c, const Value&, std::string_view) { return V::string(c.lua_dir); });
+    add(g.everquest, "ValidLoc", [](const Context&, const Value&, std::string_view index) {
+        return V::boolean(index.find(',') != std::string_view::npos || index.find(' ') != std::string_view::npos);
+    });
 
     Type& win = const_cast<Type&>(*g.window);
     win.to_value = [](const Context& c, const Value& v) {
@@ -1518,6 +1741,18 @@ void register_game_tlos(Registry& r) {
     g.gametime = &r.type("gametime");
     g.navigation = &r.type("navigation");
     g.stick = &r.type("stick");
+    g.raid = &r.type("raid");
+    g.raidmember = &r.type("raidmember");
+    g.altability = &r.type("altability");
+    g.invslot = &r.type("invslot");
+    g.macroquest = &r.type("macroquest");
+    g.lua = &r.type("lua");
+    g.luascript = &r.type("luascript");
+    g.macro = &r.type("macro");
+    g.moveto = &r.type("moveto");
+    g.moveutils = &r.type("moveutils");
+    g.dannet = &r.type("dannet");
+    g.mercenary = &r.type("mercenary");
     register_spawn();
     register_character();
     register_abilities();
@@ -1528,6 +1763,204 @@ void register_game_tlos(Registry& r) {
     register_misc_types();
     register_navigation();
     register_stick();
+
+    // Hailstone 24: Raid, AltAbility, InvSlot, MacroQuest, Lua, Macro, MoveTo, MoveUtils, DanNet, Mercenary types
+    Type& raid_t = const_cast<Type&>(*g.raid);
+    raid_t.to_value = [](const Context& c, const Value&) {
+        return c.conn && c.conn->raid().active ? V::integer(static_cast<std::int64_t>(c.conn->raid().members.size())) : V::integer(0);
+    };
+    add(g.raid, "Members", [](const Context& c, const Value&, std::string_view) {
+        return V::integer(c.conn ? static_cast<std::int64_t>(c.conn->raid().members.size()) : 0);
+    });
+    add(g.raid, "Leader", [](const Context& c, const Value&, std::string_view) -> V {
+        return c.conn && !c.conn->raid().leader.empty() ? V::object(g.raidmember, 0, 0, c.conn->raid().leader) : V::nil();
+    });
+    add(g.raid, "MainAssist", [](const Context& c, const Value&, std::string_view) -> V {
+        if (!c.conn) return V::nil();
+        for (std::size_t i = 0; i < c.conn->raid().members.size(); ++i)
+            if (c.conn->raid().members[i].main_assist)
+                return V::object(g.raidmember, static_cast<std::int64_t>(i), 0, c.conn->raid().members[i].name);
+        return V::nil();
+    });
+    add(g.raid, "Member", [](const Context& c, const Value&, std::string_view index) -> V {
+        if (!c.conn) return V::nil();
+        const auto& ms = c.conn->raid().members;
+        std::int64_t n = 0;
+        if (parse_int(index, n)) {
+            if (n < 1 || n > static_cast<std::int64_t>(ms.size())) return V::nil();
+            return V::object(g.raidmember, n - 1, 0, ms[static_cast<std::size_t>(n - 1)].name);
+        }
+        for (std::size_t i = 0; i < ms.size(); ++i)
+            if (iequals(ms[i].name, index)) return V::object(g.raidmember, static_cast<std::int64_t>(i), 0, ms[i].name);
+        return V::nil();
+    });
+    add(g.raid, "Locked", [](const Context& c, const Value&, std::string_view) {
+        return V::boolean(c.conn && c.conn->raid().locked);
+    });
+    add(g.raid, "LootType", [](const Context& c, const Value&, std::string_view) {
+        return V::integer(c.conn ? c.conn->raid().loot_type : 0);
+    });
+
+    Type& rm_t = const_cast<Type&>(*g.raidmember);
+    rm_t.parent = g.spawn;
+    rm_t.convert = [](const Context& c, const Value& v) { return spawn_value(spawn_named(c, v.s)); };
+    rm_t.to_value = [](const Context&, const Value& v) { return V::string(v.s); };
+    add(g.raidmember, "Name", [](const Context&, const Value& v, std::string_view) { return V::string(v.s); });
+    add(g.raidmember, "Spawn", [](const Context& c, const Value& v, std::string_view) { return spawn_value(spawn_named(c, v.s)); });
+    add(g.raidmember, "Group", [](const Context& c, const Value& v, std::string_view) -> V {
+        if (!c.conn) return V::integer(0);
+        for (const auto& m : c.conn->raid().members)
+            if (iequals(m.name, v.s)) return V::integer(m.group == 0xffffffffu ? 0 : m.group + 1);
+        return V::integer(0);
+    });
+
+    Type& aa_t = const_cast<Type&>(*g.altability);
+    aa_t.to_value = [](const Context& c, const Value& v) -> V {
+        if (!c.conn) return V::nil();
+        const auto* aa = c.conn->alt_adv().get(static_cast<std::uint32_t>(v.i));
+        if (!aa) return V::nil();
+        std::string nm = c.conn->strings().db_string(static_cast<std::uint32_t>(aa->title_sid), 1);
+        return V::string(nm.empty() ? std::to_string(aa->id) : nm);
+    };
+    add(g.altability, "ID", [](const Context&, const Value& v, std::string_view) { return V::integer(v.i); });
+    add(g.altability, "Name", aa_t.to_value);
+    add(g.altability, "ShortName", aa_t.to_value);
+    add(g.altability, "Spell", [](const Context& c, const Value& v, std::string_view) -> V {
+        const auto* aa = c.conn ? c.conn->alt_adv().get(static_cast<std::uint32_t>(v.i)) : nullptr;
+        return (aa && aa->spell > 0) ? spell_value(c, static_cast<std::uint32_t>(aa->spell)) : V::nil();
+    });
+    add(g.altability, "ReuseTime", [](const Context& c, const Value& v, std::string_view) -> V {
+        const auto* aa = c.conn ? c.conn->alt_adv().get(static_cast<std::uint32_t>(v.i)) : nullptr;
+        return aa ? V::integer(aa->refresh) : V::integer(0);
+    });
+    add(g.altability, "MyReuseTime", [](const Context& c, const Value& v, std::string_view) -> V {
+        const auto* aa = c.conn ? c.conn->alt_adv().get(static_cast<std::uint32_t>(v.i)) : nullptr;
+        return aa ? V::integer(aa->refresh) : V::integer(0);
+    });
+    add(g.altability, "Rank", [](const Context& c, const Value& v, std::string_view) -> V {
+        const auto* aa = c.conn ? c.conn->alt_adv().get(static_cast<std::uint32_t>(v.i)) : nullptr;
+        return aa ? V::integer(c.conn->alt_adv().owned_rank_number(*aa)) : V::integer(0);
+    });
+    add(g.altability, "MaxRank", [](const Context& c, const Value& v, std::string_view) -> V {
+        const auto* aa = c.conn ? c.conn->alt_adv().get(static_cast<std::uint32_t>(v.i)) : nullptr;
+        return aa ? V::integer(aa->max_rank) : V::integer(0);
+    });
+    add(g.altability, "Passive", [](const Context& c, const Value& v, std::string_view) -> V {
+        const auto* aa = c.conn ? c.conn->alt_adv().get(static_cast<std::uint32_t>(v.i)) : nullptr;
+        return V::boolean(!aa || !aa->activated());
+    });
+    add(g.altability, "Cost", [](const Context& c, const Value& v, std::string_view) -> V {
+        const auto* aa = c.conn ? c.conn->alt_adv().get(static_cast<std::uint32_t>(v.i)) : nullptr;
+        return aa ? V::integer(aa->cost) : V::integer(0);
+    });
+
+    Type& inv_t = const_cast<Type&>(*g.invslot);
+    inv_t.to_value = [](const Context&, const Value& v) { return V::integer(v.i); };
+    add(g.invslot, "ID", [](const Context&, const Value& v, std::string_view) { return V::integer(v.i); });
+    add(g.invslot, "Name", [](const Context&, const Value& v, std::string_view) {
+        return (v.i >= 0 && v.i < static_cast<std::int64_t>(std::size(kSlotNames)))
+                   ? V::string(kSlotNames[static_cast<std::size_t>(v.i)])
+                   : V::string(v.s);
+    });
+    add(g.invslot, "Item", [](const Context& c, const Value& v, std::string_view) {
+        return item_value(c, net::ItemSlot::possessions(static_cast<std::int16_t>(v.i)));
+    });
+    add(g.invslot, "Slot", [](const Context&, const Value& v, std::string_view) { return V::integer(v.i); });
+
+    Type& mq_t = const_cast<Type&>(*g.macroquest);
+    mq_t.to_value = [](const Context&, const Value&) { return V::string("Hailstone24"); };
+    add(g.macroquest, "BuildName", [](const Context&, const Value&, std::string_view) { return V::string("Hailstone24"); });
+    add(g.macroquest, "BuildType", [](const Context&, const Value&, std::string_view) { return V::string("Release"); });
+    add(g.macroquest, "GameState", g.everquest->members.at("GameState"));
+    add(g.macroquest, "Path", [](const Context& c, const Value&, std::string_view) { return V::string(c.lua_dir); });
+
+    Type& lua_t = const_cast<Type&>(*g.lua);
+    lua_t.to_value = [](const Context& c, const Value&) { return V::string(c.lua_dir); };
+    add(g.lua, "Dir", [](const Context& c, const Value&, std::string_view) { return V::string(c.lua_dir); });
+    add(g.lua, "Script", [](const Context& c, const Value&, std::string_view index) -> V {
+        const std::string active = c.active_script ? c.active_script() : std::string{};
+        if (index.empty()) return !active.empty() ? V::object(g.luascript, 1, 0, active) : V::nil();
+        const bool match = !active.empty() && iequals(active, index);
+        return V::object(g.luascript, match ? 1 : 0, 0, std::string(index));
+    });
+
+    Type& ls_t = const_cast<Type&>(*g.luascript);
+    ls_t.to_value = [](const Context&, const Value& v) { return V::string(v.i ? v.s : "NULL"); };
+    add(g.luascript, "Status", [](const Context&, const Value& v, std::string_view) {
+        return V::string(v.i ? "RUNNING" : "EXITED");
+    });
+    add(g.luascript, "Name", [](const Context&, const Value& v, std::string_view) {
+        return V::string(v.s);
+    });
+    add(g.luascript, "PID", [](const Context&, const Value& v, std::string_view) {
+        return V::integer(v.i);
+    });
+    add(g.luascript, "Paused", [](const Context&, const Value&, std::string_view) {
+        return V::boolean(false);
+    });
+
+    Type& mac_t = const_cast<Type&>(*g.macro);
+    mac_t.to_value = [](const Context&, const Value&) { return V::nil(); };
+    add(g.macro, "Name", [](const Context&, const Value&, std::string_view) { return V::nil(); });
+
+    Type& mt_t = const_cast<Type&>(*g.moveto);
+    mt_t.to_value = [](const Context& c, const Value&) { return V::boolean(c.nav && c.nav->status().active); };
+    add(g.moveto, "Moving", [](const Context& c, const Value&, std::string_view) {
+        return V::boolean(c.nav && c.nav->status().active && !c.nav->status().paused);
+    });
+    add(g.moveto, "Stopped", [](const Context& c, const Value&, std::string_view) {
+        return V::boolean(!c.nav || !c.nav->status().active);
+    });
+
+    Type& mu_t = const_cast<Type&>(*g.moveutils);
+    mu_t.to_value = [](const Context&, const Value&) { return V::string("HailstoneNav"); };
+
+    Type& dn_t = const_cast<Type&>(*g.dannet);
+    dn_t.to_value = [](const Context& c, const Value&) {
+        return V::integer(c.ipc_bus ? static_cast<std::int64_t>(c.ipc_bus->cached_roster().size()) : 0);
+    };
+    add(g.dannet, "PeerCount", [](const Context& c, const Value&, std::string_view) {
+        return V::integer(c.ipc_bus ? static_cast<std::int64_t>(c.ipc_bus->cached_roster().size()) : 0);
+    });
+    add(g.dannet, "Peers", [](const Context& c, const Value&, std::string_view) -> V {
+        if (!c.ipc_bus) return V::string("");
+        std::string list;
+        for (const auto& p : c.ipc_bus->cached_roster()) {
+            if (p.character_name.empty()) continue;
+            if (!list.empty()) list.push_back('|');
+            list += p.character_name;
+        }
+        return V::string(std::move(list));
+    });
+    add(g.dannet, "Q", [](const Context& c, const Value&, std::string_view index) -> V {
+        if (!c.ipc_bus || index.empty()) return V::nil();
+        auto p = c.ipc_bus->find_peer(index);
+        return p ? V::string(p->zone_short) : V::nil();
+    });
+    add(g.dannet, "O", [](const Context& c, const Value&, std::string_view index) -> V {
+        if (!c.ipc_bus || index.empty()) return V::nil();
+        auto p = c.ipc_bus->find_peer(index);
+        return p ? V::integer(p->hp_pct) : V::nil();
+    });
+
+    Type& merc_t = const_cast<Type&>(*g.mercenary);
+    merc_t.to_value = [](const Context& c, const Value&) -> V {
+        return c.conn && c.conn->merc().has_mercenary ? V::string(c.conn->merc().active.name) : V::nil();
+    };
+    add(g.mercenary, "Name", merc_t.to_value);
+    add(g.mercenary, "State", [](const Context& c, const Value&, std::string_view) {
+        if (!c.conn || !c.conn->merc().has_mercenary) return V::string("NOMERC");
+        switch (c.conn->merc().state) {
+        case game::kMercActive: return V::string("ACTIVE");
+        case game::kMercSuspended:
+        case game::kMercSuspendedHere: return V::string("SUSPENDED");
+        case game::kMercDead: return V::string("DEAD");
+        default: return V::string("ACTIVE");
+        }
+    });
+    add(g.mercenary, "ID", [](const Context& c, const Value&, std::string_view) {
+        return V::integer(c.conn ? c.conn->merc().active.id : 0);
+    });
 
     // MQ's LineOfSight[y,x,z:y,x,z]: two points in the server's coordinates (MQ's Loc order).
     r.add_tlo("LineOfSight", [](const Context& c, std::string_view index) -> V {
@@ -1562,6 +1995,11 @@ void register_game_tlos(Registry& r) {
     r.add_tlo("Navigation", [](const Context& c, std::string_view) -> V {
         return c.nav ? V::object(g.navigation, 0) : V::nil();
     });
+    r.add_tlo("Nav", [](const Context& c, std::string_view) -> V {
+        return c.nav ? V::object(g.navigation, 0) : V::nil();
+    });
+    r.add_tlo("MoveTo", [](const Context&, std::string_view) -> V { return V::object(g.moveto, 0); });
+    r.add_tlo("MoveUtils", [](const Context&, std::string_view) -> V { return V::object(g.moveutils, 0); });
     r.add_tlo("Stick", [](const Context& c, std::string_view) -> V { return c.nav ? V::object(g.stick, 0) : V::nil(); });
     r.add_tlo("Me", [](const Context& c, std::string_view) -> V {
         return c.conn && c.conn->world().player() ? V::object(g.character, c.conn->world().player_id) : V::nil();
@@ -1599,6 +2037,23 @@ void register_game_tlos(Registry& r) {
     });
     r.add_tlo("Group", [](const Context& c, std::string_view) -> V {
         return c.conn && c.conn->group().active ? V::object(g.group, 0) : V::nil();
+    });
+    r.add_tlo("Raid", [](const Context& c, std::string_view) -> V {
+        return c.conn && c.conn->raid().active ? V::object(g.raid, 0) : V::nil();
+    });
+    r.add_tlo("AltAbility", [](const Context& c, std::string_view index) -> V {
+        return g.character->members.at("AltAbility")(c, V::nil(), index);
+    });
+    r.add_tlo("InvSlot", [](const Context&, std::string_view index) -> V {
+        int slot = slot_by_name(index);
+        return slot >= 0 ? V::object(g.invslot, slot) : V::nil();
+    });
+    r.add_tlo("MacroQuest", [](const Context&, std::string_view) -> V { return V::object(g.macroquest, 0); });
+    r.add_tlo("Lua", [](const Context&, std::string_view) -> V { return V::object(g.lua, 0); });
+    r.add_tlo("Macro", [](const Context&, std::string_view) -> V { return V::object(g.macro, 0); });
+    r.add_tlo("DanNet", [](const Context&, std::string_view) -> V { return V::object(g.dannet, 0); });
+    r.add_tlo("Mercenary", [](const Context& c, std::string_view) -> V {
+        return c.conn && c.conn->merc().has_mercenary ? V::object(g.mercenary, 0) : V::nil();
     });
     r.add_tlo("Zone", [](const Context& c, std::string_view) -> V { return c.conn ? V::object(g.zone, c.conn->zone_id()) : V::nil(); });
     r.add_tlo("Spell", [](const Context& c, std::string_view index) { return spell_by_index(c, index); });

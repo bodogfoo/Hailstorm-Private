@@ -4,6 +4,7 @@
 
 #include "app/client_app_internal.h"
 #include "app/lua_eq.h"
+#include "core/ascii_case.h"
 #include "core/asset_folder.h"
 #include "net/server_files.h"
 #include "ui/ui_ini.h"
@@ -16,6 +17,13 @@
 namespace hailstone::app::client_internal {
 
 namespace {
+
+bool is_favorite_name(std::string_view name, const std::vector<std::string>& favorites) {
+    for (const auto& f : favorites) {
+        if (iequals(name, f)) return true;
+    }
+    return false;
+}
 
 // True when the folder holds a file at any depth (an overlay that changes nothing has none).
 bool has_files(const std::optional<std::filesystem::path>& dir) {
@@ -56,6 +64,8 @@ void ClientApp::start_token_login(bool named_server, const std::filesystem::path
                          opts_.login_launch.ticket);
     core::wipe(opts_.login_launch.ticket);
     auto_play_sent_ = false;
+    auto_kick_sent_ = false;
+    server_view_.filter.clear();
 }
 
 void ClientApp::start_session_login() {
@@ -78,6 +88,8 @@ void ClientApp::start_session_login() {
     apply_server_profile(profile);
     use_ui_pack(profile.ui);
     auto_play_sent_ = false;
+    auto_kick_sent_ = false;
+    server_view_.filter.clear();
 }
 
 void ClientApp::start_login() {
@@ -95,6 +107,20 @@ void ClientApp::start_login() {
         config_.save(config_path_);
         profile = std::move(*saved);
     }
+    if (opts_.auto_user.empty() && !box_play_ && (opts_.auto_login || login_view_.auto_login)) {
+        box_play_ = true;
+        box_world_.clear();
+        box_character_.clear();
+        for (const auto& a : login_view_.accounts) {
+            if (iequals(a.username, login_view_.username)) {
+                box_world_ = a.world;
+                box_character_ = a.character;
+                break;
+            }
+        }
+        if (!opts_.login_launch.world.empty()) box_world_ = opts_.login_launch.world;
+        if (!opts_.auto_character.empty()) box_character_ = opts_.auto_character;
+    }
     login_view_.busy = true;
     apply_server_profile(profile);
     use_ui_pack(profile.ui);
@@ -102,25 +128,34 @@ void ClientApp::start_login() {
     login_->start(profile.host, static_cast<std::uint16_t>(profile.port), login_view_.username,
                   login_view_.password);
     auto_play_sent_ = false;
+    auto_kick_sent_ = false;
+    server_view_.filter.clear();
 }
 
 void ClientApp::start_account_login() {
     if (ui::selected_profile_id(login_view_).empty()) {
         login_view_.status = {"--account " + opts_.account + ": no saved server to log in to (--server names one).",
                               true};
+        log::error("{}", login_view_.status.text);
         return;
     }
     ui::pick_account(login_view_, opts_.account);
     if (login_view_.password.empty()) {
         login_view_.status = {"No saved password for " + opts_.account + " on this server: type it to log in.", true};
+        log::error("--account {}: no saved keyring password on server {}", opts_.account,
+                   ui::selected_profile_id(login_view_));
         return;
     }
     box_play_ = true;
+    box_character_.clear();
+    box_world_.clear();
     for (const auto& a : login_view_.accounts)
-        if (a.username == login_view_.username) {
+        if (iequals(a.username, login_view_.username)) {
             box_character_ = a.character;
             box_world_ = a.world;
+            break;
         }
+    if (!opts_.login_launch.world.empty()) box_world_ = opts_.login_launch.world;
     if (!opts_.auto_character.empty()) box_character_ = opts_.auto_character;
     start_login();
 }
@@ -150,11 +185,14 @@ void ClientApp::start_box_login() {
 #else
     const std::filesystem::path exe = platform::install_dir() / "hailstone";
 #endif
+    const bool box_headless = config_.get_bool("multibox.box_launch_headless", false);
     for (std::size_t i = 1; i < set.size(); ++i) {
-        std::vector<std::string> args{exe.string(), "--server", saved->id, "--account", set[i].username};
+        std::vector<std::string> args{exe.string(), "--server", saved->id, "--account", set[i].username, "--auto-kick"};
+        if (!set[i].world.empty()) args.insert(args.end(), {"--world", set[i].world});
         if (!set[i].character.empty()) args.insert(args.end(), {"--character", set[i].character});
         if (!opts_.game_dir.empty()) args.insert(args.end(), {"--game-dir", opts_.game_dir});
         if (!opts_.classic_dir.empty()) args.insert(args.end(), {"--classic-dir", opts_.classic_dir});
+        if (box_headless) args.push_back("--headless-bg");
         std::string error;
         if (box_clients_.start(args, error)) log::info("box: started a window for {}", set[i].username);
         else log::warn("box: could not start a window for {}: {}", set[i].username, error);
@@ -233,6 +271,10 @@ void ClientApp::login_action(ui::LoginAction action) {
         config_.set_bool("audio.pregame_music", pregame_music_);
         config_.save(config_path_);
         if (audio_) audio_->music_selection(audio::kMusicLogin, pregame_music_);
+        break;
+    case ui::LoginAction::AutoLoginChanged:
+        config_.set_bool("login.auto_login", login_view_.auto_login);
+        config_.save(config_path_);
         break;
     case ui::LoginAction::AccountsChanged:
         // A box tick or character: saved at once, quietly (the typed fields stay).
@@ -476,6 +518,8 @@ void ClientApp::back_to_login(std::string message, bool is_error) {
     box_play_ = false;
     box_world_.clear();
     box_character_.clear();
+    auto_kick_sent_ = false;
+    server_view_.filter.clear();
     login_view_.quick_selected = std::max(login_view_.quick_selected, ui::default_quick_character(login_view_));
     // A saved password is in the fields again (the next login needs no typing).
     if (was_token) {
@@ -516,6 +560,7 @@ void ClientApp::leave_character() {
 void ClientApp::update_login() {
     if (!login_) return;
     login_->update();
+    if (login_->state() != net::LoginState::KickOffered) auto_kick_sent_ = false;
     switch (login_->state()) {
     case net::LoginState::LoggedIn:
         // The issuer may rotate a token for the next explicit login. It is bound to this endpoint, consumed once,
@@ -544,36 +589,60 @@ void ClientApp::update_login() {
         // 6018 (failed attempts) after the login, or 6028 when Play picked a server for another locale.
         if (!login_->notice().empty()) server_view_.status = {login_->notice(), login_->error_id() != 0};
         screen_ = Screen::Servers;
-        // A test login plays the first world at once (HAILSTONE_SERVER_SELECT=1 keeps the server select up: testing); a
-        // box login the world played last on this server (the server select's quick connect), else the first.
-        if ((!opts_.auto_user.empty() || box_play_ || (token_login_active_ && !opts_.login_launch.world.empty())) &&
-            !auto_play_sent_ && !servers_.empty() &&
+        // Auto-select and join the world for --user, box/--account/--auto-login, or --world (skipped when
+        // HAILSTONE_SERVER_SELECT=1 is set for manual server-select debugging).
+        const bool want_auto_world = !opts_.auto_user.empty() || box_play_ || !opts_.login_launch.world.empty();
+        if (want_auto_world && !auto_play_sent_ && !servers_.empty() &&
             !hailstone::core::env("SERVER_SELECT")) {
             auto_play_sent_ = true;
-            const net::ServerInfo* world = &servers_.front();
-            if (!opts_.login_launch.world.empty()) {
-                world = launcher_world(servers_, opts_.login_launch.world);
+            std::string desired_world = !opts_.login_launch.world.empty() ? opts_.login_launch.world : box_world_;
+            if (desired_world.empty() && box_play_) {
+                desired_world = config_.get_string(world_key("last_world"));
+                if (desired_world.empty()) {
+                    const auto favs = ui::parse_favorite_worlds(config_.get_string(world_key("favorite_worlds")));
+                    if (favs.size() == 1) desired_world = favs.front();
+                }
+            }
+            const net::ServerInfo* world = nullptr;
+            if (!desired_world.empty()) {
+                world = resolve_world_target(servers_, desired_world, !token_login_active_);
                 if (!world) {
-                    server_view_.status = {"The launcher's world was not found uniquely. Choose a world.", true};
+                    server_view_.filter = desired_world;
+                    server_view_.status = {
+                        std::format("World \"{}\" was not found uniquely. Choose a world.", desired_world), true};
+                    log::warn("auto-login: world selector \"{}\" did not match uniquely; waiting at server select",
+                              desired_world);
                     break;
                 }
-            } else if (box_play_) {
-                // The account's world (the character's), else the world played last on this server.
-                std::string last = !box_world_.empty() ? box_world_
-                                                       : config_.get_string("login.last_world." + server_profile_.id);
-                for (const auto& s : servers_)
-                    if (!last.empty() && (s.name == last || saved_character_key_part(s.name) == last)) world = &s;
+            } else {
+                world = !server_rows_.empty() ? &servers_[server_rows_.front()] : &servers_.front();
             }
+            if (!token_login_active_ && opts_.auto_user.empty() &&
+                config_.get_string(world_key("last_world")) != world->name) {
+                config_.set(world_key("last_world"), world->name);
+                config_.save(config_path_);
+            }
+            log::info("auto-login: joining world '{}'", world->name);
             server_view_.busy = true;
             login_->request_play(world->id);
         }
         break;
     }
     case net::LoginState::KickOffered:
-        // ServerSelectWnd::OnJoinServer: 302 / 114, a character of this account is still in the world. The question
-        // is drawn over the server select (ClientApp::draw_kick_question) until it is answered.
+        // ServerSelectWnd::OnJoinServer: 302 / 114, a character of this account is still in the world. When
+        // unattended (--auto-kick, --headless-bg, or login.auto_kick=1), confirm Yes once automatically; otherwise
+        // show ClientApp::draw_kick_question.
         server_view_.busy = true;
-        server_view_.status = {"", false};
+        if (opts_.auto_kick || execution_.is_headless() || config_.get_bool("login.auto_kick", false)) {
+            if (!auto_kick_sent_) {
+                auto_kick_sent_ = true;
+                log::info("auto-kick: removing existing logged-in session for account '{}'", login_view_.username);
+                server_view_.status = {"Removing existing logged-in session...", false};
+                login_->answer_kick(true);
+            }
+        } else {
+            server_view_.status = {"", false};
+        }
         break;
     case net::LoginState::Kicking:
         server_view_.busy = true;
@@ -615,7 +684,7 @@ void ClientApp::take_server_list() {
                 for (const auto& a : login_view_.accounts)
                     for (const auto& c : a.characters)
                         if (std::none_of(names.begin(), names.end(), [&](const std::string& n) {
-                                return n == c.world || saved_character_key_part(n) == c.world;
+                                return iequals(n, c.world) || iequals(saved_character_key_part(n), c.world);
                             })) {
                             login_view_.worlds.push_back(c.world);
                             names.push_back(c.world);
@@ -644,10 +713,10 @@ void ClientApp::list_worlds() {
     server_view_.selected = -1;
     for (std::size_t i : server_rows_) {
         const net::ServerInfo& s = servers_[i];
-        const bool fav = std::find(favorites.begin(), favorites.end(), s.name) != favorites.end();
+        const bool fav = is_favorite_name(s.name, favorites);
         // Every world can be played: the original asks the server whatever the status (LoginClient::request_play)
         server_view_.servers.push_back({s.name, s.status_text(), true, fav});
-        if (!picked.empty() && s.name == picked && server_view_.selected < 0)
+        if (!picked.empty() && iequals(s.name, picked) && server_view_.selected < 0)
             server_view_.selected = static_cast<int>(server_view_.servers.size()) - 1;
     }
     if (server_view_.selected < 0 && !server_view_.servers.empty()) server_view_.selected = 0;
@@ -657,7 +726,8 @@ void ClientApp::toggle_favorite_world(int row) {
     if (row < 0 || row >= static_cast<int>(server_view_.servers.size())) return;
     const std::string& name = server_view_.servers[static_cast<std::size_t>(row)].name;
     std::vector<std::string> favorites = ui::parse_favorite_worlds(config_.get_string(world_key("favorite_worlds")));
-    auto it = std::find(favorites.begin(), favorites.end(), name);
+    auto it = std::find_if(favorites.begin(), favorites.end(),
+                           [&](const std::string& f) { return iequals(f, name); });
     if (it != favorites.end()) favorites.erase(it);
     else favorites.push_back(name);
     if (favorites.empty()) config_.erase(world_key("favorite_worlds"));
@@ -950,20 +1020,37 @@ void ClientApp::update_connection() {
             if (!conn_->error().empty() && char_view_.status.text.empty()) char_view_.status = {conn_->error(), true};
             screen_ = Screen::Characters;
         }
-        if (!opts_.auto_character.empty() && opts_.account.empty() && !auto_enter_sent_) {
-            auto_enter_sent_ = true;
-            conn_->enter_world(opts_.auto_character);
-        } else if (!box_character_.empty() && !auto_enter_sent_) {
-            // A box login's character, when the account has it (else character select, as the player chooses).
-            auto_enter_sent_ = true;
-            std::string name = std::exchange(box_character_, {});
-            bool here = false;
-            for (const auto& c : conn_->characters()) here |= c.name == name;
-            if (here) {
-                note_entered_character(name);
-                conn_->enter_world(name);
-            } else {
-                char_view_.status = {name + " is not on this account: choose a character.", true};
+        if ((!opts_.auto_character.empty() || !box_character_.empty() ||
+             ((opts_.auto_login || login_view_.auto_login) && opts_.auto_user.empty())) &&
+            !auto_enter_sent_) {
+            std::string requested = !opts_.auto_character.empty() ? opts_.auto_character
+                                                                  : std::exchange(box_character_, {});
+            if (requested.empty() && (opts_.auto_login || login_view_.auto_login) &&
+                conn_->characters().size() == 1) {
+                requested = conn_->characters().front().name;
+            }
+            if (!requested.empty()) {
+                auto_enter_sent_ = true;
+                std::string matched;
+                for (int i = 0; i < static_cast<int>(conn_->characters().size()); ++i) {
+                    const auto& c = conn_->characters()[static_cast<std::size_t>(i)];
+                    if (iequals(c.name, requested)) {
+                        matched = c.name;
+                        char_view_.selected = i;
+                        break;
+                    }
+                }
+                if (!matched.empty()) {
+                    if (opts_.auto_user.empty()) note_entered_character(matched);
+                    log::info("auto-login: entering world as '{}'", matched);
+                    conn_->enter_world(matched);
+                } else if (!opts_.auto_user.empty()) {
+                    conn_->enter_world(requested);
+                } else {
+                    char_view_.status = {requested + " is not on this account: choose a character.", true};
+                    log::warn("auto-login: character '{}' was not found on account '{}'", requested,
+                              login_view_.username);
+                }
             }
         }
         break;

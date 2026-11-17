@@ -22,6 +22,7 @@
 #include <lua.hpp>
 
 #include "app/lua_eq_windows.h"
+#include "core/ascii_case.h"
 #include "core/server_profile.h"
 #include "game/eq_names.h"
 #include "game/zone_names.h"
@@ -359,6 +360,7 @@ void emit_login(Out& o, const ui::LoginView& v) {
     o.boolean("savePassword", v.save_password && v.remember && keyring);
     o.boolean("canSavePasswords", keyring);
     o.boolean("music", v.pregame_music);
+    o.boolean("autoLogin", v.auto_login);
     o.str("ui", v.ui);
     o.str("defaultUi", v.default_ui);
     o.table();
@@ -475,6 +477,9 @@ int LoginSet(lua_State* L) {
     } else if (field == "music") {
         v.pregame_music = lua_toboolean(L, 2) != 0;
         h.login_action = static_cast<int>(ui::LoginAction::MusicChanged);
+    } else if (field == "autoLogin") {
+        v.auto_login = lua_toboolean(L, 2) != 0;
+        h.login_action = static_cast<int>(ui::LoginAction::AutoLoginChanged);
     } else if (field == "ui") {
         std::string id = text();
         if (std::none_of(v.ui_packs.begin(), v.ui_packs.end(), [&](const ui::UiPack& p) { return p.id == id; }))
@@ -505,7 +510,7 @@ int LoginSet(lua_State* L) {
 
 SavedAccount* account_named(ui::LoginView& v, std::string_view username) {
     for (auto& a : v.accounts)
-        if (a.username == username) return &a;
+        if (iequals(a.username, username)) return &a;
     return nullptr;
 }
 
@@ -726,14 +731,14 @@ int LoginDo(lua_State* L) {
             a->character.clear();
             if (!w.empty())
                 for (const auto& c : a->characters)
-                    if (c.world == w && a->character.empty()) a->character = c.name;
+                    if (iequals(c.world, w) && a->character.empty()) a->character = c.name;
         } else if (ok) {
             // as the client's Character list: the world goes with the character (the account's own world first
             // when the name is on several)
             std::string c = luaL_optstring(L, 3, "");
             const SavedCharacter* pick = nullptr;
             for (const auto& sc : a->characters)
-                if (sc.name == c && (!pick || sc.world == a->world)) pick = &sc;
+                if (iequals(sc.name, c) && (!pick || iequals(sc.world, a->world))) pick = &sc;
             a->character.clear();
             if (pick) {
                 a->character = pick->name;
@@ -772,9 +777,10 @@ void emit_server_select(Out& o, const EqHost& h, const ui::ServerSelectView& v) 
         o.boolean("canJoin", s.can_join);
         o.boolean("favorite", s.favorite);
         o.close(i);
-        if (!h.last_server.empty() && s.name == h.last_server && last == 0) last = i + 1;
+        if (!h.last_server.empty() && iequals(s.name, h.last_server) && last == 0) last = i + 1;
     }
     o.close("servers");
+    o.str("filter", v.filter);
     o.integer("selected", v.selected >= 0 && v.selected < static_cast<int>(v.servers.size()) ? v.selected + 1 : 0);
     o.integer("last", static_cast<lua_Integer>(last));
     o.str("addonHint", v.addon_hint);
@@ -826,6 +832,21 @@ int ServerSelectDo(lua_State* L) {
     }
     lua_pushboolean(L, ok);
     return 1;
+}
+
+int ServerSelectSet(lua_State* L) {
+    EqHost& h = host_of(L);
+    if (!h.server_select || plugin_window()) return 0;
+    ui::ServerSelectView& v = *h.server_select;
+    const std::string_view field = luaL_checkstring(L, 1);
+    if (field == "filter") {
+        std::string s = luaL_checkstring(L, 2);
+        if (s.size() > 128) s.resize(128);
+        v.filter = std::move(s);
+    } else {
+        return luaL_error(L, "eq.ServerSelectSet: no field %s", lua_tostring(L, 1));
+    }
+    return 0;
 }
 
 // ---------------------------------------------------------------- character select
@@ -1115,9 +1136,9 @@ int CharacterCreateDo(lua_State* L) {
 void register_pregame_api(lua_State* L, EqHost& host, ScreenReplacements& screens) {
     static const luaL_Reg fns[] = {{"LoginScreen", LoginScreen},         {"LoginSet", LoginSet},
                                    {"LoginDo", LoginDo},                 {"ServerSelect", ServerSelect},
-                                   {"ServerSelectDo", ServerSelectDo},   {"CharacterSelect", CharacterSelect},
-                                   {"CharacterSelectDo", CharacterSelectDo}, {"CharacterCreate", CharacterCreate},
-                                   {"CharacterCreateHelp", CharacterCreateHelp},
+                                   {"ServerSelectSet", ServerSelectSet}, {"ServerSelectDo", ServerSelectDo},
+                                   {"CharacterSelect", CharacterSelect}, {"CharacterSelectDo", CharacterSelectDo},
+                                   {"CharacterCreate", CharacterCreate}, {"CharacterCreateHelp", CharacterCreateHelp},
                                    {"CharacterCreateDo", CharacterCreateDo}, {nullptr, nullptr}};
     lua_pushlightuserdata(L, &host);
     lua_pushlightuserdata(L, &screens);

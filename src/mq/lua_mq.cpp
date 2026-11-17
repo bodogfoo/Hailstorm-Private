@@ -27,6 +27,7 @@
 #include "game/item_links.h"
 #include "game/slash_commands.h"
 #include "game/world_state.h"
+#include "mq/lua_compat_modules.h"
 #include "mq/parse.h"
 #include "plugin/lua_keep.h"
 #include "net/game_connection.h"
@@ -1094,6 +1095,13 @@ int find_module(lua_State* L, const char* given) {
     lua_remove(L, -2);
     if (!lua_isnil(L, -1)) return 2;
     lua_pop(L, 1);
+    lua_getfield(L, LUA_REGISTRYINDEX, "hailstone.preloaded");
+    if (lua_istable(L, -1)) {
+        lua_getfield(L, -1, given);
+        lua_remove(L, -2);
+        if (!lua_isnil(L, -1)) return 2;
+    }
+    lua_pop(L, 1);
     if (std::strcmp(given, "mq") == 0) {
         lua_getfield(L, LUA_REGISTRYINDEX, "hailstone.mq");
         return 2;
@@ -1274,7 +1282,14 @@ function ImGui.SetNextWindowPos(x, y, cond)
     return ui.SetNextWindowPos(x, y, cond)
 end
 function ImVec2(x, y) return {x = x or 0, y = y or 0} end
-function ImVec4(x, y, z, w) return {x = x or 0, y = y or 0, z = z or 0, w = w or 0} end
+function ImVec4(x, y, z, w)
+    local v = {x = x or 0, y = y or 0, z = z or 0, w = w or 0}
+    function v:ToImU32()
+        local function byte(n) return math.max(0, math.min(255, math.floor(n * 255 + 0.5))) end
+        return byte(self.x) | (byte(self.y) << 8) | (byte(self.z) << 16) | (byte(self.w) << 24)
+    end
+    return v
+end
 ImGuiWindowFlags = ui.WindowFlags
 ImGuiCond = ui.Cond
 ImGuiCol = ui.Col
@@ -1286,6 +1301,114 @@ ImGuiComboFlags = ui.ComboFlags
 ImGuiSelectableFlags = ui.SelectableFlags
 ImGuiMouseButton = ui.Mouse
 ImGuiHoveredFlags = ui.HoveredFlags
+
+-- Hailstone 24 MacroQuest / RG Mercs extensions: DataType, AddTopLevelObject, CreateTexture, FindTextureAnimation
+do
+    local custom_tlos = {}
+    local function wrap_custom_val(dtype, obj)
+        if obj == nil then
+            return setmetatable({}, {
+                __call = function() return nil end,
+                __index = function() return wrap_custom_val(nil, nil) end,
+                __tostring = function() return 'NULL' end,
+            })
+        end
+        if type(dtype) ~= 'table' then
+            return setmetatable({}, {
+                __call = function() return obj end,
+                __index = function() return wrap_custom_val(nil, nil) end,
+                __tostring = function() return tostring(obj) end,
+            })
+        end
+        return setmetatable({}, {
+            __call = function()
+                if dtype.ToString then return dtype.ToString(obj) end
+                return tostring(obj)
+            end,
+            __index = function(_, key)
+                local mem = dtype.Members and dtype.Members[key]
+                if mem then
+                    return setmetatable({}, {
+                        __call = function(_, param)
+                            local rt, rv = mem(param or '', obj)
+                            return rv
+                        end,
+                        __tostring = function()
+                            local rt, rv = mem('', obj)
+                            return tostring(rv)
+                        end,
+                    })
+                end
+                local meth = dtype.Methods and dtype.Methods[key]
+                if meth then
+                    return function(_, ...) return meth(obj, ...) end
+                end
+                return wrap_custom_val(nil, nil)
+            end,
+            __tostring = function()
+                if dtype.ToString then return tostring(dtype.ToString(obj)) end
+                return tostring(obj)
+            end,
+        })
+    end
+
+    mq.DataType = {
+        new = function(name, def)
+            def = def or {}
+            def._name = name
+            def.Members = def.Members or {}
+            def.Methods = def.Methods or {}
+            return def
+        end,
+    }
+
+    function mq.AddTopLevelObject(name, handler)
+        custom_tlos[name] = handler
+    end
+
+    local orig_tlo = mq.TLO
+    local orig_mt = getmetatable(orig_tlo)
+    local orig_index = orig_mt and orig_mt.__index
+    setmetatable(orig_tlo, {
+        __index = function(t, key)
+            local h = custom_tlos[key]
+            if h then
+                return setmetatable({}, {
+                    __call = function(_, param)
+                        local dt, val = h(param or '')
+                        return wrap_custom_val(dt, val)
+                    end,
+                    __index = function(_, member)
+                        local dt, val = h('')
+                        return wrap_custom_val(dt, val)[member]
+                    end,
+                    __tostring = function()
+                        local dt, val = h('')
+                        return tostring(wrap_custom_val(dt, val))
+                    end,
+                })
+            end
+            if type(orig_index) == 'function' then return orig_index(t, key) end
+            return nil
+        end,
+    })
+
+    function mq.CreateTexture(path)
+        return {
+            path = path,
+            GetTextureID = function() return nil end,
+            size = { x = 60, y = 60 },
+        }
+    end
+
+    function mq.FindTextureAnimation(name)
+        return {
+            name = name,
+            SetCell = function() end,
+            GetTextureSize = function() return { x = 40, y = 40 } end,
+        }
+    end
+end
 )lua";
 
 } // namespace
@@ -1345,9 +1468,16 @@ ScriptHost::ScriptHost(ScriptEnv env) : impl_(std::make_unique<Impl>()) {
     m->owner = m->env.hooks->new_owner("lua");
     m->env.hooks->add_command(m->owner, "/lua", [m](std::string_view args) { m->lua_command(args); },
                               plugin::kCapCommands);
+    if (m->env.ipc_bus) {
+        m->env.ipc_bus->set_on_actor([m](const ipc::ActorPacket& pkt) {
+            if (m->actor_inbox.size() >= ipc::kMaxPendingInbound) m->actor_inbox.pop_front();
+            m->actor_inbox.push_back(pkt);
+        });
+    }
 }
 
 ScriptHost::~ScriptHost() {
+    if (impl_->env.ipc_bus) impl_->env.ipc_bus->set_on_actor({});
     for (auto& s : impl_->scripts) s->close();
     for (auto& [social, s] : impl_->buttons) s->close();
     if (impl_->env.hooks) impl_->env.hooks->remove(impl_->owner);
@@ -1486,6 +1616,23 @@ bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
     lua_setfield(L, LUA_REGISTRYINDEX, "hailstone.mq");
     lua_pushvalue(L, -1);
     lua_setglobal(L, "mq");
+    CompatEnv cenv;
+    cenv.ipc_bus = env.ipc_bus;
+    cenv.character_name = [this]() -> std::string {
+        const Context c = env.context ? env.context() : Context{};
+        return c.conn ? c.conn->character_name() : std::string();
+    };
+    cenv.server_name = [this]() -> std::string {
+        const Context c = env.context ? env.context() : Context{};
+        return c.server_name;
+    };
+    cenv.loopback_push = [this](const ipc::ActorPacket& pkt) {
+        if (actor_inbox.size() >= ipc::kMaxPendingInbound) actor_inbox.pop_front();
+        actor_inbox.push_back(pkt);
+    };
+    cenv.script_name = sc.name;
+    cenv.config_dir = script_config_dir(sc);
+    register_compat_modules(L, cenv);
     register_hailstone(L);
     if (luaL_loadbufferx(L, kPrelude, std::strlen(kPrelude), "=mq", "t") != LUA_OK) {
         std::string err = lua_tostring(L, -1);
@@ -1691,12 +1838,29 @@ void ScriptHost::Impl::reap() {
 void ScriptHost::pulse() {
     Impl& m = *impl_;
     Impl::Walk walk(m);
+    std::deque<ipc::ActorPacket> pending_actors;
+    if (!m.actor_inbox.empty()) {
+        pending_actors = std::move(m.actor_inbox);
+        m.actor_inbox.clear();
+    }
     // A script started in this walk (mq.cmd('/lua run x')) first runs next frame: two scripts that restart each other
     // cannot keep one walk going.
     const std::size_t count = m.scripts.size();
     for (std::size_t i = 0; i < count; ++i) {
         Script& s = *m.scripts[i];
         if (s.stop_requested || s.status != Script::Status::Running || !s.co) continue;
+        if (!pending_actors.empty() && s.L) {
+            ++s.busy;
+            plugin::CallerScope scope(s.caps, s.name);
+            s.new_slice();
+            ScriptRun run(s);
+            for (const auto& pkt : pending_actors) {
+                deliver_compat_actor(s.L, pkt, [&](const std::string& err) {
+                    m.say(std::format("[Lua] {} actor handler error: {}", s.name, err));
+                });
+            }
+            --s.busy;
+        }
         if (s.main_done) { // a plugin whose main chunk returned: only its binds' threads
             ++s.busy;
             plugin::CallerScope scope(s.caps, s.name);

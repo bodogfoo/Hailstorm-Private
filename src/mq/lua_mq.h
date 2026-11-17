@@ -34,6 +34,7 @@
 #include "plugin/policy.h"
 
 namespace hailstone::game { class ExtensionChain; }
+namespace hailstone::ipc { class SessionBusClient; }
 namespace hailstone::net { struct AppPacket; class GameConnection; }
 namespace hailstone::plugin { class UiBridge; class WebAccess; }
 
@@ -75,6 +76,8 @@ struct ScriptEnv {
     // How long a script may run without a chance to yield before it is stopped, in real time; 0: kRunawayMs (5 s).
     // Only tests set it, so a runaway is stopped in milliseconds.
     std::int64_t runaway_ms = 0;
+    // Hailstone 24: local IPC bus for require('actors') and cross-session routing.
+    ipc::SessionBusClient* ipc_bus = nullptr;
 };
 
 // A Lua social's hot button pressed (game/lua_social.h). The social's Lua sees `button` = {social, bar, button,

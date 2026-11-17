@@ -1,14 +1,16 @@
 #pragma once
 
-// The main loop's frame cap and whether a frame is drawn (app/client_app.cpp): display.max_fps, and
-// display.background_fps while another window has the focus. Below kBackgroundTickHz in the background, the loop
-// keeps going at kBackgroundTickHz (the game clock, the connection and the UI pack's scripts run on) and draws only
-// as often as the setting says, or never at kBackgroundNoDraw. The game clock catches up at most 250 ms a frame
-// (core/step_clock.h kMaxSteps), so a loop slower than 4 Hz would slow the rules down. On the login and loading screens
-// (including the last stretch of a zone-in) an unlimited max_fps counts as kLightScreenCap, so they do not spin.
+// The main loop's frame cap and whether a frame is drawn (app/client_app.cpp): display.max_fps,
+// display.background_fps, and Hailstone 24's decoupled ExecutionState pacing.
+// Never throttles game simulation or Lua/MQ automation to the rate of visual rendering:
+// in BACKGROUND_HEADLESS, simulation/network/nav/RG Mercs run at `bg_tick_hz` (default 25 Hz)
+// while visual rendering, ImGui build, and particle updates are suppressed (draw = false, skip_ui_build = true).
+// On login and loading screens (including zone-in settle) an unlimited max_fps counts as kLightScreenCap.
 
 #include <algorithm>
 #include <chrono>
+
+#include "app/execution_state.h"
 
 namespace hailstone::app {
 
@@ -17,8 +19,9 @@ inline constexpr int kBackgroundTickHz = 10;
 inline constexpr int kLightScreenCap = 240; // display.max_fps 0 on a login/loading screen counts as this
 
 struct FramePace {
-    int cap = 0;      // the loop's frames a second (0 none)
-    bool draw = true; // this frame is drawn
+    int cap = 0;                // the loop's ticks a second (0 none)
+    bool draw = true;           // this frame is rendered via Vulkan
+    bool skip_ui_build = false; // true in BACKGROUND_HEADLESS: skip ImGui/Lua UI/particles CPU work
 };
 
 // display.background_fps as it is kept: 0 (as max_fps), kBackgroundNoDraw, or 1 .. 1000.
@@ -36,19 +39,40 @@ inline bool is_light_screen(bool in_game, bool settling) {
 // max_fps 0: none. background_fps 0: as max_fps; kBackgroundNoDraw: none drawn; else drawn frames a second.
 // since_drawn: the time since the last drawn frame.
 // light_screen: a login/loading screen, where an unlimited cap would spin; max_fps 0 counts as kLightScreenCap there.
-// Callers pass false during normal play (so max_fps 0 stays unlimited); a set max_fps is followed exactly either way.
 inline FramePace frame_pace(int max_fps, int background_fps, bool focused, std::chrono::microseconds since_drawn,
-    bool light_screen = false) {
+                            bool light_screen = false) {
     const int cap = light_screen && max_fps == 0 ? kLightScreenCap : max_fps;
-    FramePace pace{cap, true};
+    FramePace pace{cap, true, false};
     if (focused || background_fps == 0) return pace;
     const int loop = std::max(background_fps, kBackgroundTickHz);
     pace.cap = cap > 0 ? std::min(cap, loop) : loop;
-    if (background_fps == kBackgroundNoDraw) pace.draw = false;
-    else if (background_fps < kBackgroundTickHz)
+    if (background_fps == kBackgroundNoDraw) {
+        pace.draw = false;
+        pace.skip_ui_build = true;
+    } else if (background_fps < kBackgroundTickHz) {
         // Half a tick early: the loop's ticks land on the interval or just after it, not a whole tick late.
         pace.draw = since_drawn >= std::chrono::microseconds(1000000 / background_fps - 500000 / pace.cap);
+    }
     return pace;
+}
+
+// ExecutionState-aware pacing: explicitly decouples simulation tick Hz from visual render Hz.
+inline FramePace frame_pace_for_state(ExecutionState state, int max_fps, int background_fps, int bg_tick_hz,
+                                      bool focused, std::chrono::microseconds since_drawn,
+                                      bool light_screen = false) {
+    if (state == ExecutionState::Transitioning) {
+        // Immediate unthrottled transition frame to hit < 250 ms switch latency.
+        return FramePace{0, true, false};
+    }
+    if (state == ExecutionState::BackgroundHeadless) {
+        const int sim_hz = std::clamp(bg_tick_hz, 10, 60);
+        const int cap = max_fps > 0 ? std::min(max_fps, sim_hz) : sim_hz;
+        return FramePace{cap, false, true};
+    }
+    if (state == ExecutionState::Disconnected && !focused) {
+        return FramePace{10, false, true};
+    }
+    return frame_pace(max_fps, background_fps, focused, since_drawn, light_screen);
 }
 
 } // namespace hailstone::app

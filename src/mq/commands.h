@@ -19,6 +19,8 @@
 #include "mq/tlo.h"
 #include "plugin/hooks.h"
 
+namespace hailstone::ipc { class SessionBusClient; }
+
 namespace hailstone::mq {
 
 struct CommandEnv {
@@ -32,6 +34,8 @@ struct CommandEnv {
     // /keypress: an EQ key command by its name ("forward", "jump", "hot1_1" ...), tapped (0), held (1) or let go (2);
     // false when the name is unknown.
     std::function<bool(std::string_view command, int mode)> keypress;
+    // Hailstone 24: local IPC bus for /bca, /bcaa, /bc, /rc, /dgt, /dquery, /dobserve. Null when disconnected.
+    ipc::SessionBusClient* ipc_bus = nullptr;
 };
 
 // While one is held, command lines are not ${}-expanded: a window's button sends text the player did not type as a

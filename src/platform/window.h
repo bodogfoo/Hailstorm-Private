@@ -34,6 +34,8 @@ struct WindowDesc {
     // Pad input while another window has the focus (SDL drops it by default): for tests (--input-script), whose
     // windows often open in the background.
     bool pad_input_in_background = false;
+    // Start hidden (SDL_WINDOW_HIDDEN) for Hailstone 24 BACKGROUND_HEADLESS sessions.
+    bool hidden = false;
 };
 
 // How the window fills the screen: a normal window, a borderless window the size of its display, or exclusive
@@ -146,6 +148,10 @@ public:
     void set_text_input(bool on);
     // Whether the window has the keyboard focus.
     bool focused() const;
+    // Hailstone 24 window visibility / foreground restoration.
+    void set_visible(bool visible);
+    bool visible() const;
+    void raise_and_focus();
 
     // Fullscreen: the window's mode, and switching it (Fullscreen uses the display mode closest to `size`, or the
     // desktop's when it is 0 x 0). In Windowed mode a non-zero size resizes the window (and un-maximizes it).

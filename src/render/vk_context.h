@@ -410,6 +410,11 @@ public:
     }
     VkExtent2D swapchain_extent() const { return extent_; } // the window's size in pixels
 
+    // Hailstone 24 BACKGROUND_HEADLESS GPU target lifecycle.
+    void suspend_for_background();
+    void resume_for_foreground();
+    bool suspended() const noexcept { return suspended_; }
+
 private:
     static constexpr VkFormat kSceneFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
     static constexpr VkFormat kAoFormat = VK_FORMAT_R8_UNORM;
@@ -498,6 +503,7 @@ private:
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
     VkFormat swapchain_format_ = VK_FORMAT_UNDEFINED;
     VkExtent2D extent_{};
+    bool suspended_ = false;
     VkRect2D scene_rect_{};  // set_scene_rect's
     VkRect2D scene_area_{};  // the rectangle drawn this frame (scene_rect_ within the image)
     VkExtent2D view_extent_{};  // scene_area_'s size when the scene targets were made

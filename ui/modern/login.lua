@@ -335,7 +335,9 @@ local function boxSetCard(view, s, bh)
       if ui.BeginCombo("##world", a.world == "" and "(last)" or a.world) then
         if ui.Selectable("(last played)", a.world == "") and a.world ~= "" then eq.LoginDo("world", a.username, "") end
         for _, w in ipairs(view.worlds) do
-          if ui.Selectable(w, w == a.world) and w ~= a.world then eq.LoginDo("world", a.username, w) end
+          if ui.Selectable(w, w:lower() == a.world:lower()) and w:lower() ~= a.world:lower() then
+            eq.LoginDo("world", a.username, w)
+          end
         end
         ui.EndCombo()
       end
@@ -348,11 +350,11 @@ local function boxSetCard(view, s, bh)
           eq.LoginDo("character", a.username, "")
         end
         for j, c in ipairs(a.characters) do
-          if a.world == "" or c.world == a.world then
+          if a.world == "" or c.world:lower() == a.world:lower() then
             local label = c.name .. (c.level > 0 and string.format("  %d %s", c.level, c.classes) or "")
             if a.world == "" then label = label .. "  (" .. c.world .. ")" end
             ui.PushID(j)
-            if ui.Selectable(label, c.name == a.character) and c.name ~= a.character then
+            if ui.Selectable(label, c.name:lower() == a.character:lower()) and c.name:lower() ~= a.character:lower() then
               eq.LoginDo("character", a.username, c.name)
             end
             ui.PopID()
@@ -906,10 +908,14 @@ local function loginCard(view, s, bh)
   ui.BeginDisabled(view.busy)
   local v, changed = ui.Checkbox("Music", view.music)
   if changed then eq.LoginSet("music", v) end
-  ui.EndDisabled()
   P.Tip("The music of the login, server select and character select screens (not the game's).")
+  ui.SameLine(0, 10 * s)
+  local autoV, autoChanged = ui.Checkbox("Auto-login", view.autoLogin)
+  if autoChanged then eq.LoginSet("autoLogin", autoV) end
+  P.Tip("Automatically log in on launch, select your saved/favorite world, and enter your character.")
+  ui.EndDisabled()
   if not view.transient then
-    ui.SameLine(0, 16 * s)
+    ui.SameLine(0, 12 * s)
     interfacePicker(view, s)
   end
   ui.SameLine()

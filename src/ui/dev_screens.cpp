@@ -123,6 +123,19 @@ bool contains_ci(std::string_view hay, std::string_view needle) {
     return it != hay.end();
 }
 
+std::string_view trim_sv(std::string_view s) {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
+    return s;
+}
+
+bool is_favorite_world(std::string_view name, const std::vector<std::string>& favorites) {
+    const std::string_view trimmed = trim_sv(name);
+    if (trimmed.empty()) return false;
+    return std::any_of(favorites.begin(), favorites.end(),
+                       [&](const std::string& f) { return iequals(trim_sv(f), trimmed); });
+}
+
 // ---- The gamepad on the pre-game screens ----------------------------------
 
 struct ScreenPad {
@@ -968,12 +981,12 @@ LoginAction login_screen(LoginView& view) {
                             action = LoginAction::AccountsChanged;
                         }
                         for (const std::string& w : view.worlds) {
-                            if (ImGui::Selectable(w.c_str(), w == a.world) && w != a.world) {
+                            if (ImGui::Selectable(w.c_str(), iequals(w, a.world)) && !iequals(w, a.world)) {
                                 a.world = w;
                                 // Its character there: the one entered last on it, else the first seen.
                                 a.character.clear();
                                 for (const auto& c : a.characters)
-                                    if (c.world == w && a.character.empty()) a.character = c.name;
+                                    if (iequals(c.world, w) && a.character.empty()) a.character = c.name;
                                 action = LoginAction::AccountsChanged;
                             }
                         }
@@ -994,10 +1007,11 @@ LoginAction login_screen(LoginView& view) {
                             action = LoginAction::AccountsChanged;
                         }
                         for (const auto& c : a.characters) {
-                            if (!a.world.empty() && c.world != a.world) continue;
+                            if (!a.world.empty() && !iequals(c.world, a.world)) continue;
                             std::string row = c.name + (c.level > 0 ? std::format("  {} {}", c.level, c.classes) : "");
                             if (a.world.empty()) row += "  (" + c.world + ")";
-                            if (ImGui::Selectable(row.c_str(), c.name == a.character) && c.name != a.character) {
+                            if (ImGui::Selectable(row.c_str(), iequals(c.name, a.character)) &&
+                                !iequals(c.name, a.character)) {
                                 a.character = c.name;
                                 a.world = c.world;
                                 action = LoginAction::AccountsChanged;
@@ -1093,6 +1107,10 @@ LoginAction login_screen(LoginView& view) {
     if (ImGui::Checkbox("Music", &view.pregame_music)) action = LoginAction::MusicChanged;
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("The music of the login, server select and character select screens (not the game's).");
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Auto-login", &view.auto_login)) action = LoginAction::AutoLoginChanged;
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Automatically log in on launch, select your saved/favorite world, and enter your character.");
 
     ImGui::Spacing();
     ImGui::PushTextWrapPos(label_w + field_w);
@@ -1425,7 +1443,7 @@ std::vector<std::size_t> server_list_order(const std::vector<std::string>& names
     std::vector<bool> fav(names.size());
     for (std::size_t i = 0; i < names.size(); ++i) {
         order[i] = i;
-        fav[i] = std::find(favorites.begin(), favorites.end(), names[i]) != favorites.end();
+        fav[i] = is_favorite_world(names[i], favorites);
     }
     std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
         if (fav[a] != fav[b]) return static_cast<bool>(fav[a]);
@@ -1439,8 +1457,10 @@ std::vector<std::string> parse_favorite_worlds(std::string_view text) {
     std::vector<std::string> out;
     while (!text.empty()) {
         const std::size_t bar = text.find('|');
-        std::string_view name = text.substr(0, bar);
-        if (!name.empty() && std::find(out.begin(), out.end(), name) == out.end()) out.emplace_back(name);
+        std::string_view name = trim_sv(text.substr(0, bar));
+        if (!name.empty() &&
+            std::none_of(out.begin(), out.end(), [&](const std::string& existing) { return iequals(existing, name); }))
+            out.emplace_back(name);
         if (bar == std::string_view::npos) break;
         text.remove_prefix(bar + 1);
     }
@@ -1450,11 +1470,27 @@ std::vector<std::string> parse_favorite_worlds(std::string_view text) {
 std::string join_favorite_worlds(const std::vector<std::string>& names) {
     std::string out;
     for (const auto& n : names) {
-        if (n.empty() || n.find('|') != std::string::npos) continue;
+        const std::string_view trimmed = trim_sv(n);
+        if (trimmed.empty() || trimmed.find('|') != std::string_view::npos) continue;
         if (!out.empty()) out += '|';
-        out += n;
+        out += trimmed;
     }
     return out;
+}
+
+bool server_matches_filter(const ServerEntry& server, std::string_view filter) {
+    const std::string_view trimmed = trim_sv(filter);
+    if (trimmed.empty()) return true;
+    std::size_t pos = 0;
+    while (pos < trimmed.size()) {
+        while (pos < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[pos]))) ++pos;
+        if (pos >= trimmed.size()) break;
+        std::size_t end = pos;
+        while (end < trimmed.size() && !std::isspace(static_cast<unsigned char>(trimmed[end]))) ++end;
+        if (!contains_ci(server.name, trimmed.substr(pos, end - pos))) return false;
+        pos = end;
+    }
+    return true;
 }
 
 ServerSelectAction server_select_screen(ServerSelectView& view) {
@@ -1465,17 +1501,39 @@ ServerSelectAction server_select_screen(ServerSelectView& view) {
     const bool pad = pad_nav();
     const bool appearing = ImGui::IsWindowAppearing();
 
+    std::vector<int> visible;
+    visible.reserve(view.servers.size());
+    bool selected_visible = false;
+    for (int i = 0; i < static_cast<int>(view.servers.size()); ++i) {
+        if (server_matches_filter(view.servers[static_cast<std::size_t>(i)], view.filter)) {
+            visible.push_back(i);
+            if (i == view.selected) selected_visible = true;
+        }
+    }
+    if (!selected_visible) view.selected = visible.empty() ? -1 : visible.front();
+
     float footer = ImGui::GetFrameHeightWithSpacing() * (pad ? 3.0f : 2.0f) + ImGui::GetStyle().ItemSpacing.y;
     constexpr ImGuiTableFlags kTable = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter |
                                        ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY;
     ImGui::BeginDisabled(view.busy);
+    const float em = ImGui::GetFontSize();
+    ImGui::SetNextItemWidth(-(em * 8.5f));
+    text_field("##server_filter", view.filter, 0, "Filter worlds", "Filter worlds by keyword...");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(view.filter.empty());
+    if (ImGui::Button("Clear##filter")) view.filter.clear();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(kDimColor, "%zu/%zu", visible.size(), view.servers.size());
+
     if (ImGui::BeginTable("servers", 3, kTable, ImVec2(0.0f, -footer))) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("Server", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 6.0f);
         ImGui::TableSetupColumn("Favourite", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 5.0f);
         ImGui::TableHeadersRow();
-        for (int i = 0; i < static_cast<int>(view.servers.size()); ++i) {
+        for (int i : visible) {
             const ServerEntry& s = view.servers[static_cast<std::size_t>(i)];
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
@@ -1508,6 +1566,7 @@ ServerSelectAction server_select_screen(ServerSelectView& view) {
         ImGui::EndTable();
     }
     if (view.servers.empty()) ImGui::TextColored(kDimColor, "No servers listed.");
+    else if (visible.empty()) ImGui::TextColored(kDimColor, "No worlds match \"%s\".", view.filter.c_str());
     ImGui::EndDisabled();
 
     status_line(view.status, view.busy);

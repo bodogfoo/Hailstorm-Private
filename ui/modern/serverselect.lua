@@ -29,8 +29,25 @@ local function star(cx, cy, r, filled, c, a)
 end
 
 local PLAY = { "Play" }
+local CLEAR = { "Clear" }
+local filterText = ""
+local lastViewFilter = nil
+
+local function matchesFilter(name, query)
+  local q = query:lower()
+  for token in q:gmatch("%S+") do
+    if not name:lower():find(token, 1, true) then
+      return false
+    end
+  end
+  return true
+end
 
 local function card(view, s, bh)
+  if view.filter ~= nil and view.filter ~= lastViewFilter then
+    filterText = view.filter
+    lastViewFilter = view.filter
+  end
   P.Title("Choose a world", view.server ~= "" and view.server or nil, s)
   local last = view.servers[view.last]
   ui.BeginDisabled(view.busy)
@@ -42,13 +59,55 @@ local function card(view, s, bh)
     ui.Dummy(0, 4 * s)
   end
   P.Heading("Worlds")
+
+  local visible = {}
+  local selectedVisible = false
+  for i, sv in ipairs(view.servers) do
+    if matchesFilter(sv.name, filterText) then
+      visible[#visible + 1] = { idx = i, sv = sv }
+      if view.selected == i then selectedVisible = true end
+    end
+  end
+  if not selectedVisible and #visible > 0 then
+    eq.ServerSelectDo("select", visible[1].idx)
+    view.selected = visible[1].idx
+  end
+
+  local countText = string.format("%d/%d", #visible, #view.servers)
+  local clearW = P.ButtonsWidth(CLEAR, s)
+  local countW = ui.CalcTextSize(countText) + 6 * s
+  ui.SetNextItemWidth(math.max(120 * s, ui.GetContentRegionAvail() - clearW - countW - 16 * s))
+  local nextFilter, enterInFilter = ui.InputTextWithHint("##worldfilter", "Filter worlds by keyword...", filterText,
+    128, ui.InputTextFlags.EnterReturnsTrue)
+  if nextFilter ~= filterText then
+    filterText = nextFilter
+    lastViewFilter = nextFilter
+    eq.ServerSelectSet("filter", filterText)
+  end
+  ui.SameLine()
+  ui.BeginDisabled(filterText == "")
+  if ui.Button("Clear") then
+    filterText = ""
+    lastViewFilter = ""
+    eq.ServerSelectSet("filter", "")
+  end
+  ui.EndDisabled()
+  ui.SameLine()
+  P.Muted(countText)
+  ui.Dummy(0, 2 * s)
+
   local _, lh = ui.CalcTextSize("Ag")
   local rowH = lh + 16 * s
   local shown = math.max(1, math.min(#view.servers, 8))
   ui.PushStyleVar(ui.StyleVar.ItemSpacing, 8 * s, 3 * s)
   ui.BeginChild("##worlds", 0, shown * (rowH + 3 * s), false)
-  if #view.servers == 0 then P.Faint("No worlds listed.") end
-  for i, sv in ipairs(view.servers) do
+  if #view.servers == 0 then
+    P.Faint("No worlds listed.")
+  elseif #visible == 0 then
+    P.Faint(string.format("No worlds match \"%s\".", filterText))
+  end
+  for _, entry in ipairs(visible) do
+    local i, sv = entry.idx, entry.sv
     ui.PushID(i)
     local clicked, double, x0, y0, x1, y1 = P.Row("##world", view.selected == i, rowH, s)
     -- the star at the left takes its own clicks: it marks or unmarks the world as a favourite
@@ -89,7 +148,7 @@ local function card(view, s, bh)
     ui.TextWrapped(view.addonHint)
     ui.PopStyleColor()
   end
-  local picked = view.servers[view.selected]
+  local picked = selectedVisible and view.servers[view.selected] or nil
   local canPlay = not view.busy and picked ~= nil and picked.canJoin
   if ui.Button("Back", 0, bh) then eq.ServerSelectDo("back") end
   P.Tip("Back to the login screen")
@@ -97,8 +156,10 @@ local function card(view, s, bh)
   local playW = P.ButtonsWidth(PLAY, s) + 40 * s
   P.AlignRight(playW)
   if P.Primary("Play", playW, bh, canPlay) then eq.ServerSelectDo("play") end
-  -- Enter plays the picked world (the client binds no key on this screen; not while a field elsewhere is typed in)
-  if canPlay and ui.IsKeyPressed(ui.Key.Enter) and not ui.GetIO().typing then eq.ServerSelectDo("play") end
+  -- Enter plays the picked world (from filter input or anywhere on screen when not typing elsewhere)
+  if canPlay and (enterInFilter or (ui.IsKeyPressed(ui.Key.Enter) and not ui.GetIO().typing)) then
+    eq.ServerSelectDo("play")
+  end
 end
 
 local held = nil -- the view drawn last frame: eq.ServerSelect gives true while it still holds (its revision)

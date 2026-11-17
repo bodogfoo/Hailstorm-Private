@@ -23,6 +23,7 @@
 #include <type_traits>
 #include <vector>
 
+namespace hailstone::ipc { class SessionBusClient; }
 namespace hailstone::net { class GameConnection; }
 namespace hailstone::nav { class NavControl; }
 
@@ -130,6 +131,10 @@ struct Context {
     std::function<std::optional<bool>(std::uint32_t spawn)> can_see;
     std::string server_name;
     std::string ui_skin = "default";
+    ipc::SessionBusClient* ipc_bus = nullptr;
+    std::string lua_dir;
+    std::function<std::string()> active_script;
+    std::function<bool()> foreground;
 };
 
 class Registry {

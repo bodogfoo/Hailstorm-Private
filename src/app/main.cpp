@@ -71,6 +71,7 @@
 #include "game/particles.h"
 #include "assets/spell_effects.h"
 #include "core/ini_file.h"
+#include "core/mq_login_import.h"
 #include "ui/imgui_layer.h"
 #include "ui/item_windows.h"
 
@@ -166,6 +167,19 @@ struct Options {
     glm::vec3 fly{0.0f};   // viewer: the camera moves this many units a second (--fly)
     float pan = 0.0f;      // viewer: the camera turns this many degrees a second to its left (--pan)
     hailstone::app::ModelViewerOptions model; // --model viewer; active when model.codes is not empty
+    // Hailstone 24 multibox, auto-login, and MacroQuest login import options.
+    std::string data_dir;
+    bool headless_bg = false;
+    bool auto_login = false;
+    bool auto_kick = false;
+    int bg_tick_hz = 0;
+    std::string gpu_mode;
+    std::string session_id;
+    std::string ipc_socket;
+    std::string import_mq_logins;
+    std::string mq_master_pass;
+    std::string roster_out;
+    bool launch_after_import = false;
 };
 
 void usage() {
@@ -341,6 +355,19 @@ void usage() {
         "  --pan D            viewer: the camera turns D degrees a second (positive to the left; with --frame-dt,\n"
         "                     the sky's clouds carried over from frame to frame as the view turns)\n"
         "  --verbose          debug logging\n"
+        "  --data-dir DIR     isolated Hailstone data folder (also $HAILSTONE_DATA_DIR)\n"
+        "  --headless-bg      start hidden in BACKGROUND_HEADLESS (full sim/MQ/nav, no Vulkan rendering)\n"
+        "  --auto-login       auto-submit saved account, resolve world, and enter character\n"
+        "  --auto-kick        automatically kick an already logged-in character on world join\n"
+        "  --bg-tick-hz N     background simulation tick frequency (10..60 Hz; default 25)\n"
+        "  --gpu-mode M       GPU retention mode: cached (default), deferred, or shared-broker\n"
+        "  --session-id ID    session identifier on the Hailstone 24 IPC bus\n"
+        "  --ipc-socket PATH  local AF_UNIX broker socket path\n"
+        "  --import-mq-logins PATH  import all users, passwords, servers and characters from MacroQuest\n"
+        "                     (login.db, MQ2AutoLogin.ini, or caret-delimited export) into Hailstone keyring\n"
+        "  --mq-master-pass P optional MacroQuest login.db master password (also $MQ_MASTER_PASSWORD)\n"
+        "  --roster-out PATH  optional output hailstone24_roster.ini generated during --import-mq-logins\n"
+        "  --launch           continue into client after --import-mq-logins instead of exiting\n"
         "viewer controls: hold right mouse to look, WASD move, Space/Ctrl up/down, Shift faster, Esc quit\n");
 }
 
@@ -723,6 +750,38 @@ Options parse_args(int argc, char** argv) {
             i += 3;
         } else if (arg("--verbose")) {
             hailstone::log::set_level(hailstone::log::Level::Debug);
+        } else if (arg("--data-dir")) {
+            need(1);
+            o.data_dir = argv[++i];
+        } else if (arg("--headless-bg")) {
+            o.headless_bg = true;
+        } else if (arg("--auto-login")) {
+            o.auto_login = true;
+        } else if (arg("--auto-kick")) {
+            o.auto_kick = true;
+        } else if (arg("--bg-tick-hz")) {
+            need(1);
+            o.bg_tick_hz = std::clamp(std::atoi(argv[++i]), 10, 60);
+        } else if (arg("--gpu-mode")) {
+            need(1);
+            o.gpu_mode = argv[++i];
+        } else if (arg("--session-id")) {
+            need(1);
+            o.session_id = argv[++i];
+        } else if (arg("--ipc-socket")) {
+            need(1);
+            o.ipc_socket = argv[++i];
+        } else if (arg("--import-mq-logins")) {
+            need(1);
+            o.import_mq_logins = argv[++i];
+        } else if (arg("--mq-master-pass")) {
+            need(1);
+            o.mq_master_pass = argv[++i];
+        } else if (arg("--roster-out")) {
+            need(1);
+            o.roster_out = argv[++i];
+        } else if (arg("--launch")) {
+            o.launch_after_import = true;
         } else if (arg("--help") || arg("-h")) {
             usage();
             std::exit(0);
@@ -739,7 +798,8 @@ Options parse_args(int argc, char** argv) {
         o.character = o.login_launch.character;
     }
     hailstone::app::resolve_login_launch(o.login_launch, o.user, o.password, o.account,
-                                       !o.zone.empty() || o.ui_demo.has_value() || !o.model.codes.empty());
+                                       !o.zone.empty() || o.ui_demo.has_value() || !o.model.codes.empty(),
+                                       o.auto_login);
     return o;
 }
 
@@ -774,12 +834,20 @@ int main(int argc, char** argv) {
     std::filesystem::path log_written;
     try {
         Options opts = parse_args(argc, argv);
-        error_dialog = opts.frames == 0 && opts.screenshot.empty();
+        error_dialog = opts.frames == 0 && opts.screenshot.empty() && opts.import_mq_logins.empty();
+        if (opts.data_dir.empty()) {
+            if (const char* env_data = std::getenv("HAILSTONE_DATA_DIR")) opts.data_dir = env_data;
+        }
+        if (!opts.data_dir.empty()) {
+            std::error_code ec;
+            std::filesystem::create_directories(opts.data_dir, ec);
+            platform::use_data_dir(std::filesystem::path(opts.data_dir), "--data-dir");
+        }
         // The data folder (platform/paths.h) is the Hailstone folder itself. One that cannot hold the settings (a
         // read-only folder, an EverQuest folder) stops the start with a message: nothing is ever written elsewhere.
         if (std::string problem = platform::data_dir_problem(); !problem.empty()) {
             log::error("{}", problem);
-            platform::show_error_box("Hailstone", problem);
+            if (error_dialog) platform::show_error_box("Hailstone", problem);
             return 1;
         }
         // The log goes to logs/hailstone.log too (the viewers' to logs/viewer.log, so a run of one never pushes the
@@ -797,6 +865,32 @@ int main(int argc, char** argv) {
         rename_old_window_ids_in(platform::imgui_ini());
         // The folders a player drops plugins, scripts, textures and maps into exist from the first start.
         for (const auto& dir : platform::create_data_dirs()) log::warn("could not create {}", dir.string());
+        if (!opts.import_mq_logins.empty()) {
+            if (opts.mq_master_pass.empty()) {
+                if (const char* env_mp = std::getenv("MQ_MASTER_PASSWORD")) opts.mq_master_pass = env_mp;
+            }
+            core::MqImportOptions iopts;
+            iopts.source_path = opts.import_mq_logins;
+            iopts.master_password = opts.mq_master_pass;
+            core::wipe(opts.mq_master_pass);
+            iopts.target_server_id = opts.server;
+            if (!opts.host.empty()) iopts.fallback_host = opts.host;
+            if (opts.port > 0) iopts.fallback_port = opts.port;
+            iopts.servers_dir = platform::servers_dir();
+            iopts.roster_out = opts.roster_out;
+            const auto res = core::import_mq_logins(iopts);
+            for (const auto& w : res.warnings) log::warn("MQ import: {}", w);
+            if (!res.ok) {
+                log::error("MQ import failed: {}", res.error);
+                return 1;
+            }
+            std::printf("Imported %zu account(s) (%zu password(s) saved to keyring, %zu character(s)) into server '%s' (%s:%d)\n",
+                        res.accounts_imported, res.passwords_saved, res.characters_linked,
+                        res.server_profile_id.c_str(), res.server_host.c_str(), res.server_port);
+            if (!opts.launch_after_import && opts.account.empty() && opts.user.empty() && !opts.headless_bg) {
+                return 0;
+            }
+        }
         if (opts.game_dir.empty() && viewer) {
             // The viewers have no picker: without --game-dir or EQ_GAME_DIR they read the asset folder the client's
             // picker saved (hailstone.ini assets.path). The client itself chooses in ClientApp (the picker).
@@ -899,6 +993,13 @@ int main(int argc, char** argv) {
             c.moon_phase = opts.moon_phase;
             c.blood_moon = opts.blood_moon;
             c.aurora = opts.aurora;
+            c.headless_bg = opts.headless_bg;
+            c.auto_login = opts.auto_login;
+            c.auto_kick = opts.auto_kick;
+            c.bg_tick_hz = opts.bg_tick_hz;
+            c.gpu_mode = opts.gpu_mode;
+            c.session_id = opts.session_id;
+            c.ipc_socket = opts.ipc_socket;
             return app::run_client(c);
         }
 

@@ -6,6 +6,7 @@
 
 #include "game/coords.h"
 #include "game/world_state.h"
+#include "ipc/session_bus.h"
 #include "mq/nav_commands.h"
 #include "mq/parse.h"
 #include "mq/spawn_search.h"
@@ -192,6 +193,154 @@ Commands::Commands(CommandEnv env) : env_(std::move(env)) {
             say("Invalid key name: " + key);
     });
     add_nav_commands(h, owner_, env_, [this](const std::string& t) { say(t); });
+
+    // Hailstone 24: EQBC / RemoteCommand / DanNet cross-session dispatch over ipc::SessionBusClient
+    auto normalize_cmd = [](std::string_view raw) -> std::string {
+        raw = trim(raw);
+        if (raw.starts_with("//")) return std::string(raw.substr(1));
+        return std::string(raw);
+    };
+    auto dispatch_bus = [this](ipc::CommandScope scope, std::string target, std::string cmd) {
+        if (cmd.empty()) return;
+        if (!env_.ipc_bus || !env_.ipc_bus->connected()) {
+            say("[MQ2IPC] Not connected to Hailstone 24 session broker; remote command skipped.");
+            return;
+        }
+        const Context& ctx = env_.context();
+        ipc::CommandPacket pkt;
+        pkt.scope = scope;
+        pkt.target = std::move(target);
+        pkt.command = std::move(cmd);
+        if (ctx.conn) {
+            pkt.sender_char = ctx.conn->character_name();
+            pkt.sender_zone = ctx.conn->world().zone_short_name;
+        }
+        env_.ipc_bus->send_command(std::move(pkt));
+    };
+
+    for (auto [name, scope] : {
+             std::pair{"/bca", ipc::CommandScope::AllExceptSelf},
+             std::pair{"/bcaa", ipc::CommandScope::AllIncludingSelf},
+             std::pair{"/bcz", ipc::CommandScope::ZoneExceptSelf},
+             std::pair{"/bcaaz", ipc::CommandScope::ZoneIncludingSelf},
+             std::pair{"/bcg", ipc::CommandScope::GroupExceptSelf},
+             std::pair{"/bcaag", ipc::CommandScope::GroupIncludingSelf},
+         }) {
+        h.add_command(
+            owner_, name,
+            [this, scope, dispatch_bus, normalize_cmd](std::string_view args) {
+                std::string cmd = normalize_cmd(args);
+                if (cmd.empty()) {
+                    say("Usage: /bca <command> (prefix with // or /)");
+                    return;
+                }
+                if (cmd.front() != '/') cmd = "/echo " + cmd;
+                dispatch_bus(scope, {}, std::move(cmd));
+            },
+            plugin::kCapCommands);
+    }
+
+    h.add_command(
+        owner_, "/bct",
+        [this, dispatch_bus, normalize_cmd](std::string_view args) {
+            std::string_view rest = trim(args);
+            std::string target = first_word(rest);
+            std::string cmd = normalize_cmd(rest.substr(std::min(rest.size(), target.size())));
+            if (target.empty() || cmd.empty()) {
+                say("Usage: /bct <character> <command>");
+                return;
+            }
+            if (cmd.front() != '/') cmd = "/echo " + cmd;
+            dispatch_bus(ipc::CommandScope::TargetPeer, std::move(target), std::move(cmd));
+        },
+        plugin::kCapCommands);
+
+    h.add_command(
+        owner_, "/bc",
+        [this, dispatch_bus, normalize_cmd](std::string_view args) {
+            std::string msg = std::string(trim(args));
+            if (msg.empty()) return;
+            if (msg.starts_with("//")) {
+                dispatch_bus(ipc::CommandScope::AllExceptSelf, {}, normalize_cmd(msg));
+                return;
+            }
+            const Context& ctx = env_.context();
+            std::string who = ctx.conn ? ctx.conn->character_name() : std::string("Peer");
+            dispatch_bus(ipc::CommandScope::AllExceptSelf, {}, "/echo [BC " + who + "] " + msg);
+        },
+        plugin::kCapCommands);
+
+    h.add_command(
+        owner_, "/rc",
+        [this, dispatch_bus, normalize_cmd](std::string_view args) {
+            std::string_view rest = trim(args);
+            std::string target = first_word(rest);
+            std::string cmd = normalize_cmd(rest.substr(std::min(rest.size(), target.size())));
+            if (target.empty() || cmd.empty()) {
+                say("Usage: /rc <peer|all|group|zone> <command>");
+                return;
+            }
+            if (cmd.front() != '/') cmd = "/" + cmd;
+            if (iequals(target, "all")) dispatch_bus(ipc::CommandScope::AllIncludingSelf, {}, std::move(cmd));
+            else if (iequals(target, "others")) dispatch_bus(ipc::CommandScope::AllExceptSelf, {}, std::move(cmd));
+            else if (iequals(target, "group")) dispatch_bus(ipc::CommandScope::GroupIncludingSelf, {}, std::move(cmd));
+            else if (iequals(target, "zone")) dispatch_bus(ipc::CommandScope::ZoneIncludingSelf, {}, std::move(cmd));
+            else dispatch_bus(ipc::CommandScope::TargetPeer, std::move(target), std::move(cmd));
+        },
+        plugin::kCapCommands);
+
+    h.add_command(owner_, "/rcjoin", [this](std::string_view args) {
+        std::string ch = first_word(args);
+        if (!ch.empty()) say("[RC] Joined channel: " + ch);
+    });
+
+    for (const char* dn_cmd : {"/dgt", "/dge", "/dga", "/dgae", "/dex"}) {
+        h.add_command(
+            owner_, dn_cmd,
+            [this, dn_cmd, dispatch_bus, normalize_cmd](std::string_view args) {
+                std::string_view rest = trim(args);
+                if (rest.empty()) return;
+                if (std::string_view(dn_cmd) == "/dga" || std::string_view(dn_cmd) == "/dgae") {
+                    std::string cmd = normalize_cmd(rest);
+                    if (!cmd.empty() && cmd.front() != '/') cmd = "/" + cmd;
+                    dispatch_bus(std::string_view(dn_cmd) == "/dga" ? ipc::CommandScope::AllIncludingSelf
+                                                                     : ipc::CommandScope::AllExceptSelf,
+                                 {}, std::move(cmd));
+                    return;
+                }
+                std::string target = first_word(rest);
+                std::string cmd = normalize_cmd(rest.substr(std::min(rest.size(), target.size())));
+                if (cmd.empty()) return;
+                if (cmd.front() != '/') cmd = "/echo " + cmd;
+                if (iequals(target, "all")) dispatch_bus(ipc::CommandScope::AllExceptSelf, {}, std::move(cmd));
+                else if (iequals(target, "group")) dispatch_bus(ipc::CommandScope::GroupExceptSelf, {}, std::move(cmd));
+                else dispatch_bus(ipc::CommandScope::TargetPeer, std::move(target), std::move(cmd));
+            },
+            plugin::kCapCommands);
+    }
+
+    h.add_command(
+        owner_, "/dquery",
+        [this](std::string_view args) {
+            std::string_view rest = trim(args);
+            std::string target = first_word(rest);
+            std::string query = std::string(trim(rest.substr(std::min(rest.size(), target.size()))));
+            if (target.empty() || query.empty()) return;
+            if (!env_.ipc_bus) return;
+            auto peer = env_.ipc_bus->find_peer(target);
+            if (peer) {
+                say(std::format("[DanNet] {} -> {} HP:{}% Mana:{}% Zone:{} RG:{}", peer->character_name, query,
+                                peer->hp_pct, peer->mana_pct, peer->zone_short, peer->rgmercs_state));
+            }
+        },
+        plugin::kCapRead);
+
+    h.add_command(
+        owner_, "/dobserve",
+        [this](std::string_view) {
+            if (env_.ipc_bus && env_.ipc_bus->connected()) env_.ipc_bus->request_roster();
+        },
+        plugin::kCapRead);
 }
 
 // Each level is a few frames of the native stack (and two passes through the hooks for a script's line), so a line

@@ -5,6 +5,7 @@
 #include "core/build_info.h"
 #include "core/frame_sections.h"
 #include "core/wipe.h"
+#include "mq/lua_mq.h"
 
 namespace hailstone::app {
 
@@ -17,27 +18,30 @@ int ClientApp::run() {
     start_addons();
     auto last = Clock::now();
     auto start = last;
-    auto last_drawn = last;
+    last_drawn_time_ = last;
     float fps = 0.0f;
     // The game clock (core/step_clock.h): the rules run at 60 steps a second; game.fixed_step false steps once a
     // drawn frame instead, as the original's code is written (docs/mechanics.md "Frame rate").
     step_clock_.set_fixed(config_.get_bool("game.fixed_step", true));
     for (int frame = 0; !quit_ && window_.poll_events(); ++frame) {
         if (opts_.frames && frame >= opts_.frames) break;
-        retired_ui_textures_.reset(); // the last frame, which may have drawn it, is submitted (waits for the GPU)
+        const auto tick_begin = Clock::now();
+        bus_.poll();
+        if (!execution_.is_headless()) retired_ui_textures_.reset(); // the last frame, which may have drawn it, is submitted (waits for the GPU)
         perf_ui_.begin_frame();
-        // The frame cap (display.max_fps, --max-fps), and display.background_fps while another window has the focus:
-        // below 10 there, the loop runs on at 10 a second and draws only some frames, or none (app/frame_pace.h).
-        // A login/loading screen keeps an unlimited cap at kLightScreenCap so it does not spin; that includes the
-        // settle after zone-in, where screen_ is already InGame but the loading overlay is still drawn.
+        // Hailstone 24: decouple simulation tick rate (bg_tick_hz in BACKGROUND_HEADLESS) from visual rendering.
+        // Keep upstream kLightScreenCap capping on pre-game/settling screens.
         const bool light_screen = is_light_screen(screen_ == Screen::InGame, zone_settling());
-        const FramePace pace = frame_pace(opts_.max_fps, background_fps_, window_.focused(),
-            std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - last_drawn), light_screen);
+        const FramePace pace = frame_pace_for_state(
+            execution_.state(), opts_.max_fps, background_fps_, execution_.background_tick_hz(),
+            window_.focused(), std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - last_drawn_time_),
+            light_screen);
         if (pace.cap > 0) std::this_thread::sleep_until(last + std::chrono::microseconds(1000000 / pace.cap));
         perf_ui_.mark(FramePhase::Sleep);
-        if (!opts_.screenshot.empty() && opts_.frames && frame == opts_.frames - 1) vk_.request_screenshot(opts_.screenshot);
+        const bool screenshot_frame = !opts_.screenshot.empty() && opts_.frames && frame == opts_.frames - 1;
+        if (screenshot_frame) vk_.request_screenshot(opts_.screenshot);
         screenshot_this_frame_ = false;
-        if (window_.input().key_pressed[0xb7] && print_screen_takes_screenshot()) take_screenshot();
+        if (!pace.skip_ui_build && window_.input().key_pressed[0xb7] && print_screen_takes_screenshot()) take_screenshot();
         change_asset_folder_at_login();
         if (window_.take_close_request()) window_close_request();
         // A close request held through a loading screen reaches the window procedure once a screen pumps messages.
@@ -80,12 +84,17 @@ int ClientApp::run() {
         if (browser_)
             browser_->poll(static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count()));
-        update_window_title();
+        if (!pace.skip_ui_build) update_window_title();
         // ProcessMouseInput @0x5f9e30: without MouseRightHanded (0xddf744) the buttons trade places (from the next
         // events on).
         window_.set_swap_mouse_buttons(conn_ && !conn_->client_option(game::ClientOption::MouseRightHanded));
         update_lap.mark("browser, window");
-        if (automation_) automation_->frame();
+        if (automation_) {
+            const auto lua_t0 = Clock::now();
+            automation_->frame();
+            execution_.record_lua_pulse(static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - lua_t0).count()));
+        }
         update_lap.mark("automation");
         if (conn_ && world_objects_ && screen_ == Screen::InGame && player_ready_) {
             world_objects_->update(*conn_);
@@ -97,12 +106,15 @@ int ClientApp::run() {
             update_missiles();
         }
         update_lap.mark("world objects update");
-        // The gamepad before the UI frame: its mode decides what ImGui gets from it (docs/gamepad.md).
-        update_gamepad(dt);
-        // /safelock: the windows get no mouse while the interface is locked (__ProcessMouseEvents).
-        // Behind the loading screen (zone_settle_) neither do they.
-        ui_.set_mouse_locked(conn_ && screen_ == Screen::InGame && (conn_->interface_locked() || zone_settling()));
-        ui_.new_frame();
+        const bool build_ui = !pace.skip_ui_build || screenshot_frame;
+        if (build_ui) {
+            // The gamepad before the UI frame: its mode decides what ImGui gets from it (docs/gamepad.md).
+            update_gamepad(dt);
+            // /safelock: the windows get no mouse while the interface is locked (__ProcessMouseEvents).
+            // Behind the loading screen (zone_settle_) neither do they.
+            ui_.set_mouse_locked(conn_ && screen_ == Screen::InGame && (conn_->interface_locked() || zone_settling()));
+            ui_.new_frame();
+        }
         update_lap.mark("gamepad, UI new frame");
         // The boats move first: the player is carried by, and collides with, a boat where it is drawn this frame.
         if (conn_) {
@@ -172,33 +184,42 @@ int ClientApp::run() {
         }
         update_lap.mark("spawn smoothing");
         // Ctrl+Shift+D: the developer windows (info panel, spawn list, "Lua UI") on or off.
-        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_D)) {
+        if (build_ui && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_D)) {
             game_view_.dev_windows = !game_view_.dev_windows;
             if (lua_ui_) lua_ui_->set_show_control(game_view_.dev_windows);
         }
         perf_ui_.mark(FramePhase::Update);
         core::frame_sections::Lap lap;
-        sync_item_preview();
-        lap.mark("item preview sync");
-        draw_ui(fps);
-        lap.mark("draw_ui");
-        if (lua_ui_) {
-            update_eq_host();
-            sync_plugin_windows();
-            lap.mark("eq host update");
-            eq_api_->begin_frame();
-            lap.mark("eq api begin_frame");
-            const std::size_t lua_bytes = lua_ui_->allocated_bytes();
-            lua_ui_->frame();
-            eq_host_.close_top_window = false; // (a press no window took this frame)
-            static constexpr const char* kLuaFrame = "Lua UI frame"; // one address for both (names match by it)
-            lap.mark(kLuaFrame);
-            core::frame_sections::add_bytes(kLuaFrame, lua_ui_->allocated_bytes() - lua_bytes);
+        if (build_ui) {
+            sync_item_preview();
+            lap.mark("item preview sync");
+            draw_ui(fps);
+            lap.mark("draw_ui");
+            if (lua_ui_) {
+                update_eq_host();
+                sync_plugin_windows();
+                lap.mark("eq host update");
+                eq_api_->begin_frame();
+                lap.mark("eq api begin_frame");
+                const std::size_t lua_bytes = lua_ui_->allocated_bytes();
+                lua_ui_->frame();
+                eq_host_.close_top_window = false; // (a press no window took this frame)
+                static constexpr const char* kLuaFrame = "Lua UI frame"; // one address for both (names match by it)
+                lap.mark(kLuaFrame);
+                core::frame_sections::add_bytes(kLuaFrame, lua_ui_->allocated_bytes() - lua_bytes);
+            }
+            window_.set_text_input(std::exchange(web_text_input_, false)); // a page that has the keys (app/lua_eq_web.cpp)
+            settle_frame_.ui = true; // the UI pack's in-game frame ran (or there is none)
+            if (screen_ == Screen::InGame && zone_settling()) ui::loading_overlay(loading_view_);
+            if (automation_) automation_->imgui(game_view_.dev_windows);
+        } else {
+            if (lua_ui_) update_eq_host();
+            if (screen_ == Screen::InGame && player_ready_ && zone_settling()) {
+                settle_frame_.ui = true;
+                settle_frame_.scene = true;
+                update_zone_settle();
+            }
         }
-        window_.set_text_input(std::exchange(web_text_input_, false)); // a page that has the keys (app/lua_eq_web.cpp)
-        settle_frame_.ui = true; // the UI pack's in-game frame ran (or there is none)
-        if (screen_ == Screen::InGame && zone_settling()) ui::loading_overlay(loading_view_);
-        if (automation_) automation_->imgui(game_view_.dev_windows);
         // The select clock runs on through character creation (input scripts drive both screens).
         if (screen_ != Screen::Characters && screen_ != Screen::Create) select_shown_.reset();
         else if (!select_shown_) select_shown_ = Clock::now();
@@ -211,7 +232,7 @@ int ClientApp::run() {
                                  link_death_since_
                                      ? std::chrono::duration<double>(Clock::now() - *link_death_since_).count()
                                      : -1.0);
-        {
+        if (build_ui) {
             PerfInputs perf;
             if (zone_renderer_) perf.zone = &zone_renderer_->stats();
             if (actor_renderer_) perf.actors = &actor_renderer_->stats();
@@ -253,7 +274,7 @@ int ClientApp::run() {
                 conn_->show_chat("The moon turns the color of blood.");
             blood_moon_ = blood;
         }
-        if (audio_) {
+        if (audio_ && !pace.skip_ui_build) {
             auto now_ms = static_cast<std::uint32_t>(t * 1000.0) + 1;
             if (in_world && conn_) {
                 update_listener();
@@ -265,8 +286,9 @@ int ClientApp::run() {
             update_music();
             audio_->update(now_ms);
         }
-        if (zone_particles_ && (in_world || pre_game)) zone_particles_->update(dt, camera_.position);
-        if (spell_particles_ && in_world && conn_) {
+        if (in_world && conn_) update_guide();
+        if (!pace.skip_ui_build && zone_particles_ && (in_world || pre_game)) zone_particles_->update(dt, camera_.position);
+        if (!pace.skip_ui_build && spell_particles_ && in_world && conn_) {
             auto cues = conn_->take_spell_effect_cues();
             auto effect_packets = conn_->take_effect_packets();
             if (!spell_effects_) { // /showspelleffects off: none start (the removals still stop what is shown)
@@ -278,7 +300,6 @@ int ClientApp::run() {
             const double bolt_now = bolt_clock();
             if (spell_bolts_ && lighting_mode_ == render::LightingMode::Modern)
                 spell_bolts_->take_cues(*conn_, cues, bolt_now);
-            update_guide();
             spell_particles_->set_guide_line(guide_.line());
             spell_particles_->set_find_trail_style(game::normalize_find_trail_style(
                 config_.get_int("display.find_trail_style", 0)));
@@ -290,8 +311,11 @@ int ClientApp::run() {
                         if (m.serial == serial && !m.done) return m.has_actor ? m.actor_position : m.position;
                     return std::nullopt;
                 });
+        } else if (pace.skip_ui_build && in_world && conn_) {
+            (void)conn_->take_spell_effect_cues();
+            (void)conn_->take_effect_packets();
         }
-        if (actor_emitters_ && actor_renderer_ && ((in_world && conn_) || pre_game)) {
+        if (!pace.skip_ui_build && actor_emitters_ && actor_renderer_ && ((in_world && conn_) || pre_game)) {
             // The drawn spawns' own emitters, on the pose drawn last frame.
             // The reader is set when the zone's library changes, not every frame; it reads in the texture loader's job.
             if (emitter_reader_library_ != actor_library_) {
@@ -327,6 +351,14 @@ int ClientApp::run() {
                                         return actors->drawn_playing(id, code, time);
                                     });
         }
+        if (pace.skip_ui_build && !screenshot_frame) {
+            if (conn_) (void)conn_->take_weather();
+            execution_.record_render_skipped();
+            execution_.record_sim_tick(static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - tick_begin).count()));
+            publish_bus_telemetry();
+            continue;
+        }
         float brightness = (in_world || pre_game) && outdoor_light_ ? render::outdoor_brightness(sky_hour) : 1.0f;
         std::optional<game::SceneFogFrame> fog_frame;
         if (in_world || pre_game) {
@@ -360,12 +392,15 @@ int ClientApp::run() {
         for (auto& slot : previews_)
             if (slot.view) slot.view->prepare(dt);
         // A frame not drawn (the background frame rate, or a minimised window) runs as one the GPU had no image for.
-        const bool screenshot_frame = !opts_.screenshot.empty() && opts_.frames && frame == opts_.frames - 1;
         auto f = pace.draw || screenshot_frame ? vk_.begin_frame_commands() : std::nullopt;
         perf_ui_.mark(FramePhase::Wait);
-        if (f) last_drawn = now;
+        if (f) last_drawn_time_ = now;
         if (!f) {
             ui_.end_frame_without_render();
+            execution_.record_render_skipped();
+            execution_.record_sim_tick(static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - tick_begin).count()));
+            publish_bus_telemetry();
             continue;
         }
         lap = core::frame_sections::Lap();
@@ -844,6 +879,14 @@ int ClientApp::run() {
         lap.mark("ImGui render");
         perf_ui_.mark(FramePhase::Record);
         vk_.end_frame(*f);
+        execution_.record_frame_presented();
+        if (execution_.is_transitioning()) {
+            execution_.complete_foreground_transition();
+            last_telemetry_at_ = {};
+        }
+        execution_.record_sim_tick(static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - tick_begin).count()));
+        publish_bus_telemetry();
         perf_ui_.set_presented(vk_.frames_presented(), vk_.frame_generated());
         perf_ui_.mark(FramePhase::Present);
         settle_frame_.scene = in_game;
@@ -891,6 +934,98 @@ void ClientApp::update_guide() {
     else if (u.gone) conn_->ui_message(name + " is no longer here.");
     else if (u.no_way) conn_->ui_message("There is no way to " + name + " from here.");
     else if (u.waiting_mesh) conn_->ui_message("The path to " + name + " will show once this zone's map is ready.");
+}
+
+void ClientApp::apply_execution_state(ExecutionState target) {
+    if (target == ExecutionState::BackgroundHeadless) {
+        if (execution_.is_headless()) return;
+        execution_.enter_background_headless();
+        window_.set_visible(false);
+        vk_.suspend_for_background();
+        if (audio_) {
+            auto s = audio_->settings();
+            s.mute = true;
+            audio_->set_settings(s);
+        }
+        log::info("execution state -> BACKGROUND_HEADLESS (swapchain/scene targets suspended)");
+        last_telemetry_at_ = {};
+    } else if (target == ExecutionState::ForegroundFull || target == ExecutionState::Transitioning) {
+        if (execution_.is_foreground()) {
+            window_.raise_and_focus();
+            return;
+        }
+        execution_.request_foreground();
+        vk_.resume_for_foreground();
+        apply_scene_options();
+        window_.set_visible(true);
+        window_.raise_and_focus();
+        if (audio_) audio_->set_settings(audio::load_audio_settings(config_));
+        last_drawn_time_ = {};
+        log::info("execution state -> TRANSITIONING -> FOREGROUND_FULL");
+        last_telemetry_at_ = {};
+    }
+}
+
+void ClientApp::publish_bus_telemetry() {
+    if (!bus_.connected()) return;
+    const auto now = Clock::now();
+    if (last_telemetry_at_ != Clock::time_point{} && now - last_telemetry_at_ < std::chrono::milliseconds(250)) return;
+    last_telemetry_at_ = now;
+
+    std::uint64_t rss_bytes = platform::resident_memory().value_or(0);
+    std::uint64_t vram_bytes = 0;
+    for (const auto& h : vk_.heap_use()) {
+        if (h.device_local) vram_bytes += h.allocated;
+    }
+    execution_.update_memory_stats(rss_bytes, vram_bytes);
+
+    ipc::SessionSnapshot snap;
+    snap.session_id = session_id_;
+    snap.pid = static_cast<std::uint32_t>(platform::process_id());
+    snap.exec_state = execution_.state();
+    snap.rss_mib = static_cast<std::uint32_t>(rss_bytes >> 20);
+    snap.vram_mib = static_cast<std::uint32_t>(vram_bytes >> 20);
+    snap.last_switch_ms = static_cast<std::uint32_t>(execution_.metrics().last_switch_ms);
+    snap.updated_ms = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+
+    if (conn_ && screen_ == Screen::InGame && player_ready_) {
+        snap.online = true;
+        snap.character_name = conn_->character_name();
+        snap.server_name = server_profile_.name.empty() ? char_view_.server_name : server_profile_.name;
+        snap.zone_short = conn_->world().zone_short_name;
+        if (const game::Spawn* me = conn_->world().player()) {
+            snap.class_short = game::class_short_name(me->class_id);
+            snap.level = me->level;
+        }
+        const auto hp = conn_->own_hp();
+        const auto& ps = conn_->player_status();
+        snap.hp_pct = static_cast<std::uint8_t>(hp.max > 0 ? std::clamp<std::int64_t>(hp.cur * 100 / hp.max, 0, 100) : 0);
+        snap.mana_pct = static_cast<std::uint8_t>(
+            ps.max_mana > 0 ? std::clamp<std::int64_t>(std::int64_t(ps.mana) * 100 / ps.max_mana, 0, 100) : 0);
+        snap.end_pct = static_cast<std::uint8_t>(
+            ps.max_endurance > 0 ? std::clamp<std::int64_t>(std::int64_t(ps.endurance) * 100 / ps.max_endurance, 0, 100) : 0);
+        snap.target_id = conn_->world().target_id;
+        if (snap.target_id != 0) {
+            if (auto it = conn_->world().spawns.find(snap.target_id); it != conn_->world().spawns.end())
+                snap.target_name = it->second.name;
+        }
+        if (conn_->group().active) {
+            snap.group_leader = conn_->group().leader;
+        }
+    } else {
+        snap.online = false;
+        snap.character_name = opts_.auto_character.empty() ? opts_.account : opts_.auto_character;
+        snap.server_name = server_profile_.name;
+    }
+
+    if (automation_) {
+        if (automation_->scripts().running("rgmercs")) snap.rgmercs_state = "Running";
+        else snap.rgmercs_state = "Stopped";
+        snap.script_health = "OK";
+    }
+    bus_.publish_telemetry(snap);
 }
 
 

@@ -225,7 +225,12 @@ void ClientApp::update_zone_settle() {
         return;
     }
     auto now = Clock::now();
-    if (actor_renderer_) settle_frame_.actors_waiting = actor_renderer_->stats().undressed;
+    if (execution_.is_headless()) {
+        settle_frame_.actors_waiting = 0;
+        settle_frame_.shadow_builds = 0;
+    } else if (actor_renderer_) {
+        settle_frame_.actors_waiting = actor_renderer_->stats().undressed;
+    }
     bool done = zone_settle_.update(settle_frame_, std::chrono::duration<double>(now - start_time_).count());
     settle_frame_ = {};
     loading_view_.detail = zone_settle_.detail();

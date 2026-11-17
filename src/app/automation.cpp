@@ -64,6 +64,8 @@ struct Automation::Impl {
         ctx.conn = conn();
         ctx.nav = env.nav ? env.nav() : nullptr;
         ctx.server_name = env.server_name ? env.server_name() : std::string();
+        ctx.ipc_bus = env.ipc_bus;
+        if (ctx.lua_dir.empty()) ctx.lua_dir = (env.data_dir / "scripts").string();
         return ctx;
     }
 
@@ -150,6 +152,7 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     };
     ce.face = m.env.face;
     ce.keypress = m.env.keypress;
+    ce.ipc_bus = m.env.ipc_bus;
     m.commands = std::make_unique<mq::Commands>(ce);
 
     std::error_code ec;
@@ -160,6 +163,7 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     se.context = ce.context;
     se.print = ce.echo;
     se.run = ce.run;
+    se.ipc_bus = m.env.ipc_bus;
     se.dirs = search_dirs(m.env.data_dir / "scripts", m.env.install_dir / "scripts");
     se.config_dir = m.env.data_dir / "scripts" / "config";
     // Scripts as plugins (mq/lua_hailstone.cpp): the same chain, UI bridge and packets as the compiled plugins.
@@ -293,6 +297,10 @@ void Automation::imgui(bool dev) {
     if (!ui::lua::replaces("PluginConsent")) m.consent_window();
     if (dev) m.dev_window();
     ui::lua::raise_guarded_windows(); // the question above every window drawn this frame
+}
+
+void Automation::run_command(const std::string& line) {
+    if (!line.empty()) impl_->run(line);
 }
 
 void Automation::shutdown() {

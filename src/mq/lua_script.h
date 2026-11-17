@@ -22,6 +22,7 @@
 #include "core/log.h"
 #include "core/sha256.h"
 #include "game/server_ext.h"
+#include "ipc/session_bus.h"
 #include "mq/event_pattern.h"
 #include "mq/lua_mq.h"
 
@@ -143,6 +144,7 @@ struct ScriptHost::Impl {
     void resume_threads(Script& s);
     void draw_windows(Script& s);
     plugin::ButtonRules rules(const game::LuaSocial& lua) const;
+    std::deque<ipc::ActorPacket> actor_inbox;
 };
 
 struct Script {
