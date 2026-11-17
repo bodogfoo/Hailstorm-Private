@@ -1280,6 +1280,14 @@ int l_lfs_dir(lua_State* L) {
 
 int l_lfs_mkdir(lua_State* L) {
     const char* raw_path = luaL_checkstring(L, 1);
+    // RG Mercs calls mkdir while walking an already-created config path. Treat
+    // an existing directory as a successful no-op before resolving the write
+    // operation; no filesystem mutation occurs in this case.
+    std::error_code existing_ec;
+    if (fs::is_directory(fs::path(raw_path), existing_ec)) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
     std::string why;
     auto resolved = resolve_sandbox_path(L, raw_path, PathAccess::Write, true, why);
     if (!resolved) {
