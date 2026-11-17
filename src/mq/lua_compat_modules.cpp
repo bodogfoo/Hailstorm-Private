@@ -87,12 +87,12 @@ bool check_under_root(const fs::path& root, const fs::path& given_path, bool all
     if (ec) return false;
 
     fs::path rel = canon_cand.lexically_relative(canon_root);
-    if (rel.empty() || rel.is_absolute()) return false;
-    if (rel == ".") {
+    if (rel.empty() || rel == ".") {
         if (!allow_root) return false;
         out = std::move(canon_cand);
         return true;
     }
+    if (rel.is_absolute()) return false;
     if (*rel.begin() == "..") return false;
     if (reject_config_subdir && is_config_segment(rel)) return false;
     out = std::move(canon_cand);
