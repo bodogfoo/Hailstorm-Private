@@ -144,6 +144,7 @@ add_library(hailstone_engine STATIC
   src/mq/lua_mq_web.cpp
   src/mq/lua_compat_modules.cpp
   src/mq/lua_hailstone.cpp
+  src/mq/rgmercs_bridge.cpp
   src/ipc/session_bus.cpp
   src/plugin/native_plugins.cpp
   src/plugin/plugin_tcp.cpp
@@ -553,6 +554,7 @@ add_library(hailstone_engine STATIC
   src/app/lua_eq_caps.cpp
   src/app/lua_eq_plugins.cpp
   src/app/lua_eq_scripts.cpp
+  src/app/lua_eq_rgmercs.cpp
   src/app/lua_eq_items.cpp
   src/app/lua_eq_itemdisplay.cpp
   src/app/lua_eq_adventure.cpp
@@ -1102,6 +1104,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/hailstone24/mq_login_import_test.cpp
     tests/hailstone24/login_autoselect_test.cpp
     tests/hailstone24/rgmercs_tlo_test.cpp
+    tests/hailstone24/rgmercs_native_ui_test.cpp
     tests/mq_event_pattern_test.cpp
     tests/lua_social_test.cpp
     tests/code_syntax_test.cpp

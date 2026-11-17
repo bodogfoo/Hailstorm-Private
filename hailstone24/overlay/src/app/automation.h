@@ -30,7 +30,7 @@
 #include "plugin/policy.h"
 
 namespace hailstone::net { class GameConnection; }
-namespace hailstone::mq { class ScriptHost; class Registry; struct Context; }
+namespace hailstone::mq { class ScriptHost; class Registry; struct Context; class RGMercsBridge; }
 namespace hailstone::game { class ExtensionChain; }
 namespace hailstone::plugin { class UiBridge; class WebAccess; }
 namespace hailstone::nav { class NavControl; }
@@ -88,6 +88,7 @@ public:
     plugin::UiBridge& plugin_ui();
     // The script host (the Lua socials run there too) and MQ's TLOs and types.
     mq::ScriptHost& scripts();
+    mq::RGMercsBridge& rgmercs();
     const mq::Registry& registry() const;
     const mq::Context& context(); // what the TLOs read now
     // An owner's capabilities by its tag (plugin::UiBridge::owner_tag): "plugin:<name>" a compiled plugin's while it

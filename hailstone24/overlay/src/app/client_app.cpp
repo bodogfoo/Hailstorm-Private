@@ -5,6 +5,7 @@
 #include "core/build_info.h"
 #include "core/frame_sections.h"
 #include "core/wipe.h"
+#include "mq/lua_mq.h"
 
 namespace hailstone::app {
 

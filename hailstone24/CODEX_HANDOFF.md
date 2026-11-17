@@ -5,7 +5,13 @@
 - **Local `AF_UNIX` IPC Bus & Process Supervisor (`hailstone24_broker`, `hailstone24_manager`)**: Same-UID `SO_PEERCRED` socket for `< 250 ms` foreground switching (`/switch` or manager hotkeys/click), `/bca`/`/bcaa`/`/bc`/`/rc`/`/dgt`/`/dquery`/`/dobserve` dispatch with ACKs, and `require('actors')` mailbox routing.
 - **Linux Shared GPU IPC (`VK_KHR_external_memory_fd` + `SCM_RIGHTS`)**: Unlocks `hailstone_gpu_cache_broker` and `--gpu-mode shared-broker` alongside `cached` (default for 32 GB Intel Arc Pro B70) and `deferred`.
 - **MacroQuest AutoLogin Importer (`--import-mq-logins`) & End-to-End Auto-Login (`--auto-login`, `--world`, `--auto-kick`)**: Read-only import (`SQLITE_OPEN_READONLY`) of MQ `login.db` (plaintext & `master_pass` XOR-encrypted), `MQ2AutoLogin.ini`, and `server^acct^char^pass` files into Hailstone's isolated `--data-dir` + `libsecret` keyring, writing a passwordless `[global]`/`[slot01..slot24]` `hailstone24_roster.ini`. Supports full end-to-end auto-login (server -> world -> character -> enter world), interactive `"Auto-login"` toggle (`login.auto_login`), Server Select keyword filtering, case-insensitive favorite pinning at the top, and automatic kick-existing confirmation (`--auto-kick` / `login.auto_kick=1` / headless mode). **Existing EverQuest & MacroQuest files are never modified.**
-- **RG Mercs Compatibility Layer**: Native C `lsqlite3` (with 5-arg `update_hook`) & `lfs`, sandboxed `io` (`mq.configDir` read/write with Hailstone quotas + read-only `mq.luaDir`, no `io.popen`/`io.tmpfile`), path-confined `lfs`/`lsqlite3.open`, safe `package` (`package.config`, `package.loaded`, no `loadlib`) & `debug` (`getinfo`/`traceback` only), `ImVec4:ToImU32()`, `ImGui.ConsoleWidget`, IPC-bridged `actors`, `bit32`, `mq.DataType.new`, `mq.AddTopLevelObject`, `mq.PackageMan`, `mq.ICONS`, `mq.Set`, `ImPlot`/`ImAnim`/`Zep` shims, and `Raid`, `AltAbility`, `InvSlot`, `MacroQuest`, `Lua`, `DanNet`, `Mercenary`, `Nav` TLOs.
+- **RG Mercs Compatibility & Native Hailstone UI (`RGMercsWnd`)**:
+  - **Native ImGui Presentation (`ui/modern/rgmercs.lua`)**: Static, Hailstone-native window titled `RGMercs` (`hud.Dialog("RGMercsWnd", ...)`), accessible from the EQ cascade menu (`RGMercs`), Lua Scripts `"UI"` button, and `/rgmercs` / `/rgui` client commands. Zero Zep, `IM_COL32`, `ImHashStr`, `GetForegroundDrawList`, or unsupported ImGui bindings.
+  - **Header & Status Banner**: Shows Character (`Stabbinyah`), Class, Server (`EZ Server`), live state (`Running`/`Paused`/`Stopped`/`Ended`/`Error`), `Start`/`Stop`/`Pause`/`Resume`/`Reload` controls, `Autorun`, `Native UI only` (`suppress_script_ui`), `Save`/`Reset`, and visible Status + Error banner (plus Dismiss / jump to Debug Log) without opening game chat.
+  - **9 Navigation Sections**: `Combat`, `Targeting`, `Healing`, `Buffs`, `Debuffs`, `Movement`, `Loot`, `Class settings`, and `Debug/logging` (module enable/status table, bounded scrolling log viewer with Clear & Copy to clipboard, and `/rgl` command sender).
+  - **Decoupled Adapter Boundary (`src/mq/rgmercs_bridge.{h,cpp}`, `src/app/lua_eq_rgmercs.cpp`, `hailstone.rgmercs`)**: Keeps RG Mercs gameplay/combat logic separate from presentation via `eq.RGMercs*` on the UI side and `hailstone.rgmercs` (`using_native_ui`, `get_setting`, `get_settings`, `set_setting`, `set_module`, `log`, `set_status`, `clear_error`, `take_pending_changes`) on the script side; suppresses `mq.imgui` script draw callbacks for `rgmercs` when `suppress_script_ui` is enabled.
+  - **Sandboxed Per-Character Persistence & Read-Only Migration**: Persists settings to `<character_dir>/rgmercs_settings.ini` strictly confined inside canonical `data_dir`. Scans `<data_dir>/scripts/config` for existing RG Mercs SQLite DBs (`SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX`, no URI) and Lua config tables for one-time auto-import or manual re-import.
+  - **Script Runtime Foundation**: Native C `lsqlite3` & `lfs`, sandboxed `io` (`mq.configDir`), safe `package`/`debug`, IPC-bridged `actors`, `bit32`, `mq.DataType.new`, `mq.AddTopLevelObject`, `mq.PackageMan`, `ImGui.Dummy` arg fix, and `Raid`, `AltAbility`, `InvSlot`, `MacroQuest`, `Lua`, `DanNet`, `Mercenary`, `Nav` TLOs.
 
 ---
 
@@ -43,7 +49,7 @@ cmake --build build -j"$(nproc)"
 
 ## 3. Run Unit & Integration Tests
 ```bash
-ctest --test-dir build --output-on-failure -R "ExecutionController|FramePace|SessionBus|MQ AutoLogin|Login auto-select|Server select|RG Mercs|GPU IPC"
+ctest --test-dir build --output-on-failure -R "ExecutionController|FramePace|SessionBus|MQ AutoLogin|Login auto-select|Server select|RG Mercs|RGMercsBridge|eq.RGMercs|EQ menu|GPU IPC"
 # Or run the full upstream + Hailstone 24 suite:
 ./build/hailstone_tests
 ```
@@ -74,6 +80,9 @@ Copy `hailstone24/configs/hailstone24.ini` to `"${HAILSTONE_DATA_DIR}/hailstone.
 ```bash
 git clone https://github.com/DerpleDude/rgmercs.git "${HAILSTONE_DATA_DIR}/scripts/rgmercs"
 ```
+Once logged into world (e.g., `Stabbinyah` on `EZ Server`):
+- Open the native `RGMercs` window via the EQ cascade menu (`RGMercs`), the `UI` button in `Lua Scripts`, or `/rgmercs` (`/rgui`).
+- Existing RG Mercs SQLite/Lua configs under `${HAILSTONE_DATA_DIR}/scripts/config` are detected read-only and offered for import (or auto-imported once per character), with settings persisted per character at `<character_dir>/rgmercs_settings.ini`.
 
 ---
 

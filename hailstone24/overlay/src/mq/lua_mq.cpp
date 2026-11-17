@@ -346,7 +346,12 @@ int l_print(lua_State* L) {
         luaL_addvalue(&b);
     }
     luaL_pushresult(&b);
-    Script::of(L).host->say(lua_tostring(L, -1));
+    const char* msg = lua_tostring(L, -1);
+    Script& sc = Script::of(L);
+    if (msg && sc.name == "rgmercs" && sc.host && sc.host->env.rgmercs) {
+        sc.host->env.rgmercs->append_log("info", msg);
+    }
+    sc.host->say(msg ? msg : "");
     return 0;
 }
 
@@ -1179,6 +1184,18 @@ do
         return f()
     end
 end
+do
+    local raw_load = load
+    if raw_load then
+        function load(chunk, chunkname, mode, env)
+            if env ~= nil then return raw_load(chunk, chunkname, 't', env) end
+            return raw_load(chunk, chunkname, 't')
+        end
+        function loadstring(chunk, chunkname)
+            return raw_load(chunk, chunkname, 't')
+        end
+    end
+end
 local yield = coroutine.yield
 
 function mq.delay(t, cond)
@@ -1280,6 +1297,10 @@ end
 function ImGui.SetNextWindowPos(x, y, cond)
     if type(x) == 'table' then return ui.SetNextWindowPos(x.x or x[1], x.y or x[2], y) end
     return ui.SetNextWindowPos(x, y, cond)
+end
+function ImGui.Dummy(w, h)
+    if type(w) == 'table' then return ui.Dummy(w.x or w[1] or 0, w.y or w[2] or 0) end
+    return ui.Dummy(w or 0, h or 0)
 end
 local ImVec4_methods = {}
 function ImVec4_methods:ToImU32()
@@ -1603,11 +1624,7 @@ bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
         lua_pushcclosure(L, runaway_safe_call, 1);
         lua_setglobal(L, name);
     }
-    // No code from strings or files beyond allowed modules; os only for the clock.
-    for (const char* drop : {"load", "loadstring"}) {
-        lua_pushnil(L);
-        lua_setglobal(L, drop);
-    }
+    // Keep text-only load/loadstring (wrapped in kPrelude to force mode 't'); string.dump stays removed and os stays clock-only.
     lua_getglobal(L, "string");
     lua_pushnil(L);
     lua_setfield(L, -2, "dump");
@@ -1735,13 +1752,14 @@ bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
 
 bool ScriptHost::run(const std::string& name, const std::vector<std::string>& args, std::string* why) {
     Impl& m = *impl_;
+    const std::string key = lower(name);
     auto refuse = [&](std::string text) {
         if (why) *why = text;
+        if (key == "rgmercs" && m.env.rgmercs) m.env.rgmercs->set_script_error(text);
         m.say("[Lua] " + text);
         return false;
     };
     m.reap();
-    std::string key = lower(name);
     // The Lua socials' names (button_name): a script of such a name would share a social's config folder and
     // browser owner.
     if (key.starts_with(kSocialPrefix)) return refuse(std::format("{}: a script's name cannot start with \"{}\"", key, kSocialPrefix));
@@ -1789,6 +1807,11 @@ bool ScriptHost::run(const std::string& name, const std::vector<std::string>& ar
     lua_xmove(L, sc.co, 1); // the chunk onto the coroutine
     sc.co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
     watch(sc.co);
+    if (key == "rgmercs" && m.env.rgmercs) {
+        m.env.rgmercs->clear_error();
+        m.env.rgmercs->set_script_status("running");
+        m.env.rgmercs->append_log("info", "Starting rgmercs script...");
+    }
     m.say(std::format("[Lua] running {} ({})", key, plugin::caps_text(caps)));
     log::info("lua: running {} from {}, sha256 {}, caps {}", key, entry->string(), to_hex(hash), plugin::caps_text(caps));
     m.scripts.push_back(std::move(s));
@@ -1803,6 +1826,10 @@ bool ScriptHost::Impl::kept(const Script& s) const {
 void ScriptHost::Impl::end(Script& s, const std::string& why) {
     s.stop_requested = true;
     if (s.status == Script::Status::Running || s.status == Script::Status::Paused) s.status = Script::Status::Exited;
+    if (s.name == "rgmercs" && env.rgmercs) {
+        env.rgmercs->set_script_status("exited");
+        env.rgmercs->append_log("info", "rgmercs " + why);
+    }
     say("[Lua] " + s.name + " " + why);
 }
 
@@ -1846,6 +1873,10 @@ bool ScriptHost::pause(std::string_view name, std::optional<bool> paused) {
     if (impl_->refuse_control(*s)) return true;
     bool now_paused = paused ? *paused : s->status != Script::Status::Paused;
     s->status = now_paused ? Script::Status::Paused : Script::Status::Running;
+    if (s->name == "rgmercs" && impl_->env.rgmercs) {
+        impl_->env.rgmercs->set_script_status(now_paused ? "paused" : "running");
+        impl_->env.rgmercs->append_log("info", now_paused ? "rgmercs paused." : "rgmercs resumed.");
+    }
     impl_->say(std::format("[Lua] {} {}", s->name, now_paused ? "paused" : "resumed"));
     return true;
 }
@@ -1977,10 +2008,12 @@ void ScriptHost::pulse() {
         } else if (st == LUA_OK) {
             s.stop_requested = true; // the script's main chunk returned
             s.status = Script::Status::Exited;
+            if (s.name == "rgmercs" && m.env.rgmercs) m.env.rgmercs->set_script_status("exited");
             m.say("[Lua] " + s.name + " ended");
         } else if (lua_touserdata(s.co, -1) == &kExitKey) {
             s.stop_requested = true;
             s.status = Script::Status::Exited;
+            if (s.name == "rgmercs" && m.env.rgmercs) m.env.rgmercs->set_script_status("exited");
             m.say("[Lua] " + s.name + " ended");
         } else {
             const char* err = lua_tostring(s.co, -1);
@@ -2049,6 +2082,7 @@ void ScriptHost::imgui() {
 
 void ScriptHost::Impl::draw_windows(Script& s) {
     if (s.stop_requested || s.windows.empty() || (s.caps & plugin::kCapUi) == 0) return;
+    if (s.name == "rgmercs" && env.rgmercs && env.rgmercs->suppress_script_ui()) return;
     ++s.busy;
     plugin::CallerScope scope(s.caps, s.name);
     // A draw function may destroy or make windows (its own too): this frame draws the ones there were, those still

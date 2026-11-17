@@ -25,6 +25,7 @@
 #include "ipc/session_bus.h"
 #include "mq/event_pattern.h"
 #include "mq/lua_mq.h"
+#include "mq/rgmercs_bridge.h"
 
 namespace hailstone::mq {
 
@@ -252,6 +253,7 @@ struct Script {
         if (status == Status::Failed || status == Status::Exited) return;
         status = Status::Failed;
         error = std::move(why);
+        if (name == "rgmercs" && host && host->env.rgmercs) host->env.rgmercs->set_script_error(error);
         host->say(std::format("[Lua] {} ended with an error: {}", name, error));
         log::warn("lua script {}: {}", name, error);
         stop_requested = true;

@@ -95,6 +95,23 @@ assert(io.open(mq.luaDir .. '/rgmercs_validation.lua', 'w') == nil, 'write into 
 assert(io.open('/etc/passwd', 'r') == nil, 'io.open absolute read escape should be blocked')
 assert(io.open(mq.configDir .. '/../../outside.txt', 'w') == nil, 'io.open traversal write escape should be blocked')
 
+-- Test Codex RG Mercs compat additions (mkdir no-op, load text-only, randomseed, hashes, ImGui/ImAnim/Zep).
+assert(lfs.mkdir(mq.configDir) == true, 'lfs.mkdir on existing mq.configDir should succeed')
+assert(lfs.mkdir(cfg_dir) == true, 'lfs.mkdir on existing subdir should succeed')
+math.randomseed(123.456)
+local loader_fn = assert(load('return { x = 42 }', 'cfg', 't', {}))
+assert(loader_fn().x == 42, 'text load() failed')
+assert(load('\27LuaR', 'bin', 'b') == nil, 'binary bytecode load() must be rejected')
+assert(type(ImHashStr('rgmercs')) == 'number' and ImHashStr('rgmercs') == ImHashStr('rgmercs'), 'ImHashStr mismatch')
+assert(IM_COL32(255, 0, 0, 255) == 0xFF0000FF, 'IM_COL32 mismatch')
+assert(IamWaveType ~= nil and IamWaveType.Sine == 0, 'IamWaveType missing')
+assert(require('ImAnim').Oscillate(0, 0, 10) == 5, 'ImAnim.Oscillate mismatch')
+assert(type(ImGui.GetStyleColorName(ImGuiCol.Text)) == 'string', 'GetStyleColorName missing')
+assert(ImGui.GetFont() == 3, 'GetFont mismatch')
+assert(ImGui.GetForegroundDrawList().AddImage ~= nil, 'GetForegroundDrawList missing')
+assert(getmetatable(ImGuiCol).__index.Text == ImGuiCol.Text, 'ImGuiCol __index missing')
+assert(require('Zep').Console.new():CreateBuffer() ~= nil, 'Zep CreateBuffer missing')
+
 -- Test mq.DataType.new + mq.AddTopLevelObject (RG Mercs RGMercs TLO).
 local rgType = mq.DataType.new('RGMercsType', {
     Members = {

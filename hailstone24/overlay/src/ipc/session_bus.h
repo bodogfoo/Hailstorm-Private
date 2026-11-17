@@ -131,7 +131,7 @@ bool decode_state_control(const std::uint8_t* data, std::size_t size, StateContr
 
 class SessionBusClient {
 public:
-    SessionBusClient() = default;
+    SessionBusClient();
     ~SessionBusClient();
 
     SessionBusClient(const SessionBusClient&) = delete;
@@ -166,7 +166,7 @@ private:
 
 class SessionBusServer {
 public:
-    SessionBusServer() = default;
+    SessionBusServer();
     ~SessionBusServer();
 
     SessionBusServer(const SessionBusServer&) = delete;

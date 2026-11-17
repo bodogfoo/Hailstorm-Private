@@ -87,12 +87,12 @@ bool check_under_root(const fs::path& root, const fs::path& given_path, bool all
     if (ec) return false;
 
     fs::path rel = canon_cand.lexically_relative(canon_root);
-    if (rel.empty() || rel.is_absolute()) return false;
-    if (rel == ".") {
+    if (rel == "." || canon_cand == canon_root) {
         if (!allow_root) return false;
         out = std::move(canon_cand);
         return true;
     }
+    if (rel.empty() || rel.is_absolute()) return false;
     if (*rel.begin() == "..") return false;
     if (reject_config_subdir && is_config_segment(rel)) return false;
     out = std::move(canon_cand);
@@ -1281,11 +1281,16 @@ int l_lfs_dir(lua_State* L) {
 int l_lfs_mkdir(lua_State* L) {
     const char* raw_path = luaL_checkstring(L, 1);
     std::string why;
-    auto resolved = resolve_sandbox_path(L, raw_path, PathAccess::Write, false, why);
+    auto resolved = resolve_sandbox_path(L, raw_path, PathAccess::Write, true, why);
     if (!resolved) {
         lua_pushnil(L);
         lua_pushstring(L, why.c_str());
         return 2;
+    }
+    std::error_code existing_ec;
+    if (fs::is_directory(*resolved, existing_ec)) {
+        lua_pushboolean(L, 1);
+        return 1;
     }
     CompatHolder* h = get_compat(L);
     if (h && !h->env.config_dir.empty()) {
@@ -2043,6 +2048,13 @@ int luaopen_actors(lua_State* L) {
 constexpr const char* kLuaCompatScript = R"lua(
 local preloaded = ...
 
+-- MacroQuest commonly seeds with a fractional elapsed-time value; Lua 5.4
+-- requires an integer seed.
+do
+    local randomseed = math.randomseed
+    math.randomseed = function(seed) return randomseed(math.floor(tonumber(seed) or 0)) end
+end
+
 -- mq.PackageMan
 preloaded['mq.PackageMan'] = {
     Require = function(pkg, mod_name)
@@ -2103,6 +2115,24 @@ local icons = setmetatable(known_icons, {
 })
 preloaded['mq.ICONS'] = icons
 
+-- ImGui global string hash & color helpers used by RG Mercs
+_G.ImHashStr = _G.ImHashStr or function(value)
+    local s = tostring(value)
+    local hash = 2166136261
+    for i = 1, #s do
+        hash = bit32.bxor(hash, string.byte(s, i))
+        hash = (hash * 16777619) % 4294967296
+    end
+    return hash
+end
+_G.IM_COL32 = _G.IM_COL32 or function(r, g, b, a)
+    return bit32.bor(
+        bit32.band(math.floor(a or 255), 0xff) * 0x1000000,
+        bit32.band(math.floor(b or 0), 0xff) * 0x10000,
+        bit32.band(math.floor(g or 0), 0xff) * 0x100,
+        bit32.band(math.floor(r or 0), 0xff))
+end
+
 -- ImPlot lightweight safe shim (RG Mercs performance monitor)
 _G.ImAxis = _G.ImAxis or { X1 = 0, X2 = 1, X3 = 2, Y1 = 3, Y2 = 4, Y3 = 5 }
 _G.ImPlotLineFlags = _G.ImPlotLineFlags or { None = 0, Segments = 1024, Loop = 2048, SkipNaN = 4096, NoClip = 8192, Shaded = 16384 }
@@ -2123,10 +2153,12 @@ preloaded['ImPlot'] = ImPlot
 
 -- ImAnim lightweight deterministic tween shim (RG Mercs splash loader)
 _G.IamEaseType = _G.IamEaseType or { Linear = 0, InQuad = 1, OutQuad = 2, InOutQuad = 3, InQuart = 7, OutExpo = 14, OutBack = 20, OutBounce = 26 }
+_G.IamWaveType = _G.IamWaveType or { Sine = 0, Sawtooth = 1, Square = 2, Triangle = 3 }
 _G.IamPolicy = _G.IamPolicy or { Crossfade = 0, Cut = 1 }
 local ImAnim = {
     EasePreset = function(t) return t or 0 end,
     OscillateVec2 = function() return ImVec2(0, 0) end,
+    Oscillate = function(_, min_value, max_value) return (min_value + max_value) * 0.5 end,
     TweenFloat = function(_, _, target) return target or 0 end,
     TweenVec2 = function(_, _, target) return target or ImVec2(0, 0) end,
     TweenColor = function(_, _, target) return target end,
@@ -2151,6 +2183,7 @@ local function new_zep_widget()
         SetFlags = function(self, f) self._flags = self._flags | (f or 0) end,
         ClearFlags = function(self, f) self._flags = self._flags & ~(f or 0) end,
         GetBuffer = function(self) return self end,
+        CreateBuffer = function(self) return new_zep_widget() end,
         Render = function(self)
             if ImGui and ImGui.TextUnformatted and #self._lines > 0 then
                 local start = math.max(1, #self._lines - 20)

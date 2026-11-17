@@ -40,6 +40,8 @@ namespace hailstone::plugin { class UiBridge; class WebAccess; }
 
 namespace hailstone::mq {
 
+class RGMercsBridge;
+
 struct ScriptEnv {
     plugin::Hooks* hooks = nullptr;
     const plugin::Policy* policy = nullptr;
@@ -78,6 +80,8 @@ struct ScriptEnv {
     std::int64_t runaway_ms = 0;
     // Hailstone 24: local IPC bus for require('actors') and cross-session routing.
     ipc::SessionBusClient* ipc_bus = nullptr;
+    // Hailstone 24: native RG Mercs state/settings/log bridge (non-owning, optional).
+    RGMercsBridge* rgmercs = nullptr;
 };
 
 // A Lua social's hot button pressed (game/lua_social.h). The social's Lua sees `button` = {social, bar, button,

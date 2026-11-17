@@ -389,6 +389,7 @@ struct SessionBusClient::Impl {
     }
 };
 
+SessionBusClient::SessionBusClient() = default;
 SessionBusClient::~SessionBusClient() { disconnect(); }
 
 bool SessionBusClient::connect(const std::string& socket_path, const std::string& session_id) {
@@ -680,6 +681,7 @@ struct SessionBusServer::Impl {
     }
 };
 
+SessionBusServer::SessionBusServer() = default;
 SessionBusServer::~SessionBusServer() { stop(); }
 
 bool SessionBusServer::start(const std::string& socket_path) {

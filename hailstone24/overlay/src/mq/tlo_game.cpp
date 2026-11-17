@@ -369,7 +369,12 @@ const game::GroupMember* member_of(const Context& c, const Value& v) {
 // ---------------------------------------------------------------- registration helpers
 
 template <typename F> void add(const Type* t, const char* name, F fn) {
-    const_cast<Type*>(t)->members[name] = MemberFn(std::move(fn));
+    if constexpr (std::is_invocable_r_v<V, F, const Context&, const Value&, std::string_view>) {
+        const_cast<Type*>(t)->members[name] = MemberFn(std::move(fn));
+    } else {
+        const_cast<Type*>(t)->members[name] = [fn = std::move(fn)](const Context& c, const Value& v,
+                                                                     std::string_view) -> V { return fn(c, v); };
+    }
 }
 
 // A spawn member reading only the spawn.

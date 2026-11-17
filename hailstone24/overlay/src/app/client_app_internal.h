@@ -485,6 +485,12 @@ public:
         };
         aenv.ipc_bus = &bus_;
         automation_ = std::make_unique<Automation>(aenv);
+        eq_host_.rgmercs = &automation_->rgmercs();
+        eq_host_.run_rgmercs_command = [this](const std::string& cmd) {
+            if (!automation_ || cmd.empty()) return false;
+            automation_->run_command(cmd);
+            return true;
+        };
         {
             const std::string bus_sock = !opts_.ipc_socket.empty()
                                              ? opts_.ipc_socket
@@ -579,6 +585,13 @@ public:
         // /luasocial [n | new]: the Lua social editor on social n (1..120), or on the first empty social.
         automation_->hooks().add_command(plugin::Hooks::kClient, "/luasocial", [this](std::string_view args) {
             lua_social_command(args);
+        });
+        // /rgmercs and /rgui: toggle Hailstone's native RGMercs window.
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/rgmercs", [this](std::string_view) {
+            if (eq_api_) eq_api_->toggle("RGMercsWnd");
+        });
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/rgui", [this](std::string_view) {
+            if (eq_api_) eq_api_->toggle("RGMercsWnd");
         });
         actions_ui_ = std::make_unique<ActionsUi>(config_, config_path_);
         // The gamepad (app/gamepad.h, docs/gamepad.md; a client extension): hailstone.ini gamepad.*.

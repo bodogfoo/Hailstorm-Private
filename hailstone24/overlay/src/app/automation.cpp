@@ -14,6 +14,7 @@
 #include "core/log.h"
 #include "mq/commands.h"
 #include "mq/lua_mq.h"
+#include "mq/rgmercs_bridge.h"
 #include "mq/tlo.h"
 #include "net/game_connection.h"
 #include "plugin/native_plugins.h"
@@ -45,6 +46,7 @@ struct Automation::Impl {
     mq::Registry registry;
     mq::Context ctx;
     std::unique_ptr<mq::Commands> commands;
+    std::unique_ptr<mq::RGMercsBridge> rgmercs = std::make_unique<mq::RGMercsBridge>();
     std::unique_ptr<mq::ScriptHost> scripts;
     std::unique_ptr<plugin::NativePlugins> plugins;
     std::set<std::string> autoskill_holds; // the scripts holding autoskill off
@@ -107,7 +109,10 @@ struct Automation::Impl {
         // The server's scripts and plugins are looked for first (servers/<profile>/scripts and plugins).
         // Out of the world (character select, a login, disconnected): the character's autorun list goes until a
         // character's zone-in sets it again (ClientApp's zone-in).
-        if (!has || c->server_rules()->provisional) scripts->set_autorun_file({});
+        if (!has || c->server_rules()->provisional) {
+            scripts->set_autorun_file({});
+            rgmercs->clear_character();
+        }
         scripts->set_server_dir(dir.empty() ? fs::path() : dir / "scripts");
         plugins->set_server_dir(dir.empty() ? fs::path() : dir / "plugins");
         recheck();
@@ -164,6 +169,7 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     se.print = ce.echo;
     se.run = ce.run;
     se.ipc_bus = m.env.ipc_bus;
+    se.rgmercs = m.rgmercs.get();
     se.dirs = search_dirs(m.env.data_dir / "scripts", m.env.install_dir / "scripts");
     se.config_dir = m.env.data_dir / "scripts" / "config";
     // Scripts as plugins (mq/lua_hailstone.cpp): the same chain, UI bridge and packets as the compiled plugins.
@@ -237,6 +243,7 @@ plugin::Hooks& Automation::hooks() { return impl_->hooks; }
 std::shared_ptr<game::ExtensionChain> Automation::extensions() { return impl_->extensions; }
 plugin::UiBridge& Automation::plugin_ui() { return impl_->plugin_ui; }
 mq::ScriptHost& Automation::scripts() { return *impl_->scripts; }
+mq::RGMercsBridge& Automation::rgmercs() { return *impl_->rgmercs; }
 
 std::uint32_t Automation::plugin_caps(std::string_view tag) const {
     // By the owner's tag alone (plugin::UiBridge::owner_tag): a script named after a compiled plugin never gets the
