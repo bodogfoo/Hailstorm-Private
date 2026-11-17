@@ -825,6 +825,10 @@ int GetIO(lua_State *L) {
 		lua_pushinteger(L, frame);
 		lua_rawsetp(L, LUA_REGISTRYINDEX, &kFrame);
 		ImGuiIO &io = ImGui::GetIO();
+		lua_createtable(L, 0, 2);
+		lua_pushnumber(L, io.DisplaySize.x); lua_setfield(L, -2, "x");
+		lua_pushnumber(L, io.DisplaySize.y); lua_setfield(L, -2, "y");
+		lua_setfield(L, real, "DisplaySize");
 		lua_pushnumber(L, io.DisplaySize.x); lua_setfield(L, real, "width");
 		lua_pushnumber(L, io.DisplaySize.y); lua_setfield(L, real, "height");
 		lua_pushnumber(L, io.Framerate); lua_setfield(L, real, "fps");
