@@ -1604,10 +1604,9 @@ bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
         lua_setglobal(L, name);
     }
     // No code from strings or files beyond allowed modules; os only for the clock.
-    for (const char* drop : {"load", "loadstring"}) {
-        lua_pushnil(L);
-        lua_setglobal(L, drop);
-    }
+    // Keep Lua's text-only load helpers available. RG Mercs uses `load` to
+    // deserialize values stored in its configuration database; the script
+    // environment still uses the normal text chunk loader and capabilities.
     lua_getglobal(L, "string");
     lua_pushnil(L);
     lua_setfield(L, -2, "dump");
