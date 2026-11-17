@@ -2156,6 +2156,7 @@ preloaded['ImPlot'] = ImPlot
 
 -- ImAnim lightweight deterministic tween shim (RG Mercs splash loader)
 _G.IamEaseType = _G.IamEaseType or { Linear = 0, InQuad = 1, OutQuad = 2, InOutQuad = 3, InQuart = 7, OutExpo = 14, OutBack = 20, OutBounce = 26 }
+_G.IamWaveType = _G.IamWaveType or { Sine = 0, Sawtooth = 1, Square = 2, Triangle = 3 }
 _G.IamPolicy = _G.IamPolicy or { Crossfade = 0, Cut = 1 }
 local ImAnim = {
     EasePreset = function(t) return t or 0 end,
@@ -2163,6 +2164,7 @@ local ImAnim = {
     TweenFloat = function(_, _, target) return target or 0 end,
     TweenVec2 = function(_, _, target) return target or ImVec2(0, 0) end,
     TweenColor = function(_, _, target) return target end,
+    Oscillate = function(_, min_value, max_value) return (min_value + max_value) * 0.5 end,
 }
 preloaded['ImAnim'] = ImAnim
 
