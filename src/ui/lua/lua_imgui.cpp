@@ -904,6 +904,12 @@ int GetStyleColorName(lua_State *L) {
 	}
 	return 1;
 }
+int GetFont(lua_State *L) {
+	// Lua callers pass this back to PushFont; the client uses its default UI font
+	// when no explicit MacroQuest font handle is available.
+	lua_pushinteger(L, 3);
+	return 1;
+}
 int PushStyleVar(lua_State *L) {
 	int idx = I(L, 1);
 	if (idx < 0 || idx >= ImGuiStyleVar_COUNT) {
@@ -1178,7 +1184,7 @@ void register_ui_api(lua_State *L) {
 		{"DrawLine", DrawLine}, {"DrawCircleFilled", DrawCircleFilled}, {"DrawCircle", DrawCircle},
 		{"DrawTriangleFilled", DrawTriangleFilled},
 		{"DrawRectFilled", DrawRectFilled}, {"DrawText", DrawText}, {"DrawImage", DrawImage}, {"GetCursorScreenPos", GetCursorScreenPos},
-		{"PushFont", PushFont}, {"PopFont", PopFont}, {"PushChatFont", PushChatFont}, {"ChatFontSize", ChatFontSize},
+		{"GetFont", GetFont}, {"PushFont", PushFont}, {"PopFont", PopFont}, {"PushChatFont", PushChatFont}, {"ChatFontSize", ChatFontSize},
 		{nullptr, nullptr}};
 	luaL_newlib(L, fns);
 	SetInts(L, "WindowFlags", {{"None", ImGuiWindowFlags_None}, {"NoTitleBar", ImGuiWindowFlags_NoTitleBar},
