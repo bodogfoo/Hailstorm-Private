@@ -895,6 +895,15 @@ int PopStyleColor(lua_State *L) {
 	}
 	return 0;
 }
+int GetStyleColorName(lua_State *L) {
+	int idx = I(L, 1);
+	if (idx < 0 || idx >= ImGuiCol_COUNT) {
+		lua_pushliteral(L, "Unknown");
+	} else {
+		lua_pushstring(L, ImGui::GetStyleColorName(idx));
+	}
+	return 1;
+}
 int PushStyleVar(lua_State *L) {
 	int idx = I(L, 1);
 	if (idx < 0 || idx >= ImGuiStyleVar_COUNT) {
@@ -1157,7 +1166,7 @@ void register_ui_api(lua_State *L) {
 		{"BeginDragDropSource", BeginDragDropSource}, {"SetDragDropPayload", SetDragDropPayload},
 		{"EndDragDropSource", EndDragDropSource}, {"BeginDragDropTarget", BeginDragDropTarget},
 		{"AcceptDragDropPayload", AcceptDragDropPayload}, {"EndDragDropTarget", EndDragDropTarget},
-		{"PushStyleColor", PushStyleColor}, {"PopStyleColor", PopStyleColor}, {"PushStyleVar", PushStyleVar},
+		{"PushStyleColor", PushStyleColor}, {"PopStyleColor", PopStyleColor}, {"GetStyleColorName", GetStyleColorName}, {"PushStyleVar", PushStyleVar},
 		{"PushStyleColors", PushStyleColors}, {"PushStyleVars", PushStyleVars},
 		{"PopStyleVar", PopStyleVar}, {"GetItemRect", GetItemRect}, {"DrawRect", DrawRect}, {"DrawRectGradient", DrawRectGradient},
 		{"DrawLine", DrawLine}, {"DrawCircleFilled", DrawCircleFilled}, {"DrawCircle", DrawCircle},
