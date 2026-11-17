@@ -932,8 +932,16 @@ int GetCursorPosY(lua_State *L) {
 	lua_pushnumber(L, ImGui::GetCursorPosY());
 	return 1;
 }
+int GetCursorPosX(lua_State *L) {
+	lua_pushnumber(L, ImGui::GetCursorPosX());
+	return 1;
+}
 int SetCursorPosY(lua_State *L) {
 	ImGui::SetCursorPosY(F(L, 1));
+	return 0;
+}
+int SetCursorPosX(lua_State *L) {
+	ImGui::SetCursorPosX(F(L, 1));
 	return 0;
 }
 int GetForegroundDrawList(lua_State *L) {
@@ -1196,7 +1204,7 @@ void register_ui_api(lua_State *L) {
 		{"SameLine", SameLine}, {"PushTextWrapPos", PushTextWrapPos}, {"PopTextWrapPos", PopTextWrapPos}, {"NewLine", NewLine}, {"Separator", Separator}, {"Spacing", Spacing},
 		{"Dummy", Dummy}, {"Indent", Indent}, {"Unindent", Unindent}, {"BeginGroup", BeginGroup},
 		{"EndGroup", EndGroup}, {"PushID", PushID}, {"PopID", PopID}, {"SetNextItemWidth", SetNextItemWidth},
-		{"GetContentRegionAvail", GetContentRegionAvail}, {"GetCursorPos", GetCursorPos}, {"GetCursorPosY", GetCursorPosY}, {"SetCursorPos", SetCursorPos}, {"SetCursorPosY", SetCursorPosY}, {"SetCursorScreenPos", SetCursorScreenPos}, {"GetScrollY", GetScrollY}, {"SetScrollY", SetScrollY}, {"GetScrollMaxY", GetScrollMaxY}, {"GetMousePos", GetMousePos}, {"GetWindowPos", GetWindowPos}, {"Foreground", Foreground},
+		{"GetContentRegionAvail", GetContentRegionAvail}, {"GetCursorPos", GetCursorPos}, {"GetCursorPosX", GetCursorPosX}, {"GetCursorPosY", GetCursorPosY}, {"SetCursorPos", SetCursorPos}, {"SetCursorPosX", SetCursorPosX}, {"SetCursorPosY", SetCursorPosY}, {"SetCursorScreenPos", SetCursorScreenPos}, {"GetScrollY", GetScrollY}, {"SetScrollY", SetScrollY}, {"GetScrollMaxY", GetScrollMaxY}, {"GetMousePos", GetMousePos}, {"GetWindowPos", GetWindowPos}, {"Foreground", Foreground},
 		{"GetWindowSize", GetWindowSize}, {"FindWindowRect", FindWindowRect}, {"PushClipRect", PushClipRect}, {"PopClipRect", PopClipRect},
 		{"SetScrollHereY", SetScrollHereY}, {"IsWindowFocused", IsWindowFocused},
 		{"IsWindowAppearing", IsWindowAppearing}, {"SetWindowFocus", SetWindowFocus}, {"IsItemFocused", IsItemFocused},
