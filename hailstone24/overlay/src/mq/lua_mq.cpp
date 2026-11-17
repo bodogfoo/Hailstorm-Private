@@ -1281,8 +1281,93 @@ function ImGui.SetNextWindowPos(x, y, cond)
     if type(x) == 'table' then return ui.SetNextWindowPos(x.x or x[1], x.y or x[2], y) end
     return ui.SetNextWindowPos(x, y, cond)
 end
+local ImVec4_methods = {}
+function ImVec4_methods:ToImU32()
+    local function ch(v, d)
+        local n = tonumber(v) or d
+        if n < 0 then n = 0 elseif n > 1 then n = 1 end
+        return math.floor(n * 255 + 0.5)
+    end
+    local r = ch(self.x or self[1], 0)
+    local g = ch(self.y or self[2], 0)
+    local b = ch(self.z or self[3], 0)
+    local a = ch(self.w or self[4], 1)
+    return (a << 24) | (b << 16) | (g << 8) | r
+end
+local ImVec4_mt = { __index = ImVec4_methods }
 function ImVec2(x, y) return {x = x or 0, y = y or 0} end
-function ImVec4(x, y, z, w) return {x = x or 0, y = y or 0, z = z or 0, w = w or 0} end
+function ImVec4(x, y, z, w)
+    return setmetatable({x = x or 0, y = y or 0, z = z or 0, w = w or 0}, ImVec4_mt)
+end
+if ImGui.TextUnformatted == nil and ui.Text ~= nil then
+    ImGui.TextUnformatted = ui.Text
+end
+do
+    local ConsoleWidget = {}
+    ConsoleWidget.__index = ConsoleWidget
+    function ConsoleWidget.new(id)
+        return setmetatable({
+            _id = tostring(id or 'Console'),
+            _lines = {},
+            autoScroll = true,
+            maxBufferLines = 1000,
+        }, ConsoleWidget)
+    end
+    function ConsoleWidget:AppendText(fmt, ...)
+        local text = (select('#', ...) > 0) and string.format(tostring(fmt), ...) or tostring(fmt or '')
+        for line in string.gmatch(text .. '\n', '([^\n]*)\n') do
+            if line ~= '' or #self._lines == 0 then
+                self._lines[#self._lines + 1] = line
+            end
+        end
+        local cap = math.min(math.max(tonumber(self.maxBufferLines) or 1000, 1), 2000)
+        while #self._lines > cap do
+            table.remove(self._lines, 1)
+        end
+    end
+    function ConsoleWidget:AppendTextUnformatted(text)
+        if text ~= nil then self:AppendText('%s', tostring(text)) end
+    end
+    function ConsoleWidget:Clear()
+        self._lines = {}
+    end
+    function ConsoleWidget:IsCursorAtEnd()
+        return self.autoScroll == true
+    end
+    function ConsoleWidget:ScrollToBottom()
+        self._scrollToBottom = true
+    end
+    function ConsoleWidget:GetBuffer()
+        return self
+    end
+    function ConsoleWidget:PushStyleColor() end
+    function ConsoleWidget:PopStyleColor() end
+    function ConsoleWidget:Render(size)
+        local w, h = 0, 0
+        if type(size) == 'table' then
+            w = size.x or size[1] or 0
+            h = size.y or size[2] or 0
+        elseif type(size) == 'number' then
+            w = size
+        end
+        local visible = ui.BeginChild('##console_' .. self._id, w, h, false, 0)
+        if visible then
+            local total = #self._lines
+            local start = math.max(1, total - 400)
+            for i = start, total do
+                ui.Text(self._lines[i])
+            end
+            if (self.autoScroll or self._scrollToBottom) and ui.SetScrollHereY then
+                ui.SetScrollHereY(1.0)
+                self._scrollToBottom = false
+            end
+        end
+        ui.EndChild()
+    end
+    ImGui.ConsoleWidget = setmetatable(ConsoleWidget, {
+        __call = function(_, id) return ConsoleWidget.new(id) end,
+    })
+end
 ImGuiWindowFlags = ui.WindowFlags
 ImGuiCond = ui.Cond
 ImGuiCol = ui.Col
@@ -1623,8 +1708,12 @@ bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
         if (actor_inbox.size() >= ipc::kMaxPendingInbound) actor_inbox.pop_front();
         actor_inbox.push_back(pkt);
     };
+    cenv.say = [this](const std::string& text) { say(text); };
+    cenv.write_blocked = [&sc]() { return sc.dry || sc.closing; };
     cenv.script_name = sc.name;
     cenv.config_dir = script_config_dir(sc);
+    cenv.script_root = sc.root;
+    cenv.read_dirs = dirs();
     register_compat_modules(L, cenv);
     register_hailstone(L);
     if (luaL_loadbufferx(L, kPrelude, std::strlen(kPrelude), "=mq", "t") != LUA_OK) {
