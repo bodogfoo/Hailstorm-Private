@@ -202,6 +202,39 @@ struct LoginView {
     // page, which OpenProject opens.
     std::vector<std::string> release_notes;
     std::string project_page;
+
+    // MacroQuest-style group/box profile launcher (profiles/<name>.ini or .json, never holding passwords).
+    struct GroupSlotView {
+        int slot_number = 1;
+        int launch_order = 1;
+        bool enabled = true;
+        std::string session_id;
+        std::string character;
+        std::string account;
+        std::string server_id;
+        std::string world;
+        std::string class_role;
+        std::string settings_path;
+        bool auto_login = true;
+        bool headless = true;
+        std::string status = "Offline";
+        std::string zone;
+        bool online = false;
+    };
+    struct GroupProfileSummaryView {
+        std::string id;
+        std::string name;
+        std::string description;
+        std::string source_path;
+        std::size_t slot_count = 0;
+    };
+    std::filesystem::path profiles_dir;
+    std::vector<GroupProfileSummaryView> group_profiles;
+    int group_selected = -1;
+    std::vector<GroupSlotView> group_slots;
+    int group_slot_selected = -1;
+    std::string group_profile_choice;
+    int group_slot_choice = 0;
 };
 
 // Save, Delete (asked again first) and OpenAssets are for the picked server; picking another and New are done
@@ -225,7 +258,8 @@ enum class LoginAction {
     UpdateDownload, UpdateRestart, UpdateSkip, UpdateNotes, OpenProject,
     AddonInspect, AddonInstall, AddonCancel, AddonUpdate, AddonRemove, AddonAuto, AddonFolder, AddonPage, AddonCheck,
     AddonRevoke, AddonAskAgain, AddonSuggestLook, AddonSuggestLater, AddonSuggestNever, AddonBrowse, AddonStoreLook,
-    AddonStart, ResumeToken
+    AddonStart, ResumeToken,
+    SelectGroupProfile, LaunchGroup, LaunchGroupSlot, StopGroup, RelaunchGroup, RefreshGroupProfiles
 };
 
 // A row of the login screen's Characters list: a character one of the server's accounts was seen to have.

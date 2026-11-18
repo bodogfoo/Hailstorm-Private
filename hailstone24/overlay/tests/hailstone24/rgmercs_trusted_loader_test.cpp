@@ -343,3 +343,93 @@ print('LOWCAP', f_lowcap == nil, tostring(err2):find('may do only', 1, true) ~= 
     CHECK(strict.has_line("UNAPPROVED true true"));
     CHECK(strict.has_line("LOWCAP true true"));
 }
+
+TEST_CASE("TrustedScriptLoader: rejects scripts/config executables even with class_configs decoys and handles empty/nil settings") {
+    LoaderHarness h;
+
+    // Put a decoy executable with malicious/sentinel error in scripts/config/ -> MUST NOT be picked over scripts/rgmercs/
+    write_file(h.cfg_dir / "rgmercs" / "class_configs" / "Live" / "rog_class_config.lua",
+               "error('SECURITY_FAIL_EXECUTED_CONFIG_DECOY')\n");
+    write_file(h.cfg_dir / "rgmercs" / "settings_decoy.lua",
+               "return { hack = function() return 'bad' end }\n");
+
+    // Put trusted executable class config under scripts/rgmercs/class_configs/Live/
+    write_file(h.lua_dir / "rgmercs" / "class_configs" / "Live" / "rog_class_config.lua", R"lua(
+local mq = require('mq')
+local hailstone = require('hailstone')
+hailstone.rgmercs.set_module('Class', true, 'Ready', 'Trusted Live ROG loaded')
+hailstone.rgmercs.set_status('Class initialized: ' .. mq.TLO.Me.Name() .. '/' .. mq.TLO.Me.Class.ShortName() .. '/' .. mq.TLO.MacroQuest.Server())
+return { _version = 'TrustedLiveROG', DefaultConfig = { SneakAttack = true } }
+)lua");
+
+    // Create 0-byte, comment-only, and explicit `return nil` data files in scripts/config/
+    write_file(h.cfg_dir / "empty_zero.lua", "");
+    write_file(h.cfg_dir / "comments_only.lua", "-- comment only\n-- nothing returned\n");
+    write_file(h.cfg_dir / "explicit_nil.lua", "return nil\n");
+
+    write_file(h.lua_dir / "rgmercs" / "init.lua", R"lua(
+local mq = require('mq')
+local hailstone = require('hailstone')
+
+-- MacroQuest.Path('config') vs MacroQuest.Path('lua')
+assert(mq.TLO.MacroQuest.Path('lua')() == mq.luaDir)
+assert(mq.TLO.MacroQuest.Path('config')() == mq.configDir)
+
+-- Relative and absolute class_configs paths MUST resolve from scripts/rgmercs/, ignoring scripts/config decoy!
+local c1 = assert(dofile('class_configs/Live/rog_class_config.lua'))
+assert(c1._version == 'TrustedLiveROG')
+local c2 = assert(dofile('rgmercs/class_configs/Live/rog_class_config.lua'))
+assert(c2._version == 'TrustedLiveROG')
+local c3 = assert(dofile('scripts/rgmercs/class_configs/Live/rog_class_config.lua'))
+assert(c3._version == 'TrustedLiveROG')
+local c4 = assert(dofile(mq.luaDir .. '/rgmercs/class_configs/Live/rog_class_config.lua'))
+assert(c4._version == 'TrustedLiveROG')
+
+-- Direct attempts to load executable code from scripts/config/ MUST fail as non-data and never run!
+local bad1, e1 = loadfile(mq.configDir .. '/rgmercs/class_configs/Live/rog_class_config.lua')
+assert(bad1 == nil and tostring(e1):find('not data', 1, true) ~= nil, tostring(e1))
+local bad2, e2 = loadfile('scripts/config/rgmercs/class_configs/Live/rog_class_config.lua')
+assert(bad2 == nil and tostring(e2):find('not data', 1, true) ~= nil, tostring(e2))
+local bad3, e3 = loadfile('config/rgmercs/settings_decoy.lua')
+assert(bad3 == nil and tostring(e3):find('not data', 1, true) ~= nil, tostring(e3))
+local bad4, e4 = loadfile('settings_decoy.lua')
+assert(bad4 == nil and tostring(e4):find('not data', 1, true) ~= nil, tostring(e4))
+
+-- Empty / nil settings files & mq.pickle(..., nil) return `{}` so `next(cfg)` never errors!
+local t_zero = assert(dofile('empty_zero.lua'))
+assert(type(t_zero) == 'table' and next(t_zero) == nil)
+local t_comm = assert(dofile('comments_only.lua'))
+assert(type(t_comm) == 'table' and next(t_comm) == nil)
+local t_nil = assert(dofile('explicit_nil.lua'))
+assert(type(t_nil) == 'table' and next(t_nil) == nil)
+
+mq.pickle('pickled_nil.lua', nil)
+local t_pick = assert(dofile('pickled_nil.lua'))
+assert(type(t_pick) == 'table' and next(t_pick) == nil)
+
+-- Empty hailstone.rgmercs settings queries initialize missing tables safely for next()/pairs()
+local st = hailstone.rgmercs.get_state()
+assert(type(st) == 'table' and type(st.modules) == 'table')
+local s = hailstone.rgmercs.get_settings()
+assert(type(s) == 'table' and next(s) == nil or type(s) == 'table')
+
+print('DECOY_BLOCKED_AND_EMPTY_SAFE_OK')
+)lua");
+
+    std::string why;
+    REQUIRE(h.host->run("rgmercs", {}, &why));
+    for (int i = 0; i < 32 && h.host->running("rgmercs"); ++i) {
+        h.now_ms += 10;
+        h.host->pulse();
+    }
+
+    const auto list = h.host->list();
+    REQUIRE_FALSE(list.empty());
+    CHECK(list[0].status == "EXITED");
+    CHECK(list[0].error.empty());
+    CHECK(h.has_line("DECOY_BLOCKED_AND_EMPTY_SAFE_OK"));
+    const auto snap = h.bridge.snapshot();
+    CHECK(snap.last_error.empty());
+    CHECK(snap.runtime_state == "Class initialized: Stabbinyah/ROG/EZ Server");
+}
+

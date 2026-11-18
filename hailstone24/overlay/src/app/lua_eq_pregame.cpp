@@ -421,6 +421,49 @@ void emit_login(Out& o, const ui::LoginView& v) {
     o.str("assetsDir", ui::selected_assets_dir(v).string());
     o.integer("boxCount", static_cast<lua_Integer>(ui::box_accounts(v).size()));
     o.boolean("boxReady", ui::box_ready(v));
+    o.str("profilesDir", v.profiles_dir.string());
+    o.table();
+    for (std::size_t i = 0; i < v.group_profiles.size(); ++i) {
+        const auto& gp = v.group_profiles[i];
+        o.table();
+        o.str("id", gp.id);
+        o.str("name", gp.name);
+        o.str("description", gp.description);
+        o.str("sourcePath", gp.source_path);
+        o.integer("slotCount", static_cast<lua_Integer>(gp.slot_count));
+        o.close(i);
+    }
+    o.close("groupProfiles");
+    o.integer("groupSelected",
+              v.group_selected >= 0 && v.group_selected < static_cast<int>(v.group_profiles.size())
+                  ? v.group_selected + 1
+                  : 0);
+    o.table();
+    for (std::size_t i = 0; i < v.group_slots.size(); ++i) {
+        const auto& s = v.group_slots[i];
+        o.table();
+        o.integer("slotNumber", s.slot_number);
+        o.integer("launchOrder", s.launch_order);
+        o.boolean("enabled", s.enabled);
+        o.str("sessionId", s.session_id);
+        o.str("character", s.character);
+        o.str("account", s.account);
+        o.str("serverId", s.server_id);
+        o.str("world", s.world);
+        o.str("classRole", s.class_role);
+        o.str("settingsPath", s.settings_path);
+        o.boolean("autoLogin", s.auto_login);
+        o.boolean("headless", s.headless);
+        o.str("status", s.status);
+        o.str("zone", s.zone);
+        o.boolean("online", s.online);
+        o.close(i);
+    }
+    o.close("groupSlots");
+    o.integer("groupSlotSelected",
+              v.group_slot_selected >= 0 && v.group_slot_selected < static_cast<int>(v.group_slots.size())
+                  ? v.group_slot_selected + 1
+                  : 0);
 }
 
 // view = eq.LoginScreen([revision])   -- nil unless the client shows its login screen; reading it draws the screen
@@ -502,6 +545,8 @@ int LoginSet(lua_State* L) {
     } else if (field == "quick") {
         const std::size_t n = ui::quick_characters(v).size(); // (gone before the argument is checked)
         v.quick_selected = index_arg(L, 2, n);
+    } else if (field == "groupSlot") {
+        v.group_slot_selected = index_arg(L, 2, v.group_slots.size());
     } else {
         return luaL_error(L, "eq.LoginSet: no field %s", lua_tostring(L, 1));
     }
@@ -746,6 +791,52 @@ int LoginDo(lua_State* L) {
             }
         }
         if (ok) action = A::AccountsChanged;
+    } else if (what == "refreshGroupProfiles") {
+        ok = !v.transient;
+        if (ok) action = A::RefreshGroupProfiles;
+    } else if (what == "selectGroupProfile") {
+        ok = !v.transient && !v.group_profiles.empty();
+        if (ok) {
+            if (lua_type(L, 2) == LUA_TNUMBER) {
+                const int idx = index_arg(L, 2, v.group_profiles.size());
+                if (idx >= 0 && idx < static_cast<int>(v.group_profiles.size())) {
+                    v.group_profile_choice = v.group_profiles[static_cast<std::size_t>(idx)].id;
+                } else {
+                    ok = false;
+                }
+            } else {
+                v.group_profile_choice = luaL_checkstring(L, 2);
+                ok = !v.group_profile_choice.empty();
+            }
+            if (ok) action = A::SelectGroupProfile;
+        }
+    } else if (what == "launchGroup") {
+        ok = !v.transient && v.group_selected >= 0 && !v.group_slots.empty();
+        if (ok) action = A::LaunchGroup;
+    } else if (what == "launchGroupSlot") {
+        if (!lua_isnoneornil(L, 2)) {
+            const int idx = index_arg(L, 2, v.group_slots.size());
+            if (idx >= 0 && idx < static_cast<int>(v.group_slots.size())) {
+                v.group_slot_selected = idx;
+                v.group_slot_choice = v.group_slots[static_cast<std::size_t>(idx)].slot_number;
+                ok = true;
+            } else {
+                ok = false;
+            }
+        } else if (v.group_slot_selected >= 0 &&
+                   v.group_slot_selected < static_cast<int>(v.group_slots.size())) {
+            v.group_slot_choice = v.group_slots[static_cast<std::size_t>(v.group_slot_selected)].slot_number;
+            ok = true;
+        } else {
+            ok = false;
+        }
+        if (ok) action = A::LaunchGroupSlot;
+    } else if (what == "stopGroup") {
+        ok = !v.transient;
+        if (ok) action = A::StopGroup;
+    } else if (what == "relaunchGroup") {
+        ok = !v.transient && v.group_selected >= 0 && !v.group_slots.empty();
+        if (ok) action = A::RelaunchGroup;
     } else {
         return luaL_error(L, "eq.LoginDo: no action %s", lua_tostring(L, 1));
     }

@@ -99,6 +99,16 @@ bool check_under_root(const fs::path& root, const fs::path& given_path, bool all
     return true;
 }
 
+bool starts_with_icase(std::string_view s, std::string_view prefix) {
+    if (s.size() < prefix.size()) return false;
+    for (std::size_t i = 0; i < prefix.size(); ++i) {
+        const auto a = static_cast<unsigned char>(std::tolower(static_cast<unsigned char>(s[i])));
+        const auto b = static_cast<unsigned char>(std::tolower(static_cast<unsigned char>(prefix[i])));
+        if (a != b) return false;
+    }
+    return true;
+}
+
 std::optional<fs::path> resolve_sandbox_path(lua_State* L, std::string_view given, PathAccess access, bool allow_root,
                                              std::string& why) {
     if (given.empty() || given.find('\0') != std::string_view::npos) {
@@ -121,10 +131,10 @@ std::optional<fs::path> resolve_sandbox_path(lua_State* L, std::string_view give
 #endif
     fs::path gp(norm);
     fs::path resolved;
-    if (check_under_root(h->env.config_dir, gp, allow_root, false, resolved)) {
-        return resolved;
-    }
     if (access == PathAccess::Write) {
+        if (check_under_root(h->env.config_dir, gp, allow_root, false, resolved)) {
+            return resolved;
+        }
         why = "write path is outside Hailstone mq.configDir";
         return std::nullopt;
     }
@@ -135,25 +145,50 @@ std::optional<fs::path> resolve_sandbox_path(lua_State* L, std::string_view give
         if (!d.empty()) ro_roots.push_back(d);
     }
 
-    if (gp.is_relative()) {
-        // For relative reads, prefer an existing file/dir under read-only script roots if not already handled,
-        // otherwise default to config_dir (so missing reads report ENOENT cleanly if confined there).
+    auto find_in_ro_roots = [&](bool require_exists) -> std::optional<fs::path> {
+        std::error_code ec;
         for (const auto& r : ro_roots) {
             fs::path cand;
-            std::error_code ec;
-            if (check_under_root(r, gp, allow_root, true, cand) && fs::exists(cand, ec)) {
+            if (check_under_root(r, gp, allow_root, true, cand) && (!require_exists || fs::exists(cand, ec))) {
                 return cand;
             }
+            if (gp.is_relative() && starts_with_icase(norm, "scripts/")) {
+                fs::path scripts_name = r.filename();
+                if (ascii_lower_trim_part(scripts_name.generic_string()) == "scripts") {
+                    const fs::path stripped(norm.substr(8));
+                    if (check_under_root(r, stripped, allow_root, true, cand) &&
+                        (!require_exists || fs::exists(cand, ec))) {
+                        return cand;
+                    }
+                }
+            }
         }
+        return std::nullopt;
+    };
+
+    if (gp.is_relative()) {
+        std::error_code ec;
+        const bool explicit_class_cfg = starts_with_icase(norm, "class_configs/") ||
+                                        starts_with_icase(norm, "rgmercs/class_configs/") ||
+                                        starts_with_icase(norm, "scripts/rgmercs/class_configs/");
+        if (explicit_class_cfg) {
+            if (auto cand = find_in_ro_roots(true)) return cand;
+            // Even when missing, do not route relative class_configs/ paths to scripts/config/.
+            why = "class config path not found in trusted script root";
+            return std::nullopt;
+        }
+        if (check_under_root(h->env.config_dir, gp, allow_root, false, resolved) && fs::exists(resolved, ec)) {
+            return resolved;
+        }
+        if (auto cand = find_in_ro_roots(true)) return cand;
         if (check_under_root(h->env.config_dir, gp, allow_root, false, resolved)) {
             return resolved;
         }
     } else {
-        for (const auto& r : ro_roots) {
-            if (check_under_root(r, gp, allow_root, true, resolved)) {
-                return resolved;
-            }
+        if (check_under_root(h->env.config_dir, gp, allow_root, false, resolved)) {
+            return resolved;
         }
+        if (auto cand = find_in_ro_roots(false)) return cand;
     }
 
     why = "path is outside Hailstone sandbox";

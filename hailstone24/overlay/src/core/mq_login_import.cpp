@@ -11,6 +11,7 @@
 #include <sstream>
 
 #include "core/ascii_case.h"
+#include "core/group_profile.h"
 #include "core/ini_file.h"
 #include "core/wipe.h"
 
@@ -496,6 +497,23 @@ MqImportResult import_mq_logins(const MqImportOptions& opts, platform::Credentia
         }
         if (!roster.save(opts.roster_out)) {
             res.warnings.push_back("Failed to write roster file: " + opts.roster_out.string());
+        }
+    }
+
+    if (opts.write_group_profiles && !opts.profiles_dir.empty() && !roster_slots.empty()) {
+        std::string shared_world;
+        for (const auto& r : roster_slots) {
+            if (!r.server_name.empty()) {
+                shared_world = r.server_name;
+                break;
+            }
+        }
+        const auto written_profiles = export_group_profiles_from_mq(
+            roster_slots, target.id, shared_world,
+            opts.default_profile_name.empty() ? target.id : opts.default_profile_name,
+            opts.profiles_dir, &res.warnings);
+        for (const auto& gp : written_profiles) {
+            res.group_profiles_written.push_back(gp.string());
         }
     }
 

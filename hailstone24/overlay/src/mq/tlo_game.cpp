@@ -1872,7 +1872,12 @@ void register_game_tlos(Registry& r) {
     add(g.macroquest, "BuildName", [](const Context&, const Value&, std::string_view) { return V::string("Hailstone24"); });
     add(g.macroquest, "BuildType", [](const Context&, const Value&, std::string_view) { return V::string("Release"); });
     add(g.macroquest, "GameState", g.everquest->members.at("GameState"));
-    add(g.macroquest, "Path", [](const Context& c, const Value&, std::string_view) { return V::string(c.lua_dir); });
+    add(g.macroquest, "Path", [](const Context& c, const Value&, std::string_view index) {
+        if (!index.empty() && iequals(index, "config") && !c.lua_dir.empty()) {
+            return V::string((std::filesystem::path(c.lua_dir) / "config").string());
+        }
+        return V::string(c.lua_dir);
+    });
     add(g.macroquest, "Server", g.everquest->members.at("Server"));
 
     Type& lua_t = const_cast<Type&>(*g.lua);

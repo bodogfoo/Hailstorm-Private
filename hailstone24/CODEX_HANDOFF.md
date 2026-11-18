@@ -10,9 +10,14 @@
   - **Header & Status Banner**: Shows Character (`Stabbinyah`), Class, Server (`EZ Server`), live state (`Running`/`Paused`/`Stopped`/`Ended`/`Error`), `Start`/`Stop`/`Pause`/`Resume`/`Reload` controls, `Autorun`, `Native UI only` (`suppress_script_ui`), `Save`/`Reset`, and visible Status + Error banner (plus Dismiss / jump to Debug Log) without opening game chat.
   - **9 Navigation Sections**: `Combat`, `Targeting`, `Healing`, `Buffs`, `Debuffs`, `Movement`, `Loot`, `Class settings`, and `Debug/logging` (module enable/status table, bounded scrolling log viewer with Clear & Copy to clipboard, and `/rgl` command sender).
   - **Decoupled Adapter Boundary (`src/mq/rgmercs_bridge.{h,cpp}`, `src/app/lua_eq_rgmercs.cpp`, `hailstone.rgmercs`)**: Keeps RG Mercs gameplay/combat logic separate from presentation via `eq.RGMercs*` on the UI side and `hailstone.rgmercs` (`using_native_ui`, `get_setting`, `get_settings`, `set_setting`, `set_module`, `log`, `set_status`, `clear_error`, `take_pending_changes`) on the script side; suppresses `mq.imgui` script draw callbacks for `rgmercs` when `suppress_script_ui` is enabled.
-  - **Sandboxed Per-Character Persistence & Read-Only Migration**: Persists settings to `<character_dir>/rgmercs_settings.ini` strictly confined inside canonical `data_dir`. Scans `<data_dir>/scripts/config` for existing RG Mercs SQLite DBs (`SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX`, no URI) and Lua config tables for one-time auto-import or manual re-import.
-  - **Trusted Script-Root Loader (`l_load_trusted_script`)**: Separates approved script-root executable loading (for RG Mercs `class_configs/*.lua` and helper chunks, with server policy/capability checks, `mq`, `require`, `ImGui`, and compat modules in the active environment, plus `package.path`/`package.searchpath`/`package.searchers` and `.lua`/slash `require`) from the restricted data-only config loader (`mq.configDir`/`mq.pickle`).
+  - **Sandboxed Per-Character Persistence & Read-Only Migration**: Persists settings to `<character_dir>/rgmercs_settings.ini` strictly confined inside canonical `data_dir`. Scans `<data_dir>/scripts/config` for existing RG Mercs SQLite DBs (`SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX`, no URI) and Lua config tables for one-time auto-import or manual re-import. Missing, empty, comment-only, or `nil`-pickled config tables safely normalize to `{}` so Lua `next()`/`pairs()` never fail with `bad argument #1 to next (table expected, got nil)`.
+  - **Trusted Script-Root Loader (`l_load_trusted_script`)**: Separates approved script-root executable loading (for `scripts/rgmercs/` modules and `class_configs/` such as `Live/rog_class_config.lua`, with server policy/capability checks, `mq`, `require`, `ImGui`, and compat modules in the active environment, plus `package.path`/`package.searchpath`/`package.searchers` and `.lua`/slash `require`) from the restricted data-only config loader (`mq.configDir`/`scripts/config/`/`mq.pickle`). Requests pointing to `config/...` or `scripts/config/...` are never executed, and `Write`/`class_configs/` helpers confine writes to `config_dir` while reading class configs strictly from script roots.
   - **Script Runtime Foundation**: Native C `lsqlite3` & `lfs`, sandboxed `io` (`mq.configDir`), safe `package`/`debug`, IPC-bridged `actors`, `bit32`, `mq.DataType.new`, `mq.AddTopLevelObject`, `mq.PackageMan`, `ImGui.Dummy` arg fix, and `Raid`, `AltAbility`, `InvSlot`, `MacroQuest`, `Lua`, `DanNet`, `Mercenary`, `Nav` TLOs.
+- **MacroQuest-Style Group / Box Profiles (`profiles/*.ini`, `profiles/*.json`)**:
+  - **Human-Editable Group Definitions (`src/core/group_profile.{h,cpp}`)**: Supports `${HAILSTONE_DATA_DIR}/profiles/<profile>.ini` and `.json` (examples in `hailstone24/configs/profiles/ez_6box_example.{ini,json}`) defining per-slot `character`, `account`, `server_id`, `world`, `class_role`, `settings_path` (strictly confined under `--data-dir`), `auto_login`, `launch_order`, `slot_number`, `session_id`, `enabled`, `headless`, `auto_kick`, `bg_tick_hz`, and `gpu_mode`.
+  - **Pre-AutoLogin Resolution & Isolation**: `--profile`, `--slot`, `--settings-path`, or `[login] group_profile` resolve **before** keyring lookup and auto-login so each character launches with its own server, world, account, settings file, and per-slot `auto_login` flag.
+  - **Passwordless Import/Export**: `--import-mq-logins` exports grouped MacroQuest roster/autologin profiles into `${HAILSTONE_DATA_DIR}/profiles/*.ini` without ever writing plaintext passwords; credentials remain solely in `platform::CredentialStore` (`libsecret`).
+  - **In-Client UI & Manager Controls**: Native Lua login screen (`ui/modern/login.lua`), ImGui dev Login screen (`src/ui/dev_screens.cpp`), `hailstone24_broker --profile <name_or_path>`, and `hailstone24_manager --profile <name_or_path>` list profiles, show per-slot login/connection status, and launch single characters or stop/launch/relaunch an entire group in launch order.
 
 ---
 
@@ -50,18 +55,18 @@ cmake --build build -j"$(nproc)"
 
 ## 3. Run Unit & Integration Tests
 ```bash
-ctest --test-dir build --output-on-failure -R "ExecutionController|FramePace|SessionBus|MQ AutoLogin|Login auto-select|Server select|RG Mercs|RGMercsBridge|TrustedScriptLoader|eq.RGMercs|EQ menu|GPU IPC"
+ctest --test-dir build --output-on-failure -R "ExecutionController|FramePace|SessionBus|MQ AutoLogin|GroupProfile|Login auto-select|Server select|RG Mercs|RGMercsBridge|TrustedScriptLoader|eq.RGMercs|EQ menu|GPU IPC"
 # Or run the full upstream + Hailstone 24 suite:
 ./build/hailstone_tests
 ```
 
 ---
 
-## 4. Import All MacroQuest Logins Safely (Isolated Data Directory)
+## 4. Import All MacroQuest Logins & Group Profiles Safely (Isolated Data Directory)
 Never point `--data-dir` inside your EverQuest folder. Use an isolated directory such as `~/.local/share/hailstone24`:
 ```bash
 export HAILSTONE_DATA_DIR="${HOME}/.local/share/hailstone24"
-mkdir -p "${HAILSTONE_DATA_DIR}"
+mkdir -p "${HAILSTONE_DATA_DIR}/profiles"
 
 read -s -p "MQ Master Password (Enter if none): " MQ_MASTER_PASSWORD && echo
 export MQ_MASTER_PASSWORD
@@ -74,6 +79,7 @@ export MQ_MASTER_PASSWORD
 unset MQ_MASTER_PASSWORD
 ```
 Copy `hailstone24/configs/hailstone24.ini` to `"${HAILSTONE_DATA_DIR}/hailstone.ini"` and set `[assets] path=/path/to/your/everquest_rof2`.
+You can also copy `hailstone24/configs/profiles/ez_6box_example.ini` (or `.json`) into `"${HAILSTONE_DATA_DIR}/profiles/"` and customize your accounts/characters without storing any passwords in the profile files.
 
 ---
 
@@ -81,30 +87,39 @@ Copy `hailstone24/configs/hailstone24.ini` to `"${HAILSTONE_DATA_DIR}/hailstone.
 ```bash
 git clone https://github.com/DerpleDude/rgmercs.git "${HAILSTONE_DATA_DIR}/scripts/rgmercs"
 ```
-Once logged into world (e.g., `Stabbinyah` on `EZ Server`):
+Keep executable Lua scripts and `class_configs/` under `${HAILSTONE_DATA_DIR}/scripts/rgmercs/` (do **not** place executable Lua class configs under `scripts/config/`; `scripts/config/` is enforced data-only).
+Once logged into world (e.g., `Stabbinyah`, ROG, on `EZ Server`):
 - Open the native `RGMercs` window via the EQ cascade menu (`RGMercs`), the `UI` button in `Lua Scripts`, or `/rgmercs` (`/rgui`).
 - Existing RG Mercs SQLite/Lua configs under `${HAILSTONE_DATA_DIR}/scripts/config` are detected read-only and offered for import (or auto-imported once per character), with settings persisted per character at `<character_dir>/rgmercs_settings.ini`.
 
 ---
 
-## 6. Launch & Manage 24 Sessions
-Terminal 1 (Broker + 24 Staggered Clients — Slot 1 Foreground, Slots 2–24 Headless):
+## 6. Launch & Manage Profiles / 24 Sessions
+Launch a single character slot directly from a group profile (resolves account, server, world, and character settings before auto-login):
 ```bash
+./build/hailstone/hailstone \
+  --data-dir "${HAILSTONE_DATA_DIR}" \
+  --profile ez_6box_example \
+  --slot Stabbinyah \
+  --auto-login
+```
+
+Or launch & supervise an entire group profile (or 24-box roster):
+```bash
+# Terminal 1 (Broker launching from a group profile in launch_order):
 ./build/hailstone/hailstone24_broker \
   --data-dir "${HAILSTONE_DATA_DIR}" \
   --game-dir "/path/to/your/everquest_rof2" \
-  --roster "${HAILSTONE_DATA_DIR}/hailstone24_roster.ini" \
+  --profile ez_6box_example \
   --launch-all \
   --bg-tick-hz 25 \
   --gpu-mode cached \
   --stagger-ms 400
-```
 
-Terminal 2 (Interactive GUI or Terminal Switcher):
-```bash
-./build/hailstone/hailstone24_manager
+# Terminal 2 (Interactive GUI / TUI Manager with profile selector & per-slot status):
+./build/hailstone/hailstone24_manager --profile ez_6box_example
 
-./build/hailstone/hailstone24_manager --status
+./build/hailstone/hailstone24_manager --profile ez_6box_example --status
 ./build/hailstone/hailstone24_manager --switch slot05
 ./build/hailstone/hailstone24_manager --cmd "/bcaa /lua run rgmercs"
 ```

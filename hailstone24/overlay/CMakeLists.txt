@@ -296,6 +296,7 @@ add_library(hailstone_engine STATIC
   src/core/atomic_file.cpp
   src/core/config.cpp
   src/core/ini_file.cpp
+  src/core/group_profile.cpp
   src/core/mq_login_import.cpp
   src/core/old_ui_settings.cpp
   src/web/browser_host.cpp
@@ -1102,6 +1103,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/hailstone24/execution_state_test.cpp
     tests/hailstone24/session_bus_test.cpp
     tests/hailstone24/mq_login_import_test.cpp
+    tests/hailstone24/group_profile_test.cpp
     tests/hailstone24/login_autoselect_test.cpp
     tests/hailstone24/rgmercs_tlo_test.cpp
     tests/hailstone24/rgmercs_native_ui_test.cpp

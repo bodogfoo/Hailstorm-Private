@@ -22,6 +22,7 @@
 #include "app/server_links.h"
 #include "app/execution_state.h"
 #include "app/frame_pace.h"
+#include "core/group_profile.h"
 #include "ipc/session_bus.h"
 
 #include <algorithm>
@@ -273,6 +274,9 @@ public:
         shader_dir_ = platform::shaders_dir();
         config_path_ = default_config_path();
         config_.load(config_path_);
+        explicit_account_arg_ = !opts_.account.empty();
+        explicit_autologin_arg_ = opts_.auto_login;
+        apply_startup_group_profile();
         {
             const int bg_hz = opts_.bg_tick_hz > 0
                                   ? opts_.bg_tick_hz
@@ -304,6 +308,7 @@ public:
         // The settings (hailstone.ini's until a character enters, then the character's: apply_settings), before the
         // renderers: their pipelines take the sample count.
         apply_settings();
+        if (!slot_settings_override_.empty()) use_character_settings(slot_settings_override_);
         log_memory("startup: settings and render targets");
         // The saved servers (core/server_profile.h), the last one used picked (--server another); the old
         // login.host/port/username keys become the first.
@@ -316,6 +321,11 @@ public:
         bool named_server = !opts_.server.empty() && ui::select_profile_named(login_view_, opts_.server);
         if (!opts_.server.empty() && !named_server)
             log::warn("--server {}: no saved server has this id or name", opts_.server);
+        login_view_.profiles_dir = platform::profiles_dir();
+        reload_group_profiles();
+        if (active_group_profile_) select_group_profile(active_group_profile_->id);
+        if (!startup_group_error_.empty() && login_view_.status.text.empty())
+            login_view_.status = {startup_group_error_, true};
         if (auto strings = game_.find("eqlsstr_us.txt")) net::load_login_strings(*strings);
         // Redeem short-lived launcher tickets while the expensive assets/renderers initialize. Only this worker
         // touches LoginClient until it is joined below; Session maintains the authenticated connection meanwhile.
@@ -645,7 +655,8 @@ public:
         // The isometric camera when it was the one in use (hailstone.ini camera.iso, /camera).
         if (config_.get_bool("camera.iso", false)) set_camera_type(game::kCameraIsometric);
         game::reset_camera_defaults(cameras_);
-        login_view_.auto_login = opts_.auto_login || config_.get_bool("login.auto_login", false);
+        login_view_.auto_login =
+            opts_.auto_login || (!startup_group_applied_ && config_.get_bool("login.auto_login", false));
         if (opts_.login_launch.token_requested) {
             token_login_worker.finish();
             if (token_login_worker.error) std::rethrow_exception(token_login_worker.error);
@@ -674,7 +685,12 @@ public:
             core::wipe(opts_.auto_password); // the copy in the fields is the one start_login uses and lets go
             start_login();
         } else if (!opts_.account.empty()) {
-            start_account_login();
+            if (startup_group_applied_ && !opts_.auto_login && !explicit_account_arg_) {
+                ui::pick_account(login_view_, opts_.account);
+                log::info("group profile: pre-selected account {} (auto_login off for this slot)", opts_.account);
+            } else {
+                start_account_login();
+            }
         } else if (login_view_.auto_login) {
             if (!login_view_.host.empty() && !login_view_.username.empty() && !login_view_.password.empty()) {
                 log::info("auto-login: logging in saved account {}", login_view_.username);
@@ -696,6 +712,17 @@ private:
     // The login screen's Log in box: saves the server, starts a Hailstone for each box account after the first
     // (--server --account --character) and logs this window in to the first (client_app_login.cpp).
     void start_box_login();
+    // MacroQuest-style group profile launcher (profiles/<name>.ini or .json; client_app_login.cpp).
+    void apply_startup_group_profile();
+    void reload_group_profiles();
+    void refresh_group_slot_statuses(bool force = false);
+    void select_group_profile(std::string_view id);
+    void launch_group();
+    void launch_group_slot(int slot_number);
+    void stop_group();
+    void relaunch_group();
+    bool launch_group_slot_process(const core::GroupProfile& gp, const core::GroupSlot& slot, bool foreground_here,
+                                   std::string& error);
     // --account: the saved account's keyring password, then start_login(); else the login screen says why.
     void start_account_login();
     // The login screen's Characters list: logs in to the picked character's account (its saved password, or the
@@ -1201,6 +1228,14 @@ private:
     std::vector<std::string> worlds_noted_; // the worlds the login server listed, as set_listed_worlds() last had them
     platform::ChildProcesses box_clients_; // the box set's other windows
     platform::ChildProcesses tools_;       // the tool add-ons the player started (left running when Hailstone quits)
+    bool explicit_account_arg_ = false;
+    bool explicit_autologin_arg_ = false;
+    bool startup_group_applied_ = false;
+    std::string startup_group_error_;
+    std::optional<core::GroupProfile> active_group_profile_;
+    std::vector<core::GroupProfile> loaded_group_profiles_;
+    std::filesystem::path slot_settings_override_;
+    Clock::time_point last_group_status_at_{};
     // The updater (app/client_app_update.cpp, docs/updater.md): null when updates are off for this run.
     std::unique_ptr<Updater> updater_;
     UpdateSettings update_settings_;

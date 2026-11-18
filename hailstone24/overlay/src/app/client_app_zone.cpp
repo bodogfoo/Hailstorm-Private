@@ -536,10 +536,26 @@ void ClientApp::enter_zone() {
     target_manager_ = {};
     zone_entered_ = Clock::now();
     zone_line_.reset();
-    // The character's own files: servers/<profile>/characters/<world>/<name>/ (core/character_files.h).
+    // The character's own files: servers/<profile>/characters/<world>/<name>/ (core/character_files.h),
+    // or the group profile slot's explicit settings_path override (confined within data_dir).
     std::string profile = files_profile();
     CharacterFiles files = character_files(profile, char_view_.server_name, game::display_name(me->name));
-    use_character_settings(files.dir); // (taken over at the entry into the world: the same, unless the name differs)
+    const bool use_slot_override =
+        !slot_settings_override_.empty() &&
+        (opts_.auto_character.empty() || iequals(game::display_name(me->name), opts_.auto_character));
+    if (use_slot_override) {
+        std::filesystem::path isolated_dir = slot_settings_override_.extension() == ".ini"
+                                                 ? slot_settings_override_.parent_path()
+                                                 : slot_settings_override_;
+        if (!isolated_dir.empty()) {
+            std::error_code ec;
+            std::filesystem::create_directories(isolated_dir, ec);
+            files.dir = isolated_dir;
+        }
+        use_character_settings(slot_settings_override_);
+    } else {
+        use_character_settings(files.dir); // (taken over at the entry into the world: the same, unless the name differs)
+    }
     actions_ui_->enter_zone(files.hot_buttons());
     // The character's autorun scripts (the Scripts window; the same file at each zone-in starts nothing again).
     if (automation_) {

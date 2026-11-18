@@ -1,0 +1,40 @@
+{
+  "name": "EZ 6-Box Example (JSON)",
+  "description": "Sample JSON group profile with per-slot order, role, and isolated settings path (no passwords)",
+  "default_server": "ez_server",
+  "default_world": "EZ Server",
+  "auto_login": true,
+  "auto_kick": true,
+  "bg_tick_hz": 25,
+  "gpu_mode": "cached",
+  "slots": [
+    {
+      "slot_number": 1,
+      "launch_order": 1,
+      "enabled": true,
+      "session_id": "slot01",
+      "character": "Stabbinyah",
+      "account": "pumpkin",
+      "server_id": "ez_server",
+      "world": "EZ Server",
+      "class_role": "ROG",
+      "settings_path": "servers/ez_server/characters/EZ Server/Stabbinyah/hailstone.ini",
+      "auto_login": true,
+      "headless": false
+    },
+    {
+      "slot_number": 2,
+      "launch_order": 2,
+      "enabled": true,
+      "session_id": "slot02",
+      "character": "TankExample",
+      "account": "acct02",
+      "server_id": "ez_server",
+      "world": "EZ Server",
+      "class_role": "WAR",
+      "settings_path": "servers/ez_server/characters/EZ Server/TankExample/hailstone.ini",
+      "auto_login": true,
+      "headless": true
+    }
+  ]
+}

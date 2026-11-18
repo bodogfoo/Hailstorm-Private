@@ -74,6 +74,7 @@ int ClientApp::run() {
         // model is built in the spawns' smoothing (CreatePlayerActor's model choice).
         core::frame_sections::Lap update_lap;
         box_clients_.poll();
+        if (screen_ == Screen::Login) refresh_group_slot_statuses(false);
         update_updater();
         update_addons();
         update_login();

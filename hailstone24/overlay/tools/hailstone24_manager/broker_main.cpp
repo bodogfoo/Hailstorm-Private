@@ -25,6 +25,7 @@
 #endif
 
 #include "app/execution_state.h"
+#include "core/group_profile.h"
 #include "core/ini_file.h"
 #include "core/mq_login_import.h"
 #include "core/wipe.h"
@@ -43,6 +44,8 @@ void handle_signal(int) {
 }
 
 struct RosterSlot {
+    int slot_number = 1;
+    int launch_order = 1;
     std::string section;
     bool enabled = true;
     std::string session_id;
@@ -50,7 +53,10 @@ struct RosterSlot {
     std::string world;
     std::string account;
     std::string character;
+    std::string class_role;
+    std::string settings_path;
     std::string group_leader;
+    bool auto_login = true;
     bool headless = true;
     bool auto_kick = true;
     int bg_tick_hz = 0;
@@ -71,6 +77,7 @@ struct BrokerOptions {
     fs::path data_dir;
     fs::path game_dir;
     fs::path roster_path;
+    std::string profile_arg;
     fs::path hailstone_bin;
     fs::path gpu_broker_bin;
     fs::path import_mq_path;
@@ -92,13 +99,14 @@ void usage() {
         "  --socket PATH             local AF_UNIX bus socket (default: $XDG_RUNTIME_DIR/hailstone24/bus.sock)\n"
         "  --data-dir DIR            isolated Hailstone data directory for all 24 sessions\n"
         "  --game-dir DIR            read-only EverQuest RoF2 game directory forwarded to clients\n"
+        "  --profile NAME_OR_PATH    group profile id/name/file in profiles/ (.ini or .json) to launch\n"
         "  --roster PATH             hailstone24_roster.ini file listing slot01..slot24\n"
         "  --hailstone-bin PATH      path to hailstone client executable (default: sibling hailstone)\n"
-        "  --import-mq-logins PATH   import MQ login.db / MQ2AutoLogin.ini into isolated keyring & write roster\n"
+        "  --import-mq-logins PATH   import MQ login.db / MQ2AutoLogin.ini into isolated keyring & write roster/profiles\n"
         "  --mq-master-pass PASS     optional MacroQuest login.db master password (also $MQ_MASTER_PASSWORD)\n"
         "  --server ID_OR_NAME       override login server profile id/name for import and launches\n"
         "  --world NAME_OR_KEYWORD   override world server name, id, or unique keyword filter for launches\n"
-        "  --launch-all              stagger-launch enabled slots from --roster (slot01 foreground, others headless)\n"
+        "  --launch-all              stagger-launch enabled slots in (launch_order, slot_number) order\n"
         "  --bg-tick-hz N            override background simulation Hz (10..60, default 25)\n"
         "  --gpu-mode MODE           deferred | cached | shared-broker (default: cached)\n"
         "  --shared-gpu              set --gpu-mode shared-broker and start hailstone_gpu_cache_broker if present\n"
@@ -128,6 +136,7 @@ BrokerOptions parse_args(int argc, char** argv) {
         if (a == "--socket") o.socket_path = need();
         else if (a == "--data-dir") o.data_dir = need();
         else if (a == "--game-dir") o.game_dir = need();
+        else if (a == "--profile") o.profile_arg = need();
         else if (a == "--roster") o.roster_path = need();
         else if (a == "--hailstone-bin") o.hailstone_bin = need();
         else if (a == "--import-mq-logins") o.import_mq_path = need();
@@ -155,43 +164,58 @@ BrokerOptions parse_args(int argc, char** argv) {
     return o;
 }
 
-std::vector<RosterSlot> load_roster(const fs::path& path, const BrokerOptions& opts) {
+std::vector<RosterSlot> load_roster(const BrokerOptions& opts, fs::path& used_profile_path,
+                                    std::string& load_error) {
     std::vector<RosterSlot> out;
-    IniFile ini;
-    if (!ini.load(path)) return out;
-    std::string def_server = ini.get_string("global", "default_server");
-    if (def_server.empty()) def_server = ini.get_string("Cluster", "server", opts.server_override);
-    if (!opts.server_override.empty()) def_server = opts.server_override;
-    std::string def_world = ini.get_string("global", "default_world", opts.world_override);
-    if (!opts.world_override.empty()) def_world = opts.world_override;
-    const bool def_auto_kick = ini.get_int("global", "auto_kick", 1) != 0;
-    const std::string def_gpu = ini.get_string("global", "gpu_mode", opts.gpu_mode);
-    const int def_hz = std::clamp(ini.get_int("global", "bg_tick_hz", opts.bg_tick_hz), 10, 60);
+    fs::path source_path;
+    bool using_group_profile = false;
 
-    for (const auto& sec : ini.sections()) {
-        if (sec.rfind("slot", 0) != 0 && sec.rfind("Slot", 0) != 0) continue;
-        RosterSlot slot;
-        slot.section = sec;
-        slot.enabled = ini.get_int(sec, "enabled", 1) != 0;
-        slot.session_id = ini.get_string(sec, "session_id", sec);
-        std::string slot_srv = ini.get_string(sec, "server_id");
-        if (slot_srv.empty()) slot_srv = ini.get_string(sec, "server", def_server);
-        slot.server_id = opts.server_override.empty() ? slot_srv : opts.server_override;
-        slot.world = opts.world_override.empty() ? ini.get_string(sec, "world", def_world) : opts.world_override;
-        slot.account = ini.get_string(sec, "account");
-        slot.character = ini.get_string(sec, "character");
-        slot.group_leader = ini.get_string(sec, "group_leader");
-        if (auto h = ini.get(sec, "headless")) {
-            slot.headless = ini.get_int(sec, "headless", out.empty() ? 0 : 1) != 0;
-        } else if (auto st = ini.get(sec, "state")) {
-            slot.headless = (*st != "foreground");
-        } else {
-            slot.headless = !out.empty();
+    if (!opts.profile_arg.empty()) {
+        auto found = core::find_group_profile_file(platform::profiles_dir(), opts.profile_arg);
+        if (!found) {
+            load_error = std::format("Group profile '{}' not found in {}", opts.profile_arg,
+                                     platform::profiles_dir().string());
+            return out;
         }
-        slot.auto_kick = ini.get_int(sec, "auto_kick", def_auto_kick ? 1 : 0) != 0;
-        slot.bg_tick_hz = std::clamp(ini.get_int(sec, "bg_tick_hz", def_hz), 10, 60);
-        slot.gpu_mode = ini.get_string(sec, "gpu_mode", def_gpu);
-        if (slot.enabled && !slot.account.empty()) out.push_back(std::move(slot));
+        source_path = *found;
+        using_group_profile = true;
+    } else {
+        source_path = opts.roster_path;
+    }
+
+    core::GroupProfile gp;
+    if (!core::load_group_profile(source_path, gp, &load_error)) {
+        return out;
+    }
+    if (using_group_profile) used_profile_path = gp.source_path;
+
+    for (const auto& s : gp.slots) {
+        if (!s.enabled || s.account.empty()) continue;
+        RosterSlot slot;
+        slot.slot_number = s.slot_number;
+        slot.launch_order = s.launch_order;
+        slot.section = std::format("slot{:02d}", s.slot_number);
+        slot.enabled = s.enabled;
+        slot.session_id = s.session_id;
+        slot.server_id = !opts.server_override.empty()
+                             ? opts.server_override
+                             : (!s.server_id.empty() ? s.server_id : gp.default_server_id);
+        slot.world = !opts.world_override.empty()
+                         ? opts.world_override
+                         : (!s.world.empty() ? s.world : gp.default_world);
+        slot.account = s.account;
+        slot.character = s.character;
+        slot.class_role = s.class_role;
+        slot.auto_login = s.auto_login;
+        slot.headless = s.headless;
+        slot.auto_kick = s.auto_kick;
+        slot.bg_tick_hz = s.bg_tick_hz > 0 ? s.bg_tick_hz : opts.bg_tick_hz;
+        slot.gpu_mode = s.gpu_mode.empty() ? opts.gpu_mode : s.gpu_mode;
+        slot.group_leader = s.group_leader;
+        if (auto eff = core::resolve_effective_settings_path(platform::data_dir(), gp, s)) {
+            slot.settings_path = eff->string();
+        }
+        out.push_back(std::move(slot));
         if (out.size() >= 24) break;
     }
     return out;
@@ -294,6 +318,8 @@ int main(int argc, char** argv) {
         imp.target_server_id = opts.server_override;
         imp.servers_dir = platform::servers_dir();
         imp.roster_out = opts.roster_path;
+        imp.profiles_dir = platform::profiles_dir();
+        imp.write_group_profiles = true;
         const auto res = core::import_mq_logins(imp);
         core::wipe(imp.master_password);
         core::wipe(opts.mq_master_pass);
@@ -302,9 +328,9 @@ int main(int argc, char** argv) {
                          res.source_kind.c_str(), res.error.c_str());
             return 1;
         }
-        std::printf("[broker] Imported %zu/%zu MQ logins (%zu keyring passwords, %zu characters) -> %s\n",
+        std::printf("[broker] Imported %zu/%zu MQ logins (%zu keyring passwords, %zu characters, %zu profiles) -> %s\n",
                     res.accounts_imported, res.accounts_found, res.passwords_saved, res.characters_linked,
-                    opts.roster_path.string().c_str());
+                    res.group_profiles_written.size(), opts.roster_path.string().c_str());
         for (const auto& w : res.warnings) std::printf("[broker] warning: %s\n", w.c_str());
     }
     core::wipe(opts.mq_master_pass);
@@ -335,10 +361,12 @@ int main(int argc, char** argv) {
     }
 
     if (opts.launch_all) {
-        const auto slots = load_roster(opts.roster_path, opts);
+        fs::path profile_path;
+        std::string load_error;
+        const auto slots = load_roster(opts, profile_path, load_error);
         if (slots.empty()) {
-            std::fprintf(stderr, "[broker] --launch-all set but no enabled slots in %s\n",
-                         opts.roster_path.string().c_str());
+            std::fprintf(stderr, "[broker] --launch-all set but no enabled slots loaded (%s)\n",
+                         load_error.empty() ? opts.roster_path.string().c_str() : load_error.c_str());
         }
         for (std::size_t idx = 0; idx < slots.size() && !g_stop_requested.load(std::memory_order_relaxed); ++idx) {
             const auto& slot = slots[idx];
@@ -349,6 +377,12 @@ int main(int argc, char** argv) {
             if (!opts.game_dir.empty()) {
                 args.push_back("--game-dir");
                 args.push_back(opts.game_dir.string());
+            }
+            if (!profile_path.empty()) {
+                args.push_back("--profile");
+                args.push_back(profile_path.string());
+                args.push_back("--slot");
+                args.push_back(std::to_string(slot.slot_number));
             }
             if (!slot.server_id.empty()) {
                 args.push_back("--server");
@@ -364,6 +398,11 @@ int main(int argc, char** argv) {
                 args.push_back("--character");
                 args.push_back(slot.character);
             }
+            if (!slot.settings_path.empty()) {
+                args.push_back("--settings-path");
+                args.push_back(slot.settings_path);
+            }
+            if (slot.auto_login) args.push_back("--auto-login");
             if (slot.auto_kick) args.push_back("--auto-kick");
             args.push_back("--session-id");
             args.push_back(slot.session_id);
@@ -378,8 +417,8 @@ int main(int argc, char** argv) {
             const pid_t cpid = spawn_process(args);
             if (cpid > 0) {
                 children.push_back(SupervisedChild{cpid, slot.session_id, slot.character, true});
-                std::printf("[broker] Launched %s char=%s mode=%s (pid=%d)\n",
-                            slot.session_id.c_str(),
+                std::printf("[broker] Launched order=%d slot=%d (%s) char=%s mode=%s (pid=%d)\n",
+                            slot.launch_order, slot.slot_number, slot.session_id.c_str(),
                             slot.character.empty() ? "<select>" : slot.character.c_str(),
                             slot.headless ? "BACKGROUND_HEADLESS" : "FOREGROUND_FULL",
                             static_cast<int>(cpid));

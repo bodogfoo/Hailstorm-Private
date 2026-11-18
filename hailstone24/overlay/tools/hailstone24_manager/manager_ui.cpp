@@ -26,7 +26,9 @@
 #endif
 
 #include "app/execution_state.h"
+#include "core/group_profile.h"
 #include "ipc/session_bus.h"
+#include "platform/paths.h"
 
 using namespace hailstone;
 
@@ -139,13 +141,48 @@ void sort_roster(std::vector<ipc::SessionSnapshot>& list) {
     });
 }
 
-void print_status_table(std::vector<ipc::SessionSnapshot> roster) {
+struct ManagerProfileView {
+    std::vector<core::GroupProfile> profiles;
+    std::optional<core::GroupProfile> active;
+};
+
+ManagerProfileView load_manager_profiles(const std::filesystem::path& profiles_dir, std::string_view profile_arg) {
+    ManagerProfileView mv;
+    mv.profiles = core::list_group_profiles(profiles_dir);
+    if (!profile_arg.empty()) {
+        if (auto p = core::find_group_profile_file(profiles_dir, profile_arg)) {
+            core::GroupProfile gp;
+            if (core::load_group_profile(*p, gp)) mv.active = std::move(gp);
+        }
+    } else if (!mv.profiles.empty()) {
+        mv.active = mv.profiles.front();
+    }
+    return mv;
+}
+
+const ipc::SessionSnapshot* find_matching_snapshot(const std::vector<ipc::SessionSnapshot>& roster,
+                                                   const core::GroupSlot& slot) {
+    for (const auto& s : roster) {
+        if ((!slot.session_id.empty() && ieq(s.session_id, slot.session_id)) ||
+            (!slot.character.empty() && ieq(s.character_name, slot.character))) {
+            return &s;
+        }
+    }
+    return nullptr;
+}
+
+void print_status_table(std::vector<ipc::SessionSnapshot> roster, const ManagerProfileView& mpv) {
     sort_roster(roster);
     std::uint64_t rss = 0;
     std::uint64_t vram = 0;
     for (const auto& s : roster) {
         rss += s.rss_mib;
         vram += s.vram_mib;
+    }
+    if (mpv.active) {
+        std::printf("Group Profile: %s (%s, %zu slots | %zu available profiles)\n",
+                    mpv.active->name.c_str(), mpv.active->id.c_str(), mpv.active->slots.size(),
+                    mpv.profiles.size());
     }
     std::printf("Hailstone 24 Sessions (%zu/24 connected) | Total RSS: %llu MiB | Est VRAM: %llu MiB\n",
                 roster.size(), static_cast<unsigned long long>(rss), static_cast<unsigned long long>(vram));
@@ -164,6 +201,19 @@ void print_status_table(std::vector<ipc::SessionSnapshot> roster) {
                     s.hp_pct, s.mana_pct, s.end_pct,
                     s.rgmercs_state.empty() ? "-" : s.rgmercs_state.c_str(),
                     s.rss_mib, s.vram_mib, s.last_switch_ms);
+    }
+    if (mpv.active) {
+        for (const auto& slot : mpv.active->slots) {
+            if (find_matching_snapshot(roster, slot)) continue;
+            std::printf("%-10s %-14s %-7s %-18s   -/-/-    %-11s    0/   0M 0  (role=%s, ord=%d)\n",
+                        slot.session_id.c_str(),
+                        slot.character.empty() ? slot.account.c_str() : slot.character.c_str(),
+                        slot.enabled ? "OFFLINE" : "DISAB",
+                        slot.world.empty() ? "-" : slot.world.c_str(),
+                        "-",
+                        slot.class_role.empty() ? "-" : slot.class_role.c_str(),
+                        slot.launch_order);
+        }
     }
 }
 
@@ -187,7 +237,7 @@ struct TermRawGuard {
     }
 };
 
-int run_tui(ipc::SessionBusClient& client) {
+int run_tui(ipc::SessionBusClient& client, const ManagerProfileView& mpv) {
     TermRawGuard guard;
     std::printf("\033[?1049h\033[?25l");
     std::size_t selected = 0;
@@ -280,11 +330,12 @@ int run_tui(ipc::SessionBusClient& client) {
                 }
             }
             std::printf("\033[H\033[2J");
-            std::printf("\033[1;36mHAILSTONE 24 MANAGER\033[0m | Bus: %s | Sessions: %zu/24 | FG: \033[1;32m%s\033[0m | RSS: %llu MiB | VRAM: %llu MiB\n",
+            std::printf("\033[1;36mHAILSTONE 24 MANAGER\033[0m | Bus: %s | Sessions: %zu/24 | FG: \033[1;32m%s\033[0m | RSS: %llu MiB | VRAM: %llu MiB%s\n",
                         client.connected() ? "CONNECTED" : "RECONNECTING",
                         roster.size(), fg.c_str(),
                         static_cast<unsigned long long>(rss),
-                        static_cast<unsigned long long>(vram));
+                        static_cast<unsigned long long>(vram),
+                        mpv.active ? (" | Profile: " + mpv.active->name).c_str() : "");
             std::printf("---------------------------------------------------------------------------------------------------------\n");
             std::printf("%-3s %-10s %-14s %-6s %-16s %-14s %-11s %-10s %-9s %s\n",
                         "ID", "SESSION", "CHARACTER", "STATE", "ZONE", "TARGET", "HP/MP/END", "RGMERCS", "RSS/VRAM", "SW(ms)");
@@ -308,7 +359,17 @@ int run_tui(ipc::SessionBusClient& client) {
                             s.rgmercs_state.empty() ? "-" : s.rgmercs_state.c_str(),
                             s.rss_mib, s.vram_mib, s.last_switch_ms);
             }
-            if (roster.empty()) {
+            if (roster.empty() && mpv.active && !mpv.active->slots.empty()) {
+                for (std::size_t i = 0; i < mpv.active->slots.size(); ++i) {
+                    const auto& slot = mpv.active->slots[i];
+                    std::printf("%2zu  %-10s %-14s %-6s %-16s %-14s   -/-/-   %-10s    0/   0    0\n",
+                                static_cast<std::size_t>(slot.slot_number), slot.session_id.c_str(),
+                                slot.character.empty() ? slot.account.c_str() : slot.character.c_str(),
+                                slot.enabled ? "OFFL" : "DISAB",
+                                slot.world.empty() ? "-" : slot.world.c_str(),
+                                slot.class_role.empty() ? "-" : slot.class_role.c_str(), "-");
+                }
+            } else if (roster.empty()) {
                 std::printf("  (Waiting for Hailstone 24 sessions on IPC bus...)\n");
             }
             std::printf("---------------------------------------------------------------------------------------------------------\n");
@@ -324,7 +385,7 @@ int run_tui(ipc::SessionBusClient& client) {
 }
 #endif
 
-int run_sdl_gui(ipc::SessionBusClient& client) {
+int run_sdl_gui(ipc::SessionBusClient& client, const ManagerProfileView& mpv) {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::fprintf(stderr, "[manager] SDL_Init failed: %s\n", SDL_GetError());
         return 1;
@@ -478,13 +539,26 @@ int run_sdl_gui(ipc::SessionBusClient& client) {
                 SDL_SetRenderDrawColor(ren, 59, 130, 246, 255);
                 SDL_RenderFillRect(ren, &mp_fg);
             } else {
+                const core::GroupSlot* pslot =
+                    (mpv.active && idx < mpv.active->slots.size()) ? &mpv.active->slots[idx] : nullptr;
                 SDL_SetRenderDrawColor(ren, 18, 22, 29, 255);
                 SDL_RenderFillRect(ren, &box);
                 SDL_SetRenderDrawColor(ren, 40, 48, 62, 255);
                 SDL_RenderRect(ren, &box);
                 SDL_SetRenderDrawColor(ren, 82, 96, 115, 255);
-                SDL_RenderDebugText(ren, box.x + 8.0f, box.y + 8.0f,
-                                    std::format("[{:02}] Offline Slot", idx + 1).c_str());
+                if (pslot) {
+                    const std::string title =
+                        std::format("[{:02}] {} ({})", pslot->slot_number,
+                                    pslot->character.empty() ? pslot->account : pslot->character,
+                                    pslot->class_role.empty() ? "-" : pslot->class_role);
+                    SDL_RenderDebugText(ren, box.x + 8.0f, box.y + 8.0f, title.c_str());
+                    SDL_RenderDebugText(ren, box.x + 8.0f, box.y + 24.0f,
+                                        std::format("{} | ord {}", pslot->enabled ? "OFFLINE" : "DISABLED",
+                                                    pslot->launch_order).c_str());
+                } else {
+                    SDL_RenderDebugText(ren, box.x + 8.0f, box.y + 8.0f,
+                                        std::format("[{:02}] Offline Slot", idx + 1).c_str());
+                }
             }
         }
 
@@ -516,6 +590,9 @@ void usage() {
     std::printf(
         "usage: hailstone24_manager [options]\n"
         "  --socket PATH      local AF_UNIX broker socket\n"
+        "  --data-dir DIR     isolated Hailstone data directory\n"
+        "  --profiles-dir DIR directory containing profiles/*.ini and *.json\n"
+        "  --profile NAME     group profile id/name/path to display alongside bus status\n"
         "  --status           print 24-session status table and exit\n"
         "  --switch TARGET    switch FOREGROUND_FULL to session_id or character name and exit\n"
         "  --cmd LINE         dispatch /bca, /bcaa, /bcz, /bcg, /bc, /rc, or /switch and exit\n"
@@ -528,6 +605,9 @@ void usage() {
 
 int main(int argc, char** argv) {
     std::string socket_path = ipc::default_bus_socket_path();
+    std::filesystem::path data_dir;
+    std::filesystem::path profiles_dir;
+    std::string profile_arg;
     bool do_status = false;
     bool force_tui = false;
     bool force_gui = false;
@@ -544,6 +624,9 @@ int main(int argc, char** argv) {
             return argv[++i];
         };
         if (a == "--socket") socket_path = need();
+        else if (a == "--data-dir") data_dir = need();
+        else if (a == "--profiles-dir") profiles_dir = need();
+        else if (a == "--profile") profile_arg = need();
         else if (a == "--status") do_status = true;
         else if (a == "--tui") force_tui = true;
         else if (a == "--gui") force_gui = true;
@@ -558,12 +641,20 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (!data_dir.empty()) platform::use_data_dir(data_dir, "--data-dir");
+    if (profiles_dir.empty()) profiles_dir = platform::profiles_dir();
+    const ManagerProfileView mpv = load_manager_profiles(profiles_dir, profile_arg);
+
     std::signal(SIGINT, on_sig);
     std::signal(SIGTERM, on_sig);
 
     ipc::SessionBusClient client;
     if (!client.connect(socket_path, "__manager__")) {
         if (do_status || !switch_target.empty() || !one_shot_cmd.empty()) {
+            if (do_status && mpv.active) {
+                print_status_table({}, mpv);
+                return 0;
+            }
             std::fprintf(stderr, "[manager] Unable to connect to broker socket: %s\n", socket_path.c_str());
             return 1;
         }
@@ -595,7 +686,7 @@ int main(int argc, char** argv) {
             std::printf("[manager] %s\n", msg.c_str());
             return ok ? 0 : 1;
         }
-        print_status_table(client.cached_roster());
+        print_status_table(client.cached_roster(), mpv);
         return 0;
     }
 
@@ -603,8 +694,8 @@ int main(int argc, char** argv) {
     const bool has_display = (std::getenv("DISPLAY") && *std::getenv("DISPLAY")) ||
                              (std::getenv("WAYLAND_DISPLAY") && *std::getenv("WAYLAND_DISPLAY"));
     if (force_tui || (!force_gui && !has_display)) {
-        return run_tui(client);
+        return run_tui(client, mpv);
     }
 #endif
-    return run_sdl_gui(client);
+    return run_sdl_gui(client, mpv);
 }

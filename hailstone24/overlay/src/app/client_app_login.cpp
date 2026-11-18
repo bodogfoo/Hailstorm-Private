@@ -265,6 +265,33 @@ void ClientApp::login_action(ui::LoginAction action) {
     case ui::LoginAction::PlayCharacter:
         play_character();
         break;
+    case ui::LoginAction::RefreshGroupProfiles:
+        reload_group_profiles();
+        login_view_.status = {"Refreshed group profiles.", false};
+        break;
+    case ui::LoginAction::SelectGroupProfile:
+        select_group_profile(login_view_.group_profile_choice);
+        if (active_group_profile_) {
+            config_.set_string("login.group_profile", active_group_profile_->id);
+            config_.save(config_path_);
+            if (!active_group_profile_->default_server_id.empty()) {
+                ui::select_profile_named(login_view_, active_group_profile_->default_server_id);
+            }
+            login_view_.status = {"Selected group profile: " + active_group_profile_->name, false};
+        }
+        break;
+    case ui::LoginAction::LaunchGroup:
+        launch_group();
+        break;
+    case ui::LoginAction::LaunchGroupSlot:
+        launch_group_slot(login_view_.group_slot_choice);
+        break;
+    case ui::LoginAction::StopGroup:
+        stop_group();
+        break;
+    case ui::LoginAction::RelaunchGroup:
+        relaunch_group();
+        break;
     case ui::LoginAction::MusicChanged:
         // Only the pre-game themes (the login one here; character select's from its next start).
         pregame_music_ = login_view_.pregame_music;
@@ -1061,8 +1088,14 @@ void ClientApp::update_connection() {
     case S::ZoneConnecting:
     case S::ZoneEntering:
         // Hailstone: the character's own settings from here (before its first zone loads), until it leaves.
-        if (!conn_->character_name().empty())
-            use_character_settings(character_files(files_profile(), char_view_.server_name, conn_->character_name()).dir);
+        if (!conn_->character_name().empty()) {
+            const bool use_slot_override =
+                !slot_settings_override_.empty() &&
+                (opts_.auto_character.empty() || iequals(conn_->character_name(), opts_.auto_character));
+            use_character_settings(
+                use_slot_override ? slot_settings_override_
+                                  : character_files(files_profile(), char_view_.server_name, conn_->character_name()).dir);
+        }
         if (music_select_ && audio_) {
             // CEverQuest::DoCharacterSelection: the character enters the world.
             audio_->music_selection(audio::kMusicCharacterSelect, false);
@@ -1131,6 +1164,360 @@ void ClientApp::update_connection() {
         chat_saved_ = Clock::now();
         save_chat_history(false);
     }
+}
+
+void ClientApp::apply_startup_group_profile() {
+    if (!opts_.settings_path.empty()) {
+        if (auto safe = core::resolve_safe_settings_path(platform::data_dir(), opts_.settings_path)) {
+            slot_settings_override_ = *safe;
+        } else {
+            log::warn("--settings-path {}: rejected path outside Hailstone data directory", opts_.settings_path);
+            opts_.settings_path.clear();
+        }
+    }
+    const bool wants_autologin_profile =
+        !opts_.profile.empty() ||
+        (opts_.auto_user.empty() && (explicit_autologin_arg_ || config_.get_bool("login.auto_login", false)));
+    const std::string configured = opts_.auto_user.empty() ? config_.get_string("login.group_profile", "") : std::string{};
+    if (!wants_autologin_profile) {
+        if (!configured.empty()) {
+            if (auto path = core::find_group_profile_file(platform::profiles_dir(), configured)) {
+                core::GroupProfile gp;
+                if (core::load_group_profile(*path, gp)) active_group_profile_ = std::move(gp);
+            }
+        }
+        return;
+    }
+
+    core::PreLoginProfileState st;
+    st.profile = opts_.profile;
+    st.slot = opts_.slot;
+    st.server = opts_.server;
+    st.world = opts_.login_launch.world;
+    st.account = opts_.account;
+    st.character = opts_.auto_character;
+    st.settings_path = opts_.settings_path;
+    st.session_id = opts_.session_id;
+    st.gpu_mode = opts_.gpu_mode;
+    st.bg_tick_hz = opts_.bg_tick_hz;
+    st.auto_login = opts_.auto_login;
+    st.auto_kick = opts_.auto_kick;
+    st.headless_bg = opts_.headless_bg;
+
+    core::GroupProfile gp;
+    core::GroupSlot gs;
+    std::string err;
+    if (!core::resolve_pre_autologin_profile(platform::profiles_dir(), platform::data_dir(), opts_.profile, opts_.slot,
+                                             configured, st, &gp, &gs, &err)) {
+        startup_group_error_ = err;
+        log::warn("group profile: {}", err);
+        return;
+    }
+    if (!gp.id.empty()) {
+        active_group_profile_ = gp;
+        startup_group_applied_ = true;
+        opts_.profile = st.profile;
+        opts_.slot = st.slot;
+        opts_.server = st.server;
+        opts_.login_launch.world = st.world;
+        opts_.account = st.account;
+        opts_.auto_character = st.character;
+        opts_.settings_path = st.settings_path;
+        opts_.session_id = st.session_id;
+        opts_.gpu_mode = st.gpu_mode;
+        opts_.bg_tick_hz = st.bg_tick_hz;
+        opts_.auto_login = st.auto_login;
+        opts_.auto_kick = st.auto_kick;
+        opts_.headless_bg = st.headless_bg;
+        if (!opts_.settings_path.empty()) {
+            if (auto safe = core::resolve_safe_settings_path(platform::data_dir(), opts_.settings_path)) {
+                slot_settings_override_ = *safe;
+            }
+        }
+        log::info("group profile: applied '{}' slot {} (server={}, world={}, account={}, char={}, auto_login={})",
+                  gp.id, gs.slot_number, opts_.server, opts_.login_launch.world, opts_.account, opts_.auto_character,
+                  opts_.auto_login ? "on" : "off");
+    }
+}
+
+void ClientApp::reload_group_profiles() {
+    std::string prev_id;
+    if (login_view_.group_selected >= 0 &&
+        login_view_.group_selected < static_cast<int>(login_view_.group_profiles.size())) {
+        prev_id = login_view_.group_profiles[static_cast<std::size_t>(login_view_.group_selected)].id;
+    } else if (active_group_profile_) {
+        prev_id = active_group_profile_->id;
+    } else {
+        prev_id = config_.get_string("login.group_profile", "");
+    }
+
+    loaded_group_profiles_ = core::list_group_profiles(login_view_.profiles_dir);
+    login_view_.group_profiles.clear();
+    login_view_.group_selected = -1;
+    login_view_.group_slots.clear();
+    login_view_.group_slot_selected = -1;
+
+    for (const auto& gp : loaded_group_profiles_) {
+        ui::LoginView::GroupProfileSummaryView s;
+        s.id = gp.id;
+        s.name = gp.name;
+        s.description = gp.description;
+        s.source_path = gp.source_path.string();
+        s.slot_count = gp.slots.size();
+        login_view_.group_profiles.push_back(std::move(s));
+    }
+
+    if (loaded_group_profiles_.empty()) {
+        active_group_profile_.reset();
+        return;
+    }
+    if (!prev_id.empty()) {
+        select_group_profile(prev_id);
+    }
+    if (login_view_.group_selected < 0) {
+        select_group_profile(loaded_group_profiles_.front().id);
+    }
+}
+
+void ClientApp::select_group_profile(std::string_view id) {
+    int idx = -1;
+    for (int i = 0; i < static_cast<int>(loaded_group_profiles_.size()); ++i) {
+        const auto& gp = loaded_group_profiles_[static_cast<std::size_t>(i)];
+        if (iequals(gp.id, id) || iequals(gp.name, id)) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx < 0) return;
+
+    login_view_.group_selected = idx;
+    active_group_profile_ = loaded_group_profiles_[static_cast<std::size_t>(idx)];
+    login_view_.group_slots.clear();
+    for (const auto& gs : active_group_profile_->slots) {
+        ui::LoginView::GroupSlotView sv;
+        sv.slot_number = gs.slot_number;
+        sv.launch_order = gs.launch_order;
+        sv.enabled = gs.enabled;
+        sv.session_id = gs.session_id;
+        sv.character = gs.character;
+        sv.account = gs.account;
+        sv.server_id = gs.server_id.empty() ? active_group_profile_->default_server_id : gs.server_id;
+        sv.world = gs.world.empty() ? active_group_profile_->default_world : gs.world;
+        sv.class_role = gs.class_role;
+        sv.settings_path =
+            !gs.settings_path.empty()
+                ? gs.settings_path
+                : core::default_slot_settings_relpath(sv.server_id, sv.world,
+                                                      gs.character.empty() ? gs.account : gs.character);
+        sv.auto_login = gs.auto_login;
+        sv.headless = gs.headless;
+        sv.status = gs.enabled ? "Offline" : "Disabled";
+        login_view_.group_slots.push_back(std::move(sv));
+    }
+    login_view_.group_slot_selected = login_view_.group_slots.empty() ? -1 : 0;
+    refresh_group_slot_statuses(true);
+}
+
+void ClientApp::refresh_group_slot_statuses(bool force) {
+    if (login_view_.group_slots.empty()) return;
+    const auto now = Clock::now();
+    if (!force && now - last_group_status_at_ < std::chrono::milliseconds(250)) return;
+    last_group_status_at_ = now;
+
+    if (bus_.connected()) bus_.request_roster();
+    const auto roster = bus_.cached_roster();
+    for (auto& sv : login_view_.group_slots) {
+        if (!sv.enabled) {
+            sv.online = false;
+            sv.zone.clear();
+            sv.status = "Disabled";
+            continue;
+        }
+        const ipc::SessionSnapshot* match = nullptr;
+        for (const auto& snap : roster) {
+            if ((!sv.session_id.empty() && iequals(snap.session_id, sv.session_id)) ||
+                (!sv.character.empty() && iequals(snap.character_name, sv.character))) {
+                match = &snap;
+                break;
+            }
+        }
+        if (match) {
+            sv.online = match->online || match->exec_state != ExecutionState::Disconnected;
+            sv.zone = match->zone_short;
+            const bool fg = match->exec_state == ExecutionState::ForegroundFull;
+            if (!match->zone_short.empty()) {
+                sv.status = std::string(fg ? "In Zone (FG) - " : "In Zone (BG) - ") + match->zone_short;
+            } else {
+                sv.status = fg ? "Online (FG)" : "Online (BG)";
+            }
+        } else if (!sv.session_id.empty() && box_clients_.is_tag_running(sv.session_id)) {
+            sv.online = true;
+            sv.zone.clear();
+            sv.status = "Starting / Logging in";
+        } else {
+            sv.online = false;
+            sv.zone.clear();
+            sv.status = "Offline";
+        }
+    }
+}
+
+bool ClientApp::launch_group_slot_process(const core::GroupProfile& gp, const core::GroupSlot& slot,
+                                          bool foreground_here, std::string& error) {
+    (void)foreground_here;
+    if (!slot.enabled) {
+        error = "Slot is disabled.";
+        return false;
+    }
+    if (slot.account.empty()) {
+        error = std::format("Slot {} has no account configured.", slot.slot_number);
+        return false;
+    }
+
+    const std::string server_id = !slot.server_id.empty()
+                                      ? slot.server_id
+                                      : (!gp.default_server_id.empty() ? gp.default_server_id
+                                                                       : ui::selected_profile_id(login_view_));
+    if (login_view_.credentials) {
+        const ServerProfile* sp = nullptr;
+        for (const auto& p : login_view_.profiles) {
+            if (iequals(p.id, server_id) || iequals(p.name, server_id)) {
+                sp = &p;
+                break;
+            }
+        }
+        std::string cred_srv =
+            sp ? platform::credential_server(sp->host, sp->port) : ui::credential_server(login_view_);
+        auto pw = login_view_.credentials->load(cred_srv, slot.account);
+        if (!pw || pw->empty()) {
+            error = std::format("No saved keyring password for {} (server {}).", slot.account,
+                                server_id.empty() ? cred_srv : server_id);
+            return false;
+        }
+        core::wipe(*pw);
+    }
+
+    const std::string tag =
+        slot.session_id.empty() ? std::format("slot{:02d}", slot.slot_number) : slot.session_id;
+    if (box_clients_.is_tag_running(tag)) {
+        error = std::format("Slot {} ({}) is already running.", slot.slot_number, tag);
+        return false;
+    }
+
+#if defined(_WIN32)
+    const std::filesystem::path exe = platform::install_dir() / "hailstone.exe";
+#else
+    const std::filesystem::path exe = platform::install_dir() / "hailstone";
+#endif
+    std::vector<std::string> args{
+        exe.string(),
+        "--profile",
+        gp.source_path.empty() ? gp.id : gp.source_path.string(),
+        "--slot",
+        std::to_string(slot.slot_number),
+        "--session-id",
+        tag,
+    };
+    if (!server_id.empty()) args.insert(args.end(), {"--server", server_id});
+    const std::string world = slot.world.empty() ? gp.default_world : slot.world;
+    if (!world.empty()) args.insert(args.end(), {"--world", world});
+    args.insert(args.end(), {"--account", slot.account});
+    if (!slot.character.empty()) args.insert(args.end(), {"--character", slot.character});
+    if (auto eff = core::resolve_effective_settings_path(platform::data_dir(), gp, slot)) {
+        args.insert(args.end(), {"--settings-path", eff->string()});
+    } else if (!slot.settings_path.empty()) {
+        error = std::format("Slot {} has an unsafe settings_path outside data_dir.", slot.slot_number);
+        return false;
+    }
+    if (slot.auto_login) args.push_back("--auto-login");
+    if (slot.auto_kick) args.push_back("--auto-kick");
+    if (slot.headless) args.push_back("--headless-bg");
+    if (slot.bg_tick_hz > 0) args.insert(args.end(), {"--bg-tick-hz", std::to_string(slot.bg_tick_hz)});
+    if (!slot.gpu_mode.empty()) args.insert(args.end(), {"--gpu-mode", slot.gpu_mode});
+    if (!opts_.ipc_socket.empty()) args.insert(args.end(), {"--ipc-socket", opts_.ipc_socket});
+    if (!opts_.game_dir.empty()) args.insert(args.end(), {"--game-dir", opts_.game_dir});
+    if (!opts_.classic_dir.empty()) args.insert(args.end(), {"--classic-dir", opts_.classic_dir});
+
+    if (!box_clients_.start_tagged(tag, args, error)) return false;
+    log::info("group '{}': started slot {} ({}, account={}, order={})", gp.id, slot.slot_number,
+              slot.character.empty() ? tag : slot.character, slot.account, slot.launch_order);
+    return true;
+}
+
+void ClientApp::launch_group() {
+    if (!active_group_profile_ || active_group_profile_->slots.empty()) {
+        login_view_.status = {"Select a group profile with at least one slot first.", true};
+        return;
+    }
+    const core::GroupProfile& gp = *active_group_profile_;
+    int started = 0;
+    int skipped = 0;
+    std::string first_err;
+    for (const auto& slot : gp.slots) {
+        if (!slot.enabled) {
+            ++skipped;
+            continue;
+        }
+        std::string err;
+        if (launch_group_slot_process(gp, slot, false, err)) {
+            ++started;
+        } else if (first_err.empty()) {
+            first_err = err;
+        }
+    }
+    refresh_group_slot_statuses(true);
+    if (started == 0 && !first_err.empty()) {
+        login_view_.status = {first_err, true};
+    } else if (!first_err.empty()) {
+        login_view_.status = {
+            std::format("Launched {} slot(s) from '{}'; warning: {}", started, gp.name, first_err), true};
+    } else {
+        login_view_.status = {
+            std::format("Launched {} slot(s) from '{}' ({} disabled).", started, gp.name, skipped), false};
+    }
+}
+
+void ClientApp::launch_group_slot(int slot_number) {
+    if (!active_group_profile_) {
+        login_view_.status = {"No group profile selected.", true};
+        return;
+    }
+    const core::GroupSlot* slot = nullptr;
+    if (slot_number > 0) {
+        for (const auto& s : active_group_profile_->slots)
+            if (s.slot_number == slot_number) {
+                slot = &s;
+                break;
+            }
+    } else if (login_view_.group_slot_selected >= 0 &&
+               login_view_.group_slot_selected < static_cast<int>(active_group_profile_->slots.size())) {
+        slot = &active_group_profile_->slots[static_cast<std::size_t>(login_view_.group_slot_selected)];
+    }
+    if (!slot) {
+        login_view_.status = {"Select a character slot first.", true};
+        return;
+    }
+    std::string err;
+    if (!launch_group_slot_process(*active_group_profile_, *slot, true, err)) {
+        login_view_.status = {err, true};
+        return;
+    }
+    refresh_group_slot_statuses(true);
+    const std::string label = slot->character.empty() ? slot->account : slot->character;
+    login_view_.status = {std::format("Launched slot {} ({}).", slot->slot_number, label), false};
+}
+
+void ClientApp::stop_group() {
+    const std::size_t count = box_clients_.running();
+    box_clients_.stop_all();
+    refresh_group_slot_statuses(true);
+    if (count > 0) login_view_.status = {std::format("Stopped {} running group client(s).", count), false};
+    else login_view_.status = {"No group clients launched by this window are running.", false};
+}
+
+void ClientApp::relaunch_group() {
+    box_clients_.stop_all();
+    launch_group();
 }
 
 } // namespace hailstone::app::client_internal

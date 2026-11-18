@@ -180,6 +180,9 @@ struct Options {
     std::string mq_master_pass;
     std::string roster_out;
     bool launch_after_import = false;
+    std::string profile;
+    std::string slot;
+    std::string settings_path;
 };
 
 void usage() {
@@ -363,6 +366,9 @@ void usage() {
         "  --gpu-mode M       GPU retention mode: cached (default), deferred, or shared-broker\n"
         "  --session-id ID    session identifier on the Hailstone 24 IPC bus\n"
         "  --ipc-socket PATH  local AF_UNIX broker socket path\n"
+        "  --profile NAME     group profile in profiles/ (.ini or .json), applied before auto-login\n"
+        "  --slot S           slot number, session_id, or character name within --profile\n"
+        "  --settings-path P  character-specific settings dir/file confined inside --data-dir\n"
         "  --import-mq-logins PATH  import all users, passwords, servers and characters from MacroQuest\n"
         "                     (login.db, MQ2AutoLogin.ini, or caret-delimited export) into Hailstone keyring\n"
         "  --mq-master-pass P optional MacroQuest login.db master password (also $MQ_MASTER_PASSWORD)\n"
@@ -771,6 +777,15 @@ Options parse_args(int argc, char** argv) {
         } else if (arg("--ipc-socket")) {
             need(1);
             o.ipc_socket = argv[++i];
+        } else if (arg("--profile")) {
+            need(1);
+            o.profile = argv[++i];
+        } else if (arg("--slot")) {
+            need(1);
+            o.slot = argv[++i];
+        } else if (arg("--settings-path")) {
+            need(1);
+            o.settings_path = argv[++i];
         } else if (arg("--import-mq-logins")) {
             need(1);
             o.import_mq_logins = argv[++i];
@@ -878,16 +893,18 @@ int main(int argc, char** argv) {
             if (opts.port > 0) iopts.fallback_port = opts.port;
             iopts.servers_dir = platform::servers_dir();
             iopts.roster_out = opts.roster_out;
+            iopts.profiles_dir = platform::profiles_dir();
             const auto res = core::import_mq_logins(iopts);
             for (const auto& w : res.warnings) log::warn("MQ import: {}", w);
             if (!res.ok) {
                 log::error("MQ import failed: {}", res.error);
                 return 1;
             }
-            std::printf("Imported %zu account(s) (%zu password(s) saved to keyring, %zu character(s)) into server '%s' (%s:%d)\n",
+            std::printf("Imported %zu account(s) (%zu password(s) saved to keyring, %zu character(s), %zu group profile(s)) into server '%s' (%s:%d)\n",
                         res.accounts_imported, res.passwords_saved, res.characters_linked,
-                        res.server_profile_id.c_str(), res.server_host.c_str(), res.server_port);
-            if (!opts.launch_after_import && opts.account.empty() && opts.user.empty() && !opts.headless_bg) {
+                        res.group_profiles_written.size(), res.server_profile_id.c_str(), res.server_host.c_str(),
+                        res.server_port);
+            if (!opts.launch_after_import && opts.account.empty() && opts.user.empty() && opts.profile.empty() && !opts.headless_bg) {
                 return 0;
             }
         }
@@ -1000,6 +1017,9 @@ int main(int argc, char** argv) {
             c.gpu_mode = opts.gpu_mode;
             c.session_id = opts.session_id;
             c.ipc_socket = opts.ipc_socket;
+            c.profile = opts.profile;
+            c.slot = opts.slot;
+            c.settings_path = opts.settings_path;
             return app::run_client(c);
         }
 

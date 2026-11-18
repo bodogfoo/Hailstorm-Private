@@ -781,8 +781,17 @@ void ClientApp::apply_connection_settings() {
     conn_->set_cast_animation_fallback(config_.get_bool("game.cast_animation_fallback", true));
 }
 
-void ClientApp::use_character_settings(const std::filesystem::path& character_dir) {
-    std::filesystem::path file = character_dir.empty() ? std::filesystem::path() : CharacterFiles{character_dir}.settings();
+void ClientApp::use_character_settings(const std::filesystem::path& character_path) {
+    std::filesystem::path file;
+    if (!character_path.empty()) {
+        auto safe = core::resolve_safe_settings_path(platform::data_dir(), character_path);
+        if (!safe) {
+            log::warn("settings: rejected unsafe settings path outside Hailstone data dir: {}",
+                      character_path.string());
+            return;
+        }
+        file = (safe->extension() == ".ini") ? *safe : CharacterFiles{*safe}.settings();
+    }
     if (file == config_.character_path()) return;
     if (!config_.attach_character(file)) log::warn("settings: {} could not be read or written", file.string());
     if (!file.empty()) log::info("settings: the character's, {}", file.string());

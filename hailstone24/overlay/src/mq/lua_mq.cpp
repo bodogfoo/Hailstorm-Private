@@ -1078,6 +1078,16 @@ struct TrustedScriptFile {
     std::string text, chunk, msg;
 };
 
+bool starts_with_icase_mq(std::string_view s, std::string_view prefix) {
+    if (s.size() < prefix.size()) return false;
+    for (std::size_t i = 0; i < prefix.size(); ++i) {
+        const auto a = static_cast<unsigned char>(std::tolower(static_cast<unsigned char>(s[i])));
+        const auto b = static_cast<unsigned char>(std::tolower(static_cast<unsigned char>(prefix[i])));
+        if (a != b) return false;
+    }
+    return true;
+}
+
 // Resolves an approved script-root file for executable loading (never config files under mq.configDir or config/).
 void resolve_trusted_script_file(lua_State* L, const Script& s, std::string_view given, TrustedScriptFile& out) {
     if (given.empty() || given.find('\0') != std::string_view::npos) return;
@@ -1085,14 +1095,25 @@ void resolve_trusted_script_file(lua_State* L, const Script& s, std::string_view
     const fs::path gp(norm);
     std::error_code ec;
 
-    // 1. Files that belong to mq.configDir (existing relative config files, or any path inside env.config_dir)
-    // ALWAYS stay exclusively on the restricted data-only config loader.
-    if (auto cp = config_path(L, norm.c_str()); cp && fs::exists(*cp, ec)) {
-        return;
-    }
+    // 1. Paths explicitly targeting mq.configDir / scripts/config/ ALWAYS stay exclusively on the restricted
+    // data-only config loader (never executable as trusted scripts).
     if (gp.is_absolute() && !s.host->env.config_dir.empty()) {
         const fs::path cand_abs = fs::weakly_canonical(gp, ec);
         if (!ec && is_under_dir(s.host->env.config_dir, cand_abs, true)) {
+            return;
+        }
+    }
+    if (gp.is_relative() &&
+        (starts_with_icase_mq(norm, "config/") || starts_with_icase_mq(norm, "scripts/config/"))) {
+        return;
+    }
+
+    const bool prefer_trusted_root = gp.is_relative() &&
+                                     (starts_with_icase_mq(norm, "class_configs/") ||
+                                      starts_with_icase_mq(norm, "rgmercs/") ||
+                                      starts_with_icase_mq(norm, "scripts/rgmercs/"));
+    if (!prefer_trusted_root) {
+        if (auto cp = config_path(L, norm.c_str()); cp && fs::exists(*cp, ec)) {
             return;
         }
     }
@@ -1107,14 +1128,25 @@ void resolve_trusted_script_file(lua_State* L, const Script& s, std::string_view
         fs::path canon_r = fs::weakly_canonical(r, ec);
         if (ec || canon_r.empty()) continue;
 
-        fs::path cand = gp.is_relative() ? (canon_r / gp) : gp;
-        fs::path canon_cand = fs::weakly_canonical(cand, ec);
-        if (ec || canon_cand.empty()) continue;
+        auto try_candidate = [&](const fs::path& rel_or_abs) -> std::optional<fs::path> {
+            fs::path cand = rel_or_abs.is_relative() ? (canon_r / rel_or_abs) : rel_or_abs;
+            fs::path canon_cand = fs::weakly_canonical(cand, ec);
+            if (ec || canon_cand.empty()) return std::nullopt;
+            fs::path rel = canon_cand.lexically_relative(canon_r);
+            if (rel.empty() || rel == "." || rel.is_absolute() || *rel.begin() == "..") return std::nullopt;
+            if (is_config_target(s, canon_cand)) return std::nullopt;
+            if (!fs::is_regular_file(canon_cand, ec)) return std::nullopt;
+            return canon_cand;
+        };
 
-        fs::path rel = canon_cand.lexically_relative(canon_r);
-        if (rel.empty() || rel == "." || rel.is_absolute() || *rel.begin() == "..") continue;
-        if (is_config_target(s, canon_cand)) continue;
-        if (!fs::is_regular_file(canon_cand, ec)) continue;
+        std::optional<fs::path> matched = try_candidate(gp);
+        if (!matched && gp.is_relative() && starts_with_icase_mq(norm, "scripts/") &&
+            starts_with_icase_mq(canon_r.filename().string(), "scripts") &&
+            canon_r.filename().string().size() == 7) {
+            matched = try_candidate(fs::path(norm.substr(8)));
+        }
+        if (!matched) continue;
+        const fs::path canon_cand = *matched;
 
         // From here on, this path targets a real file inside an approved script root.
         out.handled = true;
@@ -1386,6 +1418,9 @@ do
         for i = 2, r.n do
             if not only_data(r[i], seen) then return nil, tostring(path) .. ': not data (it holds a function)' end
         end
+        if r.n <= 1 or (r.n == 2 and r[2] == nil) then
+            return function() return {} end
+        end
         return function() return unpack(r, 2, r.n) end
     end
     function dofile(path)
@@ -1467,7 +1502,10 @@ local function pickle_value(v, indent)
     end
     return '{\n' .. table.concat(parts, ',\n') .. '\n' .. string.rep('    ', indent) .. '}'
 end
-function mq.pickle(path, tbl) mq._write_config(path, 'return ' .. pickle_value(tbl, 0) .. '\n') end
+function mq.pickle(path, tbl)
+    if tbl == nil then tbl = {} end
+    mq._write_config(path, 'return ' .. pickle_value(tbl, 0) .. '\n')
+end
 
 function printf(fmt, ...) print(string.format(fmt, ...)) end
 

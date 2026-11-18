@@ -762,6 +762,113 @@ LoginAction login_screen(LoginView& view) {
         }
     }
     if (!view.transient) {
+        // MacroQuest-style group/box profile launcher (profiles/<name>.ini or .json).
+        {
+            label("Group");
+            const ImGuiStyle& gstyle = ImGui::GetStyle();
+            const float refresh_w = buttons_width({"Refresh"}) + gstyle.ItemSpacing.x;
+            ImGui::SetNextItemWidth(field_w - refresh_w);
+            const bool gpicked =
+                view.group_selected >= 0 && view.group_selected < static_cast<int>(view.group_profiles.size());
+            std::string gpreview =
+                gpicked ? view.group_profiles[static_cast<std::size_t>(view.group_selected)].name
+                        : (view.group_profiles.empty() ? "(no group profiles in profiles/)" : "(select group profile)");
+            if (ImGui::BeginCombo("##groupprofile", gpreview.c_str())) {
+                for (int i = 0; i < static_cast<int>(view.group_profiles.size()); ++i) {
+                    const auto& gp = view.group_profiles[static_cast<std::size_t>(i)];
+                    ImGui::PushID(i);
+                    std::string item = std::format("{}  ({} slots)", gp.name, gp.slot_count);
+                    if (ImGui::Selectable(item.c_str(), view.group_selected == i) && view.group_selected != i) {
+                        view.group_profile_choice = gp.id;
+                        action = LoginAction::SelectGroupProfile;
+                    }
+                    if (ImGui::IsItemHovered() && !gp.source_path.empty()) {
+                        ImGui::SetTooltip("%s%s%s", gp.source_path.c_str(),
+                                          gp.description.empty() ? "" : "\n", gp.description.c_str());
+                    }
+                    ImGui::PopID();
+                }
+                ImGui::EndCombo();
+            }
+            if (ImGui::IsItemHovered() && !view.profiles_dir.empty()) {
+                ImGui::SetTooltip("Group profiles folder: %s", view.profiles_dir.string().c_str());
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Refresh")) action = LoginAction::RefreshGroupProfiles;
+
+            if (!view.group_slots.empty()) {
+                label("Slots");
+                if (view.group_slot_selected >= static_cast<int>(view.group_slots.size()))
+                    view.group_slot_selected = -1;
+                constexpr ImGuiTableFlags kGTable =
+                    ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_ScrollY;
+                const float em = ImGui::GetFontSize();
+                const float grows = static_cast<float>(std::min<std::size_t>(view.group_slots.size(), 6));
+                const float gheight = (grows + 1.0f) * ImGui::GetTextLineHeightWithSpacing() + em * 0.5f;
+                ImGui::BeginGroup();
+                if (ImGui::BeginTable("group_slots", 6, kGTable, ImVec2(field_w, gheight))) {
+                    ImGui::TableSetupScrollFreeze(0, 1);
+                    ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, em * 2.2f);
+                    ImGui::TableSetupColumn("Character", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn("Role", ImGuiTableColumnFlags_WidthFixed, em * 3.5f);
+                    ImGui::TableSetupColumn("Account", ImGuiTableColumnFlags_WidthFixed, em * 5.0f);
+                    ImGui::TableSetupColumn("Auto", ImGuiTableColumnFlags_WidthFixed, em * 2.5f);
+                    ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, em * 6.5f);
+                    ImGui::TableHeadersRow();
+                    for (int i = 0; i < static_cast<int>(view.group_slots.size()); ++i) {
+                        const auto& s = view.group_slots[static_cast<std::size_t>(i)];
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::PushID(s.slot_number * 100 + i);
+                        std::string num_lbl = std::format("{}:{}", s.launch_order, s.slot_number);
+                        if (ImGui::Selectable(num_lbl.c_str(), view.group_slot_selected == i,
+                                              ImGuiSelectableFlags_SpanAllColumns |
+                                                  ImGuiSelectableFlags_AllowDoubleClick)) {
+                            view.group_slot_selected = i;
+                            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                                view.group_slot_choice = s.slot_number;
+                                action = LoginAction::LaunchGroupSlot;
+                            }
+                        }
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("Order %d, Slot %d (%s)\nServer: %s | World: %s\nSettings: %s\nMode: %s",
+                                              s.launch_order, s.slot_number, s.session_id.c_str(),
+                                              s.server_id.c_str(), s.world.c_str(), s.settings_path.c_str(),
+                                              s.headless ? "Headless BG" : "Foreground");
+                        }
+                        ImGui::PopID();
+                        ImGui::TableNextColumn();
+                        ImGui::TextUnformatted(s.character.empty() ? "-" : s.character.c_str());
+                        ImGui::TableNextColumn();
+                        ImGui::TextUnformatted(s.class_role.empty() ? "-" : s.class_role.c_str());
+                        ImGui::TableNextColumn();
+                        ImGui::TextColored(kDimColor, "%s", s.account.c_str());
+                        ImGui::TableNextColumn();
+                        ImGui::TextUnformatted(s.auto_login ? "Yes" : "No");
+                        ImGui::TableNextColumn();
+                        ImGui::TextColored(s.online ? kGoodColor : kDimColor, "%s", s.status.c_str());
+                    }
+                    ImGui::EndTable();
+                }
+                if (ImGui::Button("Launch group")) action = LoginAction::LaunchGroup;
+                ImGui::SameLine();
+                const bool can_one = view.group_slot_selected >= 0 &&
+                                     view.group_slot_selected < static_cast<int>(view.group_slots.size());
+                ImGui::BeginDisabled(!can_one);
+                if (ImGui::Button("Launch slot")) {
+                    view.group_slot_choice =
+                        view.group_slots[static_cast<std::size_t>(view.group_slot_selected)].slot_number;
+                    action = LoginAction::LaunchGroupSlot;
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (ImGui::Button("Stop group")) action = LoginAction::StopGroup;
+                ImGui::SameLine();
+                if (ImGui::Button("Relaunch")) action = LoginAction::RelaunchGroup;
+                ImGui::EndGroup();
+            }
+            ImGui::Separator();
+        }
         // The saved servers: pick one, start a new one, or delete the picked one.
         label("Server");
         const ImGuiStyle& style = ImGui::GetStyle();

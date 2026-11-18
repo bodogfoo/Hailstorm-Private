@@ -36,6 +36,9 @@ struct MqImportOptions {
     int fallback_port = 5999;
     std::filesystem::path servers_dir = platform::servers_dir();
     std::filesystem::path roster_out;       // optional output hailstone24_roster.ini (no passwords written)
+    std::filesystem::path profiles_dir;     // optional profiles/ directory for passwordless group .ini profiles
+    std::string default_profile_name = "imported";
+    bool write_group_profiles = true;
     bool mark_box = true;
     bool mark_save_password = true;
 };
@@ -54,6 +57,7 @@ struct MqImportResult {
     int server_port = 0;
     std::vector<std::string> warnings;
     std::vector<std::string> imported_accounts;
+    std::vector<std::string> group_profiles_written;
     std::string error;
 };
 

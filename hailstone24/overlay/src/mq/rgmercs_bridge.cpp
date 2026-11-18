@@ -454,7 +454,8 @@ void RGMercsBridge::refresh_sources_locked() {
 
         const std::string name_low = to_lower_ascii(p.generic_string());
         const std::string name_tok = normalize_token(p.stem().string() + p.parent_path().filename().string());
-        // Skip unrelated files in config/ root unless under rgmercs/ or explicitly named rgmercs
+        // Never treat class_configs/* scripts as user settings databases; skip unrelated files in config/ root.
+        if (contains_icase(name_low, "/class_configs/")) continue;
         const bool in_rg = contains_icase(name_low, "rgmercs");
         if (!in_rg) continue;
 
