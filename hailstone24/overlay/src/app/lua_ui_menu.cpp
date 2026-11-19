@@ -1,4 +1,4 @@
-#include "app/lua_eq_menu.h"
+#include "app/lua_ui_menu.h"
 
 #include <algorithm>
 #include <cctype>
@@ -68,6 +68,7 @@ const char* toggle_command_window(int command) {
         {C::CMD_TOGGLE_AURAWND, "AuraWindow"},           {C::CMD_TOGGLE_COMBAT_ABILITY_WIN, "CombatAbilityWnd"},           {C::TOGGLE_LFGUILDWIN, "LFGuildWnd"},
         {C::TOGGLE_LFGROUPWIN, "GroupSearchWnd"},
         {C::CMD_TOGGLE_ALARM, "AlarmWnd"},
+        {C::CMD_HISTORIC_ALERTS, "AlertHistoryWnd"}, // __ExecuteCmd case 168: its show / hide
         {C::TOGGLE_HELPWIN, "HelpWindow"},         {C::TOGGLE_VIDEOMODEWIN, "VideoModesWindow"},
         {C::TOGGLE_STORYWIN, "StoryWnd"},
         {C::TOGGLE_JOURNAL, "JournalNPCWnd"},
@@ -102,14 +103,13 @@ bool menu_command_offered(int command, const std::function<bool(std::string_view
     case C::CMD_TOGGLE_COMBAT_ABILITY_WIN:
     case C::TOGGLE_HOTBOX1WIN:
     case C::TOGGLE_OPTIONSWIN:
-    case C::CMD_TOGGLE_FIND_WINDOW: // Hailstone's Find window (app/lua_eq_find.cpp), drawn by every pack
+    case C::CMD_TOGGLE_FIND_WINDOW: // Hailstone's Find window (app/lua_ui_find.cpp), drawn by every pack
         return true;
     // Hailstone: both packs draw the aggro meter in the target window, so it has no row of its own (a server's
     // CascadeMenu.txt row goes too); /aggrometer and its key still toggle the game's AggroMeterWnd.
     case C::CMD_TOGGLE_AGGRO: return false;
     default: break;
     }
-    if (command == kMenuRGMercs) return replaces && replaces("RGMercsWnd");
     const char* screen = toggle_command_window(command);
     return screen && replaces && replaces(screen);
 }
@@ -296,7 +296,7 @@ void CascadeMenu::load_text(std::string_view file, std::uint32_t expansions, std
     where = top.insert(where, {1, icon, "Report a Bug", kMenuReportBug, -1});
     where = top.insert(where, {1, icon, "Web Browser", kMenuWebBrowser, -1});
     where = top.insert(where, {1, icon, "Lua Scripts", kMenuScripts, -1});
-    if (offered && offered(kMenuRGMercs)) top.insert(where, {1, icon, "RGMercs", kMenuRGMercs, -1});
+    top.insert(where, {1, icon, "Combat Controller", kMenuCombat, -1});
     plugin_menu_ = -1;
     apply_plugin_entries();
     if (!left_out.empty()) {
@@ -436,10 +436,9 @@ void CascadeMenu::apply_plugin_entries() {
     plugin_menu_ = static_cast<int>(menus_.size());
     menus_.push_back(std::move(m));
     auto& rows = menus_[0].items; // (push_back may have moved menus_)
-    // Before Hailstone's own rows (RGMercs, Lua Scripts, Web Browser, Report a Bug).
+    // Before Hailstone's own rows (Lua Scripts, Web Browser, Report a Bug).
     auto where = std::find_if(rows.begin(), rows.end(), [](const Item& it) {
-        return it.command == kMenuRGMercs || it.command == kMenuScripts || it.command == kMenuWebBrowser ||
-               it.command == kMenuReportBug;
+        return it.command == kMenuScripts || it.command == kMenuWebBrowser || it.command == kMenuReportBug;
     });
     rows.insert(where, {5, -1, "Plugins", -1, plugin_menu_});
     if (sorted_) arrange();

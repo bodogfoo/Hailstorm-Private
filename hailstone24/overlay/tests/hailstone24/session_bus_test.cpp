@@ -107,13 +107,13 @@ TEST_CASE("SessionBus IPC: roster, /bca command dispatch, actors mailbox, and fo
     ActorPacket ap;
     ap.sender_session = "slot01";
     ap.sender_char = "TankOne";
-    ap.mailbox = "rgmercs_pull";
+    ap.mailbox = "combat_mode";
     ap.target_char = "ClericTwo";
     ap.payload_json = R"({"heal":true,"hp":42})";
     CHECK(c1.send_actor(ap));
     pump_all(srv, c1, c2, mgr);
     REQUIRE(c2_actors.size() == 1);
-    CHECK(c2_actors[0].mailbox == "rgmercs_pull");
+    CHECK(c2_actors[0].mailbox == "combat_mode");
     CHECK(c2_actors[0].payload_json == ap.payload_json);
 
     // Exclusive foreground switch via manager client -> ClericTwo becomes FG, TankOne becomes BG_HEADLESS.

@@ -1,4 +1,4 @@
--- Login: the client's login screen in this UI's look (eq.LoginScreen, app/lua_eq_pregame.cpp; a Hailstone screen, not
+-- Login: the client's login screen in this UI's look (hs.LoginScreen, app/lua_ui_pregame.cpp; a Hailstone screen, not
 -- the original's). Built around what a player does most: pick a saved server, type or pick an account, Log in. The
 -- server's details (name, address, port, its files) fold away under Edit once it is saved; the interface is picked in
 -- the card's footer, always in sight; the game files and the texture pack sit under More options; the characters seen
@@ -8,6 +8,7 @@
 -- the add-on index) first; the box set opens as a card of its own on the login card's other side. The build, the
 -- updater's word on it, What's new and Hailstone's page sit in a small card in the screen's top left corner.
 -- Everything the client's own screen (ui/dev_screens.cpp login_screen) offers is here.
+local API = hs.UI
 local P = dofile("lib/pregame.lua")
 local T = P.T
 local C = T.color
@@ -27,7 +28,7 @@ local removeAsk = false  -- a row's Remove was pressed: the question opens at th
 local addonTab = nil    -- the add-ons card's tab to select next frame ("store" or "mine"), nil: as it is
 local testedTab = nil   -- test.addontab as last applied
 local notesTested = false -- test.whatsnew applied
-local held = nil        -- the view drawn last frame: eq.LoginScreen gives true while it still holds (its revision)
+local held = nil        -- the view drawn last frame: hs.LoginScreen gives true while it still holds (its revision)
 
 -- (built once: tables and long texts made each frame are garbage the collector works through)
 local EDIT, DONE, CLOSE, LOOK, ADDONS_QUIT = { "Edit" }, { "Done" }, { "Close" }, { "Look" }, { "Add-ons", "Quit" }
@@ -66,7 +67,7 @@ end
 local function field(view, id, key, hint, flags)
   local text, enter = ui.InputTextWithHint(id, hint, view[key], 256, (flags or 0) | ENTER)
   if text ~= view[key] then
-    eq.LoginSet(key, text)
+    API.pregame.LoginSet(key, text)
     view[key] = text
     held = nil -- (written here: the next frame reads the client's view whole again)
   end
@@ -79,7 +80,7 @@ local function portField(view)
   local text, enter = ui.InputTextWithHint("##port", "Port", shown, 5, ui.InputTextFlags.CharsDecimal | ENTER)
   port.active, port.text = ui.IsItemActive(), text
   local n = tonumber(text)
-  if n and n ~= view.port then eq.LoginSet("port", math.floor(n)) end
+  if n and n ~= view.port then API.pregame.LoginSet("port", math.floor(n)) end
   return enter
 end
 
@@ -127,7 +128,7 @@ local function serverDetails(view, s)
           P.Faint(shortPath(view.assetsDir))
           ui.PopTextWrapPos()
           P.Tip(view.assetsDir .. "\nThe server's own client files, found before the game files.")
-          if ui.Button("Open folder") then eq.LoginDo("openAssets") end
+          if ui.Button("Open folder") then API.pregame.LoginDo("openAssets") end
         else
           ui.PushTextWrapPos(0)
           P.Faint("A folder for the server's own files is made when it is saved.")
@@ -139,7 +140,7 @@ local function serverDetails(view, s)
   end
   if not view.transient then
     ui.BeginDisabled(view.host == "")
-    if ui.Button(picked and "Save changes" or "Save server") then eq.LoginDo("save") end
+    if ui.Button(picked and "Save changes" or "Save server") then API.pregame.LoginDo("save") end
     ui.EndDisabled()
     P.Tip("Keep the server's name, address, port and interface.")
     if picked then
@@ -162,12 +163,12 @@ local function serverSection(view, s)
   if ui.BeginCombo("##servers", preview, ui.ComboFlags.HeightLarge) then
     for i, sv in ipairs(view.servers) do
       ui.PushID(i)
-      if ui.Selectable(sv.name, i == view.selected) and i ~= view.selected then eq.LoginDo("select", i) end
+      if ui.Selectable(sv.name, i == view.selected) and i ~= view.selected then API.pregame.LoginDo("select", i) end
       P.Tip(sv.host .. ":" .. sv.port)
       ui.PopID()
     end
     if #view.servers > 0 then ui.Separator() end
-    if ui.Selectable("+ New server", not picked) and picked then eq.LoginDo("new") end
+    if ui.Selectable("+ New server", not picked) and picked then API.pregame.LoginDo("new") end
     ui.EndCombo()
   end
   if picked then
@@ -196,7 +197,7 @@ local function accountSection(view, s, appearing)
   submit = field(view, "##user", "username", "Username") or submit
   -- a saved account typed in full counts as picked (its saved password comes with it)
   if ui.IsItemDeactivatedAfterEdit() and view.password == "" and view.username ~= "" then
-    eq.LoginDo("account", view.username)
+    API.pregame.LoginDo("account", view.username)
   end
   if accounts then
     ui.SameLine()
@@ -205,7 +206,7 @@ local function accountSection(view, s, appearing)
       for _, a in ipairs(view.accounts) do
         ui.PushID(a.username)
         local label = a.username .. (a.character ~= "" and ("  (" .. a.character .. ")") or "")
-        if ui.Selectable(label, a.username == view.username) then eq.LoginDo("account", a.username) end
+        if ui.Selectable(label, a.username == view.username) then API.pregame.LoginDo("account", a.username) end
         P.Tip(a.passwordSaved and "Password saved" or "No password saved")
         ui.PopID()
       end
@@ -218,13 +219,13 @@ local function accountSection(view, s, appearing)
   submit = field(view, "##pass", "password", "Password", ui.InputTextFlags.Password) or submit
   if not view.transient then
     local v, changed = ui.Checkbox("Remember account", view.remember)
-    if changed then eq.LoginSet("remember", v) end
+    if changed then API.pregame.LoginSet("remember", v) end
     P.Tip("Keep the username in this server's accounts.")
     ui.SameLine(0, 16 * s)
     local can = view.remember and view.canSavePasswords
     ui.BeginDisabled(not can)
     v, changed = ui.Checkbox("Save password", view.savePassword)
-    if changed then eq.LoginSet("savePassword", v) end
+    if changed then API.pregame.LoginSet("savePassword", v) end
     ui.EndDisabled()
     if not view.canSavePasswords then
       P.Tip(NO_KEYRING_TIP)
@@ -238,18 +239,18 @@ local function accountSection(view, s, appearing)
 end
 
 -- ---------------------------------------------------------------- more options
--- The texture pack (eq.Option "texture_pack", display.texture_folder; the Options window's Textures row too): Off,
+-- The texture pack (hs.Option "texture_pack", display.texture_folder; the Options window's Textures row too): Off,
 -- then each folder of Hailstone's textures/, such as a pack Hailstone Texture Studio built. Read at the next start:
 -- textures already loaded stay as they are.
 local function texturePack(s)
-  local pack = eq.Option("texture_pack")
+  local pack = API.settings.Option("texture_pack")
   if pack == nil then return end
   packAtStart = packAtStart or pack
   detail("Textures", s, function()
-    local choices = eq.OptionChoices("texture_pack")
+    local choices = API.settings.OptionChoices("texture_pack")
     if ui.BeginCombo("##texture_pack", choices[pack + 1] or "A folder of its own") then
       for i, name in ipairs(choices) do
-        if ui.Selectable(name, i == pack + 1) and i ~= pack + 1 then eq.SetOption("texture_pack", i - 1) end
+        if ui.Selectable(name, i == pack + 1) and i ~= pack + 1 then API.settings.SetOption("texture_pack", i - 1) end
       end
       ui.EndCombo()
     end
@@ -266,7 +267,7 @@ local function texturePack(s)
 end
 
 local function gameFiles(view, s)
-  if #view.gameFolders == 0 and eq.Option("texture_pack") == nil then return end
+  if #view.gameFolders == 0 and API.settings.Option("texture_pack") == nil then return end
   local current = view.gameFolders[1]
   if not ui.BeginTable("##gamefiles", 2, ui.TableFlags.SizingFixedFit) then return end
   ui.TableSetupColumn("label", ui.TableColumnFlags.WidthFixed, 74 * s)
@@ -281,13 +282,13 @@ local function gameFiles(view, s)
       for i, f in ipairs(view.gameFolders) do
         ui.PushID(i)
         ui.BeginDisabled(not f.usable)
-        if ui.Selectable(f.label, i == 1) and i ~= 1 then eq.LoginDo("gameFolder", i) end
+        if ui.Selectable(f.label, i == 1) and i ~= 1 then API.pregame.LoginDo("gameFolder", i) end
         ui.EndDisabled()
         P.Tip(f.path .. (f.usable and "" or "\nNot usable now: see Browse."))
         ui.PopID()
       end
       ui.Separator()
-      if ui.Selectable("Browse...") then eq.LoginDo("browse") end
+      if ui.Selectable("Browse...") then API.pregame.LoginDo("browse") end
       ui.EndCombo()
     end
     P.Tip("The EverQuest files to play with, RoF2 or live: " .. current.path .. "\nA server's own files go over them.")
@@ -320,7 +321,7 @@ local function boxSetCard(view, s, bh)
       ui.TableNextColumn()
       ui.BeginDisabled(not a.canBox)
       local v, changed = ui.Checkbox("##box", a.box)
-      if changed then eq.LoginDo("box", a.username, v) end
+      if changed then API.pregame.LoginDo("box", a.username, v) end
       ui.EndDisabled()
       P.Tip(a.canBox and "In the box set: Log in box set starts a window for it."
         or "Log in with it once with Save password ticked to box it.")
@@ -334,11 +335,9 @@ local function boxSetCard(view, s, bh)
       ui.TableNextColumn()
       ui.SetNextItemWidth(-1)
       if ui.BeginCombo("##world", a.world == "" and "(last)" or a.world) then
-        if ui.Selectable("(last played)", a.world == "") and a.world ~= "" then eq.LoginDo("world", a.username, "") end
+        if ui.Selectable("(last played)", a.world == "") and a.world ~= "" then API.pregame.LoginDo("world", a.username, "") end
         for _, w in ipairs(view.worlds) do
-          if ui.Selectable(w, w:lower() == a.world:lower()) and w:lower() ~= a.world:lower() then
-            eq.LoginDo("world", a.username, w)
-          end
+          if ui.Selectable(w, w == a.world) and w ~= a.world then API.pregame.LoginDo("world", a.username, w) end
         end
         ui.EndCombo()
       end
@@ -348,15 +347,15 @@ local function boxSetCard(view, s, bh)
       ui.SetNextItemWidth(-1)
       if ui.BeginCombo("##character", a.character == "" and "(choose)" or a.character) then
         if ui.Selectable("(choose)", a.character == "") and a.character ~= "" then
-          eq.LoginDo("character", a.username, "")
+          API.pregame.LoginDo("character", a.username, "")
         end
         for j, c in ipairs(a.characters) do
-          if a.world == "" or c.world:lower() == a.world:lower() then
+          if a.world == "" or c.world == a.world then
             local label = c.name .. (c.level > 0 and string.format("  %d %s", c.level, c.classes) or "")
             if a.world == "" then label = label .. "  (" .. c.world .. ")" end
             ui.PushID(j)
-            if ui.Selectable(label, c.name:lower() == a.character:lower()) and c.name:lower() ~= a.character:lower() then
-              eq.LoginDo("character", a.username, c.name)
+            if ui.Selectable(label, c.name == a.character) and c.name ~= a.character then
+              API.pregame.LoginDo("character", a.username, c.name)
             end
             ui.PopID()
           end
@@ -378,7 +377,7 @@ local function boxSetCard(view, s, bh)
   if view.boxCount > 0 then
     ui.Dummy(0, 2 * s)
     if P.Primary(string.format("Log in box set (%d)", view.boxCount), -1, bh, view.boxReady) then
-      eq.LoginDo("loginBox")
+      API.pregame.LoginDo("loginBox")
     end
     P.Tip(BOX_LOGIN_TIP)
   end
@@ -390,12 +389,13 @@ local function boxSetCard(view, s, bh)
   -- (in this card: the question opens from its Forget buttons)
   if P.Confirm("##forgetaccount", string.format("Forget %s on this server?", forgetName or ""),
       "Its saved password leaves the system keyring.", "Forget", s) and forgetName then
-    eq.LoginDo("forget", forgetName)
+    API.pregame.LoginDo("forget", forgetName)
   end
 end
 
 -- ---------------------------------------------------------------- group profiles
 -- MacroQuest-style roster/group profiles (profiles/<name>.ini or .json). Passwords stay in keyring.
+
 local function groupProfilesCard(view, s, bh)
   local gp = (view.groupSelected or 0) > 0 and view.groupProfiles[view.groupSelected] or nil
   local subtitle = gp and gp.description ~= "" and gp.description
@@ -412,7 +412,7 @@ local function groupProfilesCard(view, s, bh)
       ui.PushID(item.id)
       local lbl = string.format("%s (%d slots)", item.name, item.slotCount)
       if ui.Selectable(lbl, i == view.groupSelected) and i ~= view.groupSelected then
-        eq.LoginDo("selectGroupProfile", item.id)
+        API.pregame.LoginDo("selectGroupProfile", item.id)
       end
       if item.sourcePath ~= "" then
         P.Tip(item.sourcePath .. (item.description ~= "" and ("\n" .. item.description) or ""))
@@ -423,7 +423,7 @@ local function groupProfilesCard(view, s, bh)
   end
   if view.profilesDir and view.profilesDir ~= "" then P.Tip("Profiles folder: " .. view.profilesDir) end
   ui.SameLine()
-  if ui.Button("Refresh") then eq.LoginDo("refreshGroupProfiles") end
+  if ui.Button("Refresh") then API.pregame.LoginDo("refreshGroupProfiles") end
   P.Tip("Rescan profiles/*.ini and profiles/*.json")
 
   local slots = view.groupSlots or {}
@@ -448,11 +448,11 @@ local function groupProfilesCard(view, s, bh)
         local sel = (view.groupSlotSelected == i)
         local rowLbl = string.format("%d:%d", sl.launchOrder, sl.slotNumber)
         if ui.Selectable(rowLbl, sel, ui.SelectableFlags.SpanAllColumns | ui.SelectableFlags.AllowDoubleClick) then
-          eq.LoginSet("groupSlot", i)
-          if ui.IsMouseDoubleClicked(0) then eq.LoginDo("launchGroupSlot", i) end
+          API.pregame.LoginSet("groupSlot", i)
+          if ui.IsMouseDoubleClicked(0) then API.pregame.LoginDo("launchGroupSlot", i) end
         end
         P.Tip(string.format(
-          "Launch order %d · Slot %d (%s)\nServer: %s · World: %s\nSettings: %s\nMode: %s",
+          "Launch order %d - Slot %d (%s)\nServer: %s - World: %s\nSettings: %s\nMode: %s",
           sl.launchOrder, sl.slotNumber, sl.sessionId, sl.serverId, sl.world, sl.settingsPath,
           sl.headless and "Headless BG" or "Foreground"))
         ui.TableNextColumn()
@@ -474,17 +474,17 @@ local function groupProfilesCard(view, s, bh)
 
     ui.Dummy(0, 4 * s)
     local selSlot = slots[view.groupSlotSelected or 0]
-    if P.Primary("Launch group", 0, bh, gp ~= nil) then eq.LoginDo("launchGroup") end
+    if P.Primary("Launch group", 0, bh, gp ~= nil) then API.pregame.LoginDo("launchGroup") end
     P.Tip("Launch enabled slots in profile launch order using saved keyring credentials")
     ui.SameLine()
     if ui.Button(selSlot and ("Launch " .. (selSlot.character ~= "" and selSlot.character or selSlot.account))
         or "Launch character", 0, bh) then
-      if selSlot then eq.LoginDo("launchGroupSlot", view.groupSlotSelected) end
+      if selSlot then API.pregame.LoginDo("launchGroupSlot", view.groupSlotSelected) end
     end
     ui.SameLine()
-    if P.Danger("Stop group", 0, bh, true) then eq.LoginDo("stopGroup") end
+    if P.Danger("Stop group", 0, bh, true) then API.pregame.LoginDo("stopGroup") end
     ui.SameLine()
-    if ui.Button("Relaunch group", 0, bh) then eq.LoginDo("relaunchGroup") end
+    if ui.Button("Relaunch group", 0, bh) then API.pregame.LoginDo("relaunchGroup") end
   else
     ui.Dummy(0, 4 * s)
     P.Faint("Place .ini or .json group profile files in profiles/ or import via MQ2AutoLogin.")
@@ -514,8 +514,8 @@ local function quickCard(view, s, bh)
   for i, c in ipairs(view.characters) do
     ui.PushID(i)
     local clicked, double, x0, y0, x1 = P.Row("##row", view.quick == i, rowH, s)
-    if clicked then eq.LoginSet("quick", i) end
-    if double then eq.LoginDo("play", i) end
+    if clicked then API.pregame.LoginSet("quick", i) end
+    if double then API.pregame.LoginDo("play", i) end
     if ui.IsItemHovered() then
       ui.SetTooltip(string.format("%s on %s\nAccount %s%s", c.name, c.world, c.account,
         c.passwordSaved and "" or "\nNo saved password: type it, then Play."))
@@ -538,7 +538,7 @@ local function quickCard(view, s, bh)
   ui.PopStyleVar()
   ui.Dummy(0, 2 * s)
   local q = view.characters[view.quick]
-  if P.Primary(q and ("Play " .. q.name) or "Play", -1, bh, q ~= nil and not view.busy) then eq.LoginDo("play") end
+  if P.Primary(q and ("Play " .. q.name) or "Play", -1, bh, q ~= nil and not view.busy) then API.pregame.LoginDo("play") end
   if q and not q.passwordSaved then
     ui.PushTextWrapPos(0)
     P.Faint(string.format("%s has no saved password: type it in Password, then Play.", q.account))
@@ -557,17 +557,21 @@ end
 local function offerCard(o, s, bh)
   ui.Dummy(0, 4 * s)
   P.Heading(string.format("%s %s", o.name, o.version))
-  P.Muted(string.format("A %s%s, from %s", o.kind, o.author ~= "" and (" by " .. o.author) or "", o.source))
+  P.Muted(string.format("A %s%s, from %s", o.autoload and "managed add-on" or o.kind, o.author ~= "" and (" by " .. o.author) or "", o.source))
   ui.PushTextWrapPos(0)
   if o.description ~= "" then ui.TextWrapped(o.description) end
+  if o.autoload then ui.TextWrapped("Starts automatically when enabled. Manage it from My add-ons.") end
   if o.installedVersion ~= "" then P.Faint("Installed now: " .. o.installedVersion) end
-  if o.kind ~= "tool" and o.kind ~= "upscaler" then
+  if o.kind ~= "tool" and o.kind ~= "upscaler" and o.kind ~= "ui" then
     ui.Text("It asks to:")
     bullets(o.caps, s)
   end
   P.Faint(o.key ~= "" and ("Signed with key " .. o.key .. ": later versions must carry the same key.")
     or "Not signed: later versions come from whoever controls the repository.")
-  if o.kind == "plugin" or o.kind == "tool" or o.kind == "upscaler" then
+  if o.kind == "ui" then
+    ui.TextColored(C.gold[1], C.gold[2], C.gold[3], 1, "Full client interface access")
+    ui.TextWrapped("A UI pack can call host interface, account and game actions. Install only interfaces you trust.")
+  elseif o.kind == "plugin" or o.kind == "tool" or o.kind == "upscaler" then
     ui.TextColored(C.gold[1], C.gold[2], C.gold[3], 1, o.kind == "tool" and TOOL_WARNING
       or o.kind == "upscaler" and UPSCALER_WARNING or PLUGIN_WARNING)
   end
@@ -581,19 +585,19 @@ local function offerCard(o, s, bh)
   ui.Dummy(0, 2 * s)
   local label = o.older and "Install the older version" or (o.installedVersion == "" and "Install" or "Install this version")
   if P.Primary(label, 0, bh, o.blocked == "") then
-    eq.LoginDo("addonInstall", o.older and "older" or nil)
+    API.pregame.LoginDo("addonInstall", o.older and "older" or nil)
     addonTab = "mine" -- (where it shows up, with its progress)
   end
   ui.SameLine()
-  if ui.Button("Cancel") then eq.LoginDo("addonCancel") end
+  if ui.Button("Cancel") then API.pregame.LoginDo("addonCancel") end
   ui.SameLine()
-  if ui.Button("Repository") then eq.LoginDo("addonPage") end
+  if ui.Button("Repository") then API.pregame.LoginDo("addonPage") end
   P.Tip(o.page)
 end
 
-local function addonRow(a, r, s)
+local function addonRow(a, r, s, busy)
   ui.PushID(r.group .. ":" .. r.name)
-  local label = r.name .. (r.version ~= "" and (" " .. r.version) or "") .. "  \194\183  " .. r.kind
+  local label = r.name .. (r.version ~= "" and (" " .. r.version) or "") .. "  \194\183  " .. (r.managed and "add-on" or r.kind)
   if r.state ~= "" and r.state ~= "uptodate" and r.state ~= "idle" then label = label .. "  \194\183  " .. r.state end
   if ui.TreeNode(label .. "##row") then
     ui.PushTextWrapPos(0)
@@ -615,23 +619,30 @@ local function addonRow(a, r, s)
     if r.note ~= "" then P.Faint(r.note) end
     ui.PopTextWrapPos()
     if r.canStart then
-      if P.Primary("Start", 0, 0, true) then eq.LoginDo("addonStart", r.name) end
+      if P.Primary("Start", 0, 0, true) then API.pregame.LoginDo("addonStart", r.name) end
       P.Tip("Start " .. r.name .. " (it opens a window of its own)")
       ui.SameLine()
     end
     if r.group == "installed" then
+      if r.managed then
+        ui.BeginDisabled(busy == true)
+        local enabled, changedEnabled = ui.Checkbox("Enabled", r.enabled)
+        if changedEnabled then API.pregame.LoginDo("addonEnabled", r.name, enabled) end
+        ui.EndDisabled()
+        ui.TextDisabled("Starts automatically when this server allows it.")
+      end
       local v, changed = ui.Checkbox("Update by itself", r.autoUpdate)
-      if changed then eq.LoginDo("addonAuto", r.name, v) end
+      if changed then API.pregame.LoginDo("addonAuto", r.name, v) end
       P.Tip("Install newer versions at start when they ask for nothing more")
       if r.canUpdate then
         ui.SameLine()
         local what = r.state == "approval" and "Approve and update" or r.state == "modified" and "Update anyway"
           or r.state == "failed" and "Try again" or "Update"
-        if ui.Button(what) then eq.LoginDo("addonUpdate", r.name) end
+        if ui.Button(what) then API.pregame.LoginDo("addonUpdate", r.name) end
       end
       if r.page ~= "" then
         ui.SameLine()
-        if ui.Button("Repository") then eq.LoginDo("addonPage", r.name) end
+        if ui.Button("Repository") then API.pregame.LoginDo("addonPage", r.name) end
         P.Tip(r.page)
       end
       ui.SameLine()
@@ -644,17 +655,17 @@ local function addonRow(a, r, s)
     end
     -- the server's compiled plugin: the player's word on it (docs/plugins.md "The server's compiled plugins ask first")
     if r.consent == "allowed" then
-      if ui.Button("Don't allow it any more") then eq.LoginDo("addonRevoke", r.name) end
+      if ui.Button("Don't allow it any more") then API.pregame.LoginDo("addonRevoke", r.name) end
       P.Tip("It stops running on this server; the server's features that need it go too")
       ui.SameLine()
     elseif r.consent == "denied" then
-      if ui.Button("Ask me again") then eq.LoginDo("addonAskAgain", r.name) end
+      if ui.Button("Ask me again") then API.pregame.LoginDo("addonAskAgain", r.name) end
       P.Tip("Your next visit asks again whether it may run")
       ui.SameLine()
     end
     if r.folder ~= "" then
       if r.group == "installed" then ui.SameLine() end
-      if ui.Button("Open folder") then eq.LoginDo("addonFolder", r.name) end
+      if ui.Button("Open folder") then API.pregame.LoginDo("addonFolder", r.name) end
     end
     ui.TreePop()
   end
@@ -668,14 +679,14 @@ local function linkField(a, s)
   ui.SetNextItemWidth(-(P.ButtonsWidth(LOOK, s) + 8 * s))
   local text, enter = ui.InputTextWithHint("##addonlink", "https://github.com/owner/repo", a.link, 400, ENTER)
   if text ~= a.link then
-    eq.LoginSet("addonLink", text)
+    API.pregame.LoginSet("addonLink", text)
     a.link = text
     held = nil
   end
   P.Tip("Paste a link to an add-on's GitHub repository, a release of it or a branch")
   ui.SameLine()
   if (P.Primary("Look", 0, 0, not a.inspecting and a.link ~= "") or enter) and not a.inspecting then
-    eq.LoginDo("addonInspect")
+    API.pregame.LoginDo("addonInspect")
   end
 end
 
@@ -691,8 +702,8 @@ local function storeItem(a, it, s, lh)
   ui.PushFont(T.font.large)
   ui.TextColored(C.text[1], C.text[2], C.text[3], 1, it.name)
   ui.PopFont()
-  local kind = (it.kind == "plugin" or it.kind == "script" or it.kind == "tool" or it.kind == "upscaler") and it.kind
-    or nil
+  local kind = (it.kind == "plugin" or it.kind == "script" or it.kind == "tool" or it.kind == "upscaler"
+    or it.kind == "ui") and it.kind or nil
   if kind or it.worlds ~= "" then
     ui.SameLine()
     local px, py = ui.GetCursorScreenPos()
@@ -713,10 +724,10 @@ local function storeItem(a, it, s, lh)
   ui.PopTextWrapPos()
   local busy = a.inspecting or not a.available
   if it.state == "install" then
-    if P.Primary("Install", 0, 0, not busy) then eq.LoginDo("addonStoreLook", it.source) end
+    if P.Primary("Install", 0, 0, not busy) then API.pregame.LoginDo("addonStoreLook", it.source) end
     P.Tip(STORE_LOOK_TIP)
   elseif it.state == "update" then
-    if P.Primary("Update to " .. it.version, 0, 0, not busy) then eq.LoginDo("addonStoreLook", it.source) end
+    if P.Primary("Update to " .. it.version, 0, 0, not busy) then API.pregame.LoginDo("addonStoreLook", it.source) end
     P.Tip("You have " .. it.installedVersion .. ". " .. STORE_LOOK_TIP)
   elseif it.state == "installed" then
     ui.TextColored(C.good[1], C.good[2], C.good[3], 1, "Installed: version " .. it.installedVersion)
@@ -732,7 +743,7 @@ local function storeItem(a, it, s, lh)
 end
 
 local function storeTab(a, s, lh)
-  if a.available and not a.browsed and not a.browsing then eq.LoginDo("addonBrowse") end
+  if a.available and not a.browsed and not a.browsing then API.pregame.LoginDo("addonBrowse") end
   ui.BeginChild("##addonstore", 0, 19 * lh, false)
   if a.browsing then
     P.Spinner(lh / 2, s)
@@ -756,7 +767,7 @@ local function storeTab(a, s, lh)
   end
 end
 
-local function mineTab(a, s, lh)
+local function mineTab(a, s, lh, busy)
   local groups = ADDON_GROUPS
   groups[3][2] = a.server ~= "" and ("From " .. a.server) or "From this server"
   ui.BeginChild("##addonlist", 0, 19 * lh, false)
@@ -770,14 +781,14 @@ local function mineTab(a, s, lh)
           first = false
         end
         any = true
-        addonRow(a, r, s)
+        addonRow(a, r, s, busy)
       end
     end
   end
   if not any then P.Faint("No scripts or plugins yet. Find some in the Find add-ons tab.") end
   ui.EndChild()
   if a.available then
-    if ui.Button("Check for updates") then eq.LoginDo("addonCheck") end
+    if ui.Button("Check for updates") then API.pregame.LoginDo("addonCheck") end
     P.Tip("Look for newer versions of your add-ons now")
   end
 end
@@ -804,19 +815,19 @@ local function addonsCard(view, s, bh)
     for _, r in ipairs(a.rows) do if r.group == "installed" then mine = mine + 1 end end
     local label = mine > 0 and string.format("My add-ons (%d)###mine", mine) or "My add-ons###mine"
     if ui.BeginTabItem(label, addonTab == "mine" and ui.TabItemFlags.SetSelected or 0) then
-      mineTab(a, s, lh)
+      mineTab(a, s, lh, view.busy)
       ui.EndTabItem()
     end
     ui.EndTabBar()
   end
   addonTab = nil
   if a.available and a.browsed then
-    if ui.Button("Refresh the list") then eq.LoginDo("addonBrowse", true) end
+    if ui.Button("Refresh the list") then API.pregame.LoginDo("addonBrowse", true) end
     P.Tip("Fetch the list of add-ons again")
     ui.SameLine()
   end
   P.AlignRight(P.ButtonsWidth(CLOSE, s))
-  if ui.Button("Close") then eq.LoginSet("addonsOpen", false) end
+  if ui.Button("Close") then API.pregame.LoginSet("addonsOpen", false) end
 
   if removeAsk then
     removeAsk = false
@@ -824,13 +835,13 @@ local function addonsCard(view, s, bh)
   end
   if P.Confirm("##removeaddon", string.format("Remove %s?", removeName or ""),
       "Its own files go; files of yours in its folder (its settings) stay.", "Remove", s) and removeName then
-    eq.LoginDo("addonRemove", removeName)
+    API.pregame.LoginDo("addonRemove", removeName)
   end
 end
 
 -- ---------------------------------------------------------------- the interface
 -- The UI pack the server is played with, on the card itself (not under Edit): the screen changes to it at once,
--- and a saved server keeps it at once (eq.LoginSet "ui").
+-- and a saved server keeps it at once (hs.LoginSet "ui").
 local function interfacePicker(view, s)
   P.Muted("Interface") -- (level with Music's text: ImGui aligns a text on the line to its frames' baseline)
   ui.SameLine()
@@ -838,13 +849,21 @@ local function interfacePicker(view, s)
   if ui.BeginCombo("##ui", packName(view, view.ui)) then
     for _, p in ipairs(view.uiPacks) do
       ui.PushID(p.id)
-      if ui.Selectable(p.name, p.id == view.ui) and p.id ~= view.ui then eq.LoginSet("ui", p.id) end
-      if p.description ~= "" then P.Tip(p.description .. "\nMade for: " .. p.input) end
+      local available = p.available ~= false
+      ui.BeginDisabled(not available)
+      if ui.Selectable(p.name, p.id == view.ui) and available and p.id ~= view.ui then API.pregame.LoginSet("ui", p.id) end
+      ui.EndDisabled()
+      P.Tip((p.description or "") .. "\nMade for: " .. p.input
+        .. (available and "" or "\nUnavailable: " .. (p.reason or "")))
       ui.PopID()
     end
     ui.EndCombo()
   end
-  P.Tip(view.selected > 0 and UI_TIP_SAVED or UI_TIP_NEW)
+  local note = view.selected > 0 and UI_TIP_SAVED or UI_TIP_NEW
+  for _, p in ipairs(view.uiPacks) do
+    if p.id == view.ui and p.available == false then note = note .. "\nUnavailable: " .. (p.reason or "") end
+  end
+  P.Tip(note)
 end
 
 -- ---------------------------------------------------------------- the corner
@@ -863,7 +882,7 @@ local function updateNotice(view, s)
     first = false
     local clicked
     if primary then clicked = P.Primary(label, 0, 0, true) else clicked = ui.Button(label) end
-    if clicked then eq.LoginDo(action) end
+    if clicked then API.pregame.LoginDo(action) end
     P.Tip(tip)
   end
   if u.canRestart then button("Restart now", "updateRestart", true, "Install " .. u.version .. " and start it") end
@@ -916,7 +935,7 @@ local function aboutCard(view, s)
     or "What changed in this version")
   if a.page ~= "" then
     ui.SameLine()
-    if ui.Button("GitHub") then eq.LoginDo("openProject") end
+    if ui.Button("GitHub") then API.pregame.LoginDo("openProject") end
     P.Tip("Hailstone's page, in your web browser:\n" .. a.page)
   end
 
@@ -942,7 +961,7 @@ local function aboutCard(view, s)
     ui.EndChild()
     ui.Dummy(0, 2 * s)
     if a.page ~= "" then
-      if ui.Button("Open GitHub") then eq.LoginDo("openProject") end
+      if ui.Button("Open GitHub") then API.pregame.LoginDo("openProject") end
       ui.SameLine()
     end
     P.AlignRight(P.ButtonsWidth(CLOSE, s))
@@ -960,14 +979,18 @@ local function suggestionNotice(view, s)
     ui.PushStyleColor(ui.Col.Text, C.accent[1], C.accent[2], C.accent[3], C.accent[4] or 1)
     ui.TextWrapped(sg.text)
     ui.PopStyleColor()
-    if P.Primary("Look at it", 0, 0, not view.busy) then eq.LoginDo("addonSuggestLook", sg.source) end
+    if P.Primary(sg.required and "Review required add-on" or "Look at it", 0, 0, not view.busy) then
+      API.pregame.LoginDo("addonSuggestLook", sg.source)
+    end
     P.Tip("What it is and what it asks to do: nothing is installed yet")
-    ui.SameLine()
-    if ui.Button("Not now") then eq.LoginDo("addonSuggestLater", sg.source) end
-    P.Tip("Not suggested again until Hailstone starts again")
-    ui.SameLine()
-    if ui.Button("Don't ask again") then eq.LoginDo("addonSuggestNever", sg.source) end
-    P.Tip("Not suggested again for this server")
+    if not sg.required then
+      ui.SameLine()
+      if ui.Button("Not now") then API.pregame.LoginDo("addonSuggestLater", sg.source) end
+      P.Tip("Not suggested again until Hailstone starts again")
+      ui.SameLine()
+      if ui.Button("Don't ask again") then API.pregame.LoginDo("addonSuggestNever", sg.source) end
+      P.Tip("Not suggested again for this server")
+    end
     ui.Dummy(0, 2 * s)
     ui.PopID()
   end
@@ -986,13 +1009,13 @@ local function loginCard(view, s, bh)
   submit = accountSection(view, s, appearing) or submit
   ui.Dummy(0, 6 * s)
   if P.Primary("Log in", -1, bh * 1.2, view.ready) then submit = true end
-  if submit and view.ready then eq.LoginDo("login") end
+  if submit and view.ready then API.pregame.LoginDo("login") end
   if view.sessionTicketAvailable and not view.busy then
-    if ui.Button("Sign in with session", -1, bh) then eq.LoginDo("resume_token") end
+    if ui.Button("Sign in with session", -1, bh) then API.pregame.LoginDo("resume_token") end
   end
   ui.Dummy(0, 2 * s)
   -- (toggles of their own: ImGui's collapsing header reaches past the card's padding)
-  if #view.gameFolders > 0 or eq.Option("texture_pack") ~= nil then
+  if #view.gameFolders > 0 or API.settings.Option("texture_pack") ~= nil then
     if ui.Selectable(more and "-  Fewer options" or "+  More options", false) then more = not more end
     P.Tip(more and "" or "The game files and the texture pack")
     if more then gameFiles(view, s) end
@@ -1006,7 +1029,7 @@ local function loginCard(view, s, bh)
     local gCount = #(view.groupProfiles or {})
     local glabel = gCount > 0 and string.format("Group profiles (%d)", gCount) or "Group profiles"
     if ui.Selectable((groupOpen and "-  " or "+  ") .. glabel, groupOpen) then groupOpen = not groupOpen end
-    P.Tip(groupOpen and "Close group profiles" or "Launch or monitor MacroQuest-style group/box profiles")
+    P.Tip(groupOpen and "Close group profiles" or "Launch or monitor group/box profiles")
   end
   ui.EndDisabled()
 
@@ -1016,11 +1039,11 @@ local function loginCard(view, s, bh)
   suggestionNotice(view, s)
   ui.BeginDisabled(view.busy)
   local v, changed = ui.Checkbox("Music", view.music)
-  if changed then eq.LoginSet("music", v) end
+  if changed then API.pregame.LoginSet("music", v) end
   P.Tip("The music of the login, server select and character select screens (not the game's).")
   ui.SameLine(0, 10 * s)
   local autoV, autoChanged = ui.Checkbox("Auto-login", view.autoLogin)
-  if autoChanged then eq.LoginSet("autoLogin", autoV) end
+  if autoChanged then API.pregame.LoginSet("autoLogin", autoV) end
   P.Tip("Automatically log in on launch, select your saved/favorite world, and enter your character.")
   ui.EndDisabled()
   if not view.transient then
@@ -1029,14 +1052,14 @@ local function loginCard(view, s, bh)
   end
   ui.SameLine()
   P.AlignRight(P.ButtonsWidth(ADDONS_QUIT, s))
-  if ui.Button("Add-ons") then eq.LoginSet("addonsOpen", not view.addons.open) end
+  if ui.Button("Add-ons") then API.pregame.LoginSet("addonsOpen", not view.addons.open) end
   P.Tip("Find and install extra windows and features, and keep them up to date")
   ui.SameLine()
-  if ui.Button("Quit") then eq.LoginDo("quit") end
+  if ui.Button("Quit") then API.pregame.LoginDo("quit") end
 
   -- the confirmations (outside the disabled block: they open from it)
   if P.Confirm("##deleteserver", string.format("Delete \"%s\"?", subtitle), DELETE_NOTE, "Delete", s) then
-    eq.LoginDo("delete")
+    API.pregame.LoginDo("delete")
   end
 end
 
@@ -1055,15 +1078,15 @@ local function addCard(c, w, h)
 end
 
 ui.window("Login", function()
-  local view = eq.LoginScreen(held and held.revision)
+  local view = API.pregame.LoginScreen(held and held.revision)
   if view == true then view = held else held = view end
   if not view then return end
-  -- testing: test.login = addons (or boxset, groups, more) in ui/settings/modern.txt opens the add-ons (or box set) card (or
+  -- testing: test.login = addons (or boxset, more) in ui/settings/modern.txt opens the add-ons (or box set) card (or
   -- More options) as the screen first appears, for screenshots (as the gamepad pack's test.login)
   if not tested then
     tested = true
     local test = ui.GetSetting("test.login")
-    if test == "addons" then eq.LoginSet("addonsOpen", true) end
+    if test == "addons" then API.pregame.LoginSet("addonsOpen", true) end
     if test == "boxset" then boxOpen = true end
     if test == "groups" then groupOpen = true end
     if test == "more" then more = true end
@@ -1084,7 +1107,7 @@ ui.window("Login", function()
   local _, bxh = P.Size("login.boxset", boxW, 260 * s)
   local _, grh = P.Size("login.groups", groupW, 320 * s)
   local _, abh = P.Size("login.about", aboutW, 90 * s)
-  -- the cards in a row (groups, box set, login, characters, add-ons), the row centred and their tops level; on a screen too
+  -- the cards in a row (box set, login, characters, add-ons), the row centred and their tops level; on a screen too
   -- narrow for that, one above the other, each the login card's width. The add-ons card is beside the characters,
   -- not in their place, so Play stays in reach while it is open.
   for i = #cards, 1, -1 do cards[i] = nil end

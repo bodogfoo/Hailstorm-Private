@@ -187,7 +187,7 @@ void print_status_table(std::vector<ipc::SessionSnapshot> roster, const ManagerP
     std::printf("Hailstone 24 Sessions (%zu/24 connected) | Total RSS: %llu MiB | Est VRAM: %llu MiB\n",
                 roster.size(), static_cast<unsigned long long>(rss), static_cast<unsigned long long>(vram));
     std::printf("%-10s %-14s %-7s %-18s %-12s %-11s %-10s %s\n",
-                "SESSION", "CHARACTER", "STATE", "ZONE", "HP/MP/END", "RGMERCS", "RSS/VRAM", "SW(ms)");
+                "SESSION", "CHARACTER", "STATE", "ZONE", "HP/MP/END", "COMBAT", "RSS/VRAM", "SW(ms)");
     for (const auto& s : roster) {
         const char* st = (s.exec_state == app::ExecutionState::ForegroundFull) ? "FG"
                        : (s.exec_state == app::ExecutionState::Transitioning)  ? "TRANS"
@@ -199,7 +199,7 @@ void print_status_table(std::vector<ipc::SessionSnapshot> roster, const ManagerP
                     st,
                     s.zone_short.empty() ? "-" : s.zone_short.c_str(),
                     s.hp_pct, s.mana_pct, s.end_pct,
-                    s.rgmercs_state.empty() ? "-" : s.rgmercs_state.c_str(),
+                    s.combat_state.empty() ? "-" : s.combat_state.c_str(),
                     s.rss_mib, s.vram_mib, s.last_switch_ms);
     }
     if (mpv.active) {
@@ -338,7 +338,7 @@ int run_tui(ipc::SessionBusClient& client, const ManagerProfileView& mpv) {
                         mpv.active ? (" | Profile: " + mpv.active->name).c_str() : "");
             std::printf("---------------------------------------------------------------------------------------------------------\n");
             std::printf("%-3s %-10s %-14s %-6s %-16s %-14s %-11s %-10s %-9s %s\n",
-                        "ID", "SESSION", "CHARACTER", "STATE", "ZONE", "TARGET", "HP/MP/END", "RGMERCS", "RSS/VRAM", "SW(ms)");
+                        "ID", "SESSION", "CHARACTER", "STATE", "ZONE", "TARGET", "HP/MP/END", "COMBAT", "RSS/VRAM", "SW(ms)");
             for (std::size_t i = 0; i < roster.size(); ++i) {
                 const auto& s = roster[i];
                 const bool is_sel = (i == selected);
@@ -356,7 +356,7 @@ int run_tui(ipc::SessionBusClient& client, const ManagerProfileView& mpv) {
                             s.zone_short.empty() ? "-" : s.zone_short.c_str(),
                             s.target_name.empty() ? "-" : s.target_name.substr(0, 14).c_str(),
                             s.hp_pct, s.mana_pct, s.end_pct,
-                            s.rgmercs_state.empty() ? "-" : s.rgmercs_state.c_str(),
+                            s.combat_state.empty() ? "-" : s.combat_state.c_str(),
                             s.rss_mib, s.vram_mib, s.last_switch_ms);
             }
             if (roster.empty() && mpv.active && !mpv.active->slots.empty()) {
@@ -519,7 +519,7 @@ int run_sdl_gui(ipc::SessionBusClient& client, const ManagerProfileView& mpv) {
                 SDL_SetRenderDrawColor(ren, 180, 196, 214, 255);
                 SDL_RenderDebugText(ren, box.x + 8.0f, box.y + 36.0f,
                                     std::format("RG:{} SW:{}ms",
-                                                s.rgmercs_state.empty() ? "-" : s.rgmercs_state,
+                                                s.combat_state.empty() ? "-" : s.combat_state,
                                                 s.last_switch_ms).c_str());
 
                 const float bar_w = box.w - 16.0f;

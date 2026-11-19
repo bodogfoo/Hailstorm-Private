@@ -82,7 +82,6 @@ if(NOT ZLIB_FOUND)
   add_library(ZLIB::ZLIB ALIAS zlib)
 endif()
 
-# SQLite3: used by Hailstone 24's MacroQuest AutoLogin importer (login.db) and RG Mercs lsqlite3 module.
 find_package(SQLite3 QUIET)
 if(NOT SQLite3_FOUND)
   find_package(PkgConfig QUIET)

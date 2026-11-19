@@ -123,7 +123,9 @@ add_library(hailstone_engine STATIC
   src/core/binary_header.cpp
   src/core/sha1.cpp
   src/core/sha256.cpp
+    src/core/binary_measurement.cpp
   src/core/shared_file_cache.cpp
+  src/core/worker_pool.cpp
   src/plugin/hooks.cpp
   src/plugin/consent.cpp
   src/plugin/policy.cpp
@@ -142,11 +144,11 @@ add_library(hailstone_engine STATIC
   src/mq/event_pattern.cpp
   src/mq/lua_mq.cpp
   src/mq/lua_mq_web.cpp
-  src/mq/lua_compat_modules.cpp
   src/mq/lua_hailstone.cpp
-  src/mq/rgmercs_bridge.cpp
   src/ipc/session_bus.cpp
   src/plugin/native_plugins.cpp
+  src/plugin/world_geometry.cpp
+  src/render/world_geometry_renderer.cpp
   src/plugin/plugin_tcp.cpp
   src/plugin/ui_bridge.cpp
   src/plugin/lua_value.cpp
@@ -208,12 +210,14 @@ add_library(hailstone_engine STATIC
   src/net/door_packets.cpp
   src/net/game_connection_group.cpp
   src/net/game_connection_fellowship.cpp
+  src/net/game_connection_guild_banner.cpp
   src/net/game_connection_group_search.cpp
   src/net/game_connection_marketplace.cpp
   src/net/game_connection_social.cpp
   src/net/game_connection_options.cpp
   src/net/game_connection_client.cpp
   src/net/game_connection_progress.cpp
+  src/net/game_connection_shroud.cpp
   src/net/game_connection_player.cpp
   src/net/game_connection_game_commands.cpp
   src/net/game_connection_names.cpp
@@ -240,6 +244,7 @@ add_library(hailstone_engine STATIC
   src/net/guild_bank_packets.cpp
   src/net/real_estate_packets.cpp
   src/net/task_packets.cpp
+  src/net/shroud_packets.cpp
   src/net/reward_packets.cpp
   src/net/achievement_packets.cpp
   src/net/game_connection_rewards.cpp
@@ -261,6 +266,7 @@ add_library(hailstone_engine STATIC
   src/game/slash_commands.cpp
   src/net/group_packets.cpp
   src/net/fellowship_packets.cpp
+  src/net/guild_banner_packets.cpp
   src/game/fellowship_categories.cpp
   src/net/pet_packets.cpp
   src/net/item_packets.cpp
@@ -301,9 +307,11 @@ add_library(hailstone_engine STATIC
   src/core/old_ui_settings.cpp
   src/web/browser_host.cpp
   src/platform/paths.cpp
+  src/platform/executable_path.cpp
   src/platform/message_box.cpp
   src/platform/crash_log.cpp
   src/platform/local_time.cpp
+  src/platform/precise_sleep.cpp
   src/platform/private_file.cpp
   src/platform/durable_file.cpp
   src/platform/shared_file.cpp
@@ -330,6 +338,9 @@ add_library(hailstone_engine STATIC
   src/app/addon_install.cpp
   src/app/addon_manager.cpp
   src/app/addon_suggest.cpp
+  src/app/addon_requirements.cpp
+  src/app/connection_frontend.cpp
+  src/app/addon_upscaler_policy.cpp
   src/app/window_icon.cpp
   src/app/item_preview_view.cpp
   src/app/item_ui.cpp
@@ -379,6 +390,7 @@ add_library(hailstone_engine STATIC
   src/assets/sky_weather.cpp
   src/assets/spell_effects.cpp
   src/assets/wld_particles.cpp
+  src/assets/legacy_particles.cpp
   src/assets/zone_fires.cpp
   src/platform/window.cpp
   src/platform/mouse_capture.cpp
@@ -392,6 +404,12 @@ add_library(hailstone_engine STATIC
   src/render/vk_context.cpp
   src/app/plate_test.cpp
   src/app/nameplate_layer.cpp
+  src/app/nameplate_canvas_context.cpp
+  src/app/nameplate_canvas_painter.cpp
+  src/app/nameplate_input.cpp
+  src/app/spawn_pick.cpp
+  src/game/nameplate_canvas.cpp
+  src/ui/lua/lua_nameplate_canvas.cpp
   src/render/gpu_requirements.cpp
   src/render/graphics_tier.cpp
   src/render/gpu_cache_protocol.cpp
@@ -399,7 +417,9 @@ add_library(hailstone_engine STATIC
   src/render/gpu_shared_cache.cpp
   src/render/pipeline_cache.cpp
   src/render/gpu.cpp
+  src/render/gpu_timer.cpp
   src/render/zone_renderer.cpp
+  src/render/zone_fog.cpp
   src/render/sky_renderer.cpp
   src/render/cloud_renderer.cpp
   src/render/temporal.cpp
@@ -407,6 +427,7 @@ add_library(hailstone_engine STATIC
   src/render/frame_gen.cpp
   src/render/fsr3_upscaler.cpp
   src/render/particle_renderer.cpp
+  src/render/scene_recorder.cpp
   src/render/fire_renderer.cpp
   src/render/flora_renderer.cpp
   src/render/spell_fx_renderer.cpp
@@ -424,13 +445,13 @@ add_library(hailstone_engine STATIC
   src/game/spell_effect_timers.cpp
   src/game/sine_table.cpp
   src/game/collision.cpp
+  src/game/visual_surface_patch.cpp
   src/game/revamped_zone.cpp
   src/nav/nav_mesh.cpp
   src/nav/zone_nav.cpp
   src/nav/path_follower.cpp
   src/game/zone_lines.cpp
-  src/game/neighbour_zones.cpp
-  src/game/world_atlas.cpp
+  src/game/zone_exits.cpp
   src/game/world_state.cpp
   src/game/useful_npcs.cpp
   src/game/path_trail.cpp
@@ -545,64 +566,74 @@ add_library(hailstone_engine STATIC
   src/ui/ui_textures.cpp
   src/ui/ui_packs.cpp
   src/ui/ui_ini.cpp
-  src/app/lua_eq.cpp
+  src/app/lua_ui.cpp
   src/app/automation.cpp
   src/app/navigator.cpp
   src/app/guide_path.cpp
-  src/app/lua_eq_values.cpp
-  src/app/lua_eq_hud.cpp
-  src/app/lua_eq_hotbar.cpp
-  src/app/lua_eq_caps.cpp
-  src/app/lua_eq_plugins.cpp
-  src/app/lua_eq_scripts.cpp
-  src/app/lua_eq_rgmercs.cpp
-  src/app/lua_eq_items.cpp
-  src/app/lua_eq_itemdisplay.cpp
-  src/app/lua_eq_adventure.cpp
-  src/app/lua_eq_tint.cpp
-  src/app/lua_eq_customization.cpp
-  src/app/lua_eq_dialogs.cpp
-  src/app/lua_eq_menu.cpp
-  src/app/lua_eq_social.cpp
-  src/app/lua_eq_realestate.cpp
-  src/app/lua_eq_progress.cpp
-  src/app/lua_eq_rewards.cpp
-  src/app/lua_eq_achievements.cpp
-  src/app/lua_eq_group_search.cpp
-  src/app/lua_eq_marketplace.cpp
-  src/app/lua_eq_map.cpp
-  src/app/lua_eq_player.cpp
-  src/app/lua_eq_market.cpp
-  src/app/lua_eq_mail.cpp
-  src/app/lua_eq_merc.cpp
-  src/app/lua_eq_chat.cpp
-  src/app/lua_eq_spellbook.cpp
-  src/app/lua_eq_abilities.cpp
-  src/app/lua_eq_abilitybook.cpp
-  src/app/lua_eq_inventory_manager.cpp
-  src/app/lua_eq_button_state.cpp
-  src/app/lua_eq_socialedit.cpp
-  src/app/lua_eq_luasocial.cpp
-  src/app/lua_eq_names.cpp
-  src/app/lua_eq_help.cpp
-  src/app/lua_eq_layout.cpp
-  src/app/lua_eq_video.cpp
-  src/app/lua_eq_zoneguide.cpp
-  src/app/lua_eq_compare.cpp
-  src/app/lua_eq_find.cpp
-  src/app/lua_eq_fellowship.cpp
-  src/app/lua_eq_story.cpp
-  src/app/lua_eq_journal.cpp
-  src/app/lua_eq_login.cpp
-  src/app/lua_eq_pregame.cpp
-  src/app/lua_eq_stats.cpp
-  src/app/lua_eq_web.cpp
+  src/app/lua_ui_values.cpp
+  src/app/lua_ui_hud.cpp
+  src/app/lua_ui_hotbar.cpp
+  src/app/lua_ui_caps.cpp
+  src/app/lua_ui_api.cpp
+  src/app/lua_ui_hooks.cpp
+  src/app/lua_ui_extensions.cpp
+  src/app/lua_ui_plugins.cpp
+  src/app/lua_ui_scripts.cpp
+  src/app/lua_ui_combat.cpp
+  src/app/hailstone_combat_adapter.cpp
+  src/combat/combat_profile.cpp
+  src/combat/spell_manager.cpp
+  src/combat/movement_controller.cpp
+  src/combat/combat_engine.cpp
+  src/app/lua_ui_items.cpp
+  src/app/lua_ui_itemdisplay.cpp
+  src/app/lua_ui_adventure.cpp
+  src/app/lua_ui_tint.cpp
+  src/app/lua_ui_customization.cpp
+  src/app/lua_ui_dialogs.cpp
+  src/app/lua_ui_menu.cpp
+  src/app/lua_ui_social.cpp
+  src/app/lua_ui_realestate.cpp
+  src/app/lua_ui_progress.cpp
+  src/app/lua_ui_rewards.cpp
+  src/app/lua_ui_achievements.cpp
+  src/app/lua_ui_group_search.cpp
+  src/app/lua_ui_marketplace.cpp
+  src/app/lua_ui_map.cpp
+  src/app/lua_ui_player.cpp
+  src/app/lua_ui_market.cpp
+  src/app/lua_ui_mail.cpp
+  src/app/lua_ui_merc.cpp
+  src/app/lua_ui_chat.cpp
+  src/app/chat_tab_bar.cpp
+  src/app/chat_tabs_command.cpp
+  src/app/lua_ui_spellbook.cpp
+  src/app/lua_ui_abilities.cpp
+  src/app/lua_ui_abilitybook.cpp
+  src/app/lua_ui_inventory_manager.cpp
+  src/app/lua_ui_button_state.cpp
+  src/app/lua_ui_socialedit.cpp
+  src/app/lua_ui_luasocial.cpp
+  src/app/lua_ui_names.cpp
+  src/app/lua_ui_help.cpp
+  src/app/lua_ui_layout.cpp
+  src/app/lua_ui_video.cpp
+  src/app/lua_ui_zoneguide.cpp
+  src/app/lua_ui_compare.cpp
+  src/app/lua_ui_find.cpp
+  src/app/lua_ui_fellowship.cpp
+  src/app/lua_ui_story.cpp
+  src/app/lua_ui_journal.cpp
+  src/app/lua_ui_login.cpp
+  src/app/lua_ui_pregame.cpp
+  src/app/lua_ui_stats.cpp
+  src/app/lua_ui_web.cpp
   src/app/web_service.cpp
   src/app/server_links.cpp
-  src/app/lua_eq_misc.cpp
-  src/app/lua_eq_notes.cpp
-  src/app/lua_eq_gamepad.cpp
-  src/app/lua_eq_exchange.cpp
+  src/app/lua_ui_misc.cpp
+  src/app/lua_ui_notes.cpp
+  src/app/lua_ui_gamepad.cpp
+  src/app/lua_ui_exchange.cpp
   src/app/gamepad.cpp
   src/game/mechanics/anim_select.cpp
   src/game/mechanics/hit_by_spell.cpp
@@ -625,8 +656,6 @@ add_library(hailstone_engine STATIC
   src/render/actor_layers.cpp
   src/render/object_renderer.cpp
   src/app/world_objects.cpp
-  src/app/neighbour_zones.cpp
-  src/app/world_atlas.cpp
   src/app/world_objects_ladder.cpp
   src/render/vma_impl.cpp
   src/assets/sound_files.cpp
@@ -651,6 +680,7 @@ add_library(hailstone_engine STATIC
   src/app/spell_particles.cpp
   src/app/spell_bolts.cpp
   src/app/zone_particles.cpp
+  src/app/switch_particles.cpp
   src/audio/codec_impl.cpp
   src/platform/audio_device.cpp
 )
@@ -757,6 +787,7 @@ endif()
 hailstone_add_shaders(hailstone_shaders
   shaders/zone.vert
   shaders/zone.frag
+  shaders/zone_fog.frag
   shaders/zone_depth.frag
   shaders/spawn.vert
   shaders/spawn.frag
@@ -783,6 +814,8 @@ hailstone_add_shaders(hailstone_shaders
   shaders/spell_fx.frag
   shaders/target_ring.vert
   shaders/target_ring.frag
+  shaders/world_geometry.vert
+  shaders/world_geometry.frag
   shaders/underwater.vert
   shaders/underwater.frag
   shaders/zone_shadow.vert
@@ -869,7 +902,7 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/plugins/projecttriune/CMakeLists.txt)
   set(HAILSTONE_HAS_TRIUNE ON)
 endif()
 
-add_executable(hailstone src/app/main.cpp src/app/client_app.cpp src/app/client_app_ui.cpp src/app/client_app_draw.cpp src/app/target_ring.cpp src/app/client_app_input.cpp src/app/client_app_testdrive.cpp src/app/client_app_pick.cpp src/app/client_app_iso.cpp src/app/client_app_items.cpp src/app/client_app_player.cpp src/app/client_app_zone.cpp src/app/client_app_pregame.cpp src/app/client_app_options.cpp src/app/client_app_commands.cpp src/app/client_app_info.cpp src/app/client_app_web.cpp src/app/client_app_login.cpp src/app/client_app_gamepad.cpp src/app/client_app_bugreport.cpp src/app/client_app_update.cpp src/app/client_app_addons.cpp src/app/input_script.cpp src/app/model_viewer.cpp ${HAILSTONE_WIN_MANIFEST} ${HAILSTONE_WIN_CLIENT_RESOURCES})
+add_executable(hailstone src/app/main.cpp src/app/client_app.cpp src/app/client_app_ui.cpp src/app/client_app_draw.cpp src/app/target_ring.cpp src/app/client_app_input.cpp src/app/client_app_testdrive.cpp src/app/client_app_pick.cpp src/app/client_app_iso.cpp src/app/client_app_items.cpp src/app/client_app_player.cpp src/app/client_app_zone.cpp src/app/client_app_pregame.cpp src/app/client_app_options.cpp src/app/client_app_commands.cpp src/app/client_app_info.cpp src/app/client_app_web.cpp src/app/client_app_login.cpp src/app/client_app_gamepad.cpp src/app/client_app_bugreport.cpp src/app/client_app_update.cpp src/app/client_app_addons.cpp src/app/client_app_addon_upscaler.cpp src/app/input_script.cpp src/app/model_viewer.cpp ${HAILSTONE_WIN_MANIFEST} ${HAILSTONE_WIN_CLIENT_RESOURCES})
 target_compile_options(hailstone PRIVATE ${HAILSTONE_WARNINGS})
 # Windows: a Release (or MinSizeRel) client is a GUI program, so no console window opens beside it; main() stays the
 # entry point. Other builds keep the console for the log. Errors that stop a start are shown in a dialog either way
@@ -952,7 +985,7 @@ if(HAILSTONE_BROWSER)
 endif()
 
 # Command-line tools.
-set(HAILSTONE_TOOLS pfsdump texdump texpack wlddump florascan chrdump netprobe playprobe eqgdump audiodump hailstone_check hailstone_sign)
+set(HAILSTONE_TOOLS pfsdump texdump texpack wlddump florascan chrdump netprobe playprobe eqgdump audiodump hailstone_check hailstone_sign world_geometry_probe)
 foreach(tool ${HAILSTONE_TOOLS})
   add_executable(${tool} tools/${tool}.cpp ${HAILSTONE_WIN_MANIFEST})
   target_compile_options(${tool} PRIVATE ${HAILSTONE_WARNINGS})
@@ -961,7 +994,6 @@ foreach(tool ${HAILSTONE_TOOLS})
   endif()
   target_link_libraries(${tool} PRIVATE hailstone_engine)
 endforeach()
-
 # Hailstone 24 session broker and multibox manager/controller.
 add_executable(hailstone24_broker tools/hailstone24_manager/broker_main.cpp ${HAILSTONE_WIN_MANIFEST})
 target_compile_options(hailstone24_broker PRIVATE ${HAILSTONE_WARNINGS})
@@ -981,6 +1013,17 @@ if(UNIX AND NOT APPLE)
 endif()
 install(TARGETS hailstone24_manager RUNTIME DESTINATION .)
 list(APPEND HAILSTONE_TOOLS hailstone24_broker hailstone24_manager)
+
+# Local package preparation uses the same validation and transaction installer as Add-ons.
+add_executable(hailstone_addon_install_local EXCLUDE_FROM_ALL tools/addon_install_local.cpp ${HAILSTONE_WIN_MANIFEST})
+target_compile_options(hailstone_addon_install_local PRIVATE ${HAILSTONE_WARNINGS})
+target_link_libraries(hailstone_addon_install_local PRIVATE hailstone_engine)
+if(WIN32)
+  add_custom_command(TARGET hailstone_addon_install_local POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:hailstone_addon_install_local> $<TARGET_FILE_DIR:hailstone_addon_install_local>
+    COMMAND_EXPAND_LISTS)
+endif()
+
 # The shared GPU texture experiment's broker, its server transport and its probes (docs/graphics.md "Shared GPU
 # textures"): linked by the tools below and the tests, never by the client, which has only the importing side.
 add_library(hailstone_gpu_lab STATIC
@@ -1056,6 +1099,15 @@ if(HAILSTONE_BUILD_TESTS)
     tests/shared_cache_store_test.cpp
     tests/shared_character_models_test.cpp
     tests/test_main.cpp
+    tests/follow_profile_test.cpp
+    tests/follow_connection_test.cpp
+    tests/server_addon_services_test.cpp
+    tests/item_metadata_display_test.cpp
+    tests/item_metadata_loot_test.cpp
+    tests/world_geometry_host_test.cpp
+    tests/world_geometry_render_test.cpp
+    tests/world_geometry_queries_test.cpp
+    tests/visual_surface_patch_test.cpp
     tests/bag_move_test.cpp
     tests/byte_io_test.cpp
     tests/env_test.cpp
@@ -1069,6 +1121,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/screen_pictures_test.cpp
     tests/window_icon_test.cpp
     tests/sha256_test.cpp
+    tests/binary_measurement_test.cpp
     tests/zip_read_test.cpp
     tests/http_get_test.cpp
     tests/updater_test.cpp
@@ -1076,6 +1129,9 @@ if(HAILSTONE_BUILD_TESTS)
     tests/addon_index_test.cpp
     tests/changelog_test.cpp
     tests/addon_install_test.cpp
+    tests/addon_requirements_test.cpp
+    tests/connection_frontend_test.cpp
+    tests/addon_upscaler_policy_test.cpp
     tests/addon_manager_test.cpp
     tests/bug_report_test.cpp
     tests/bug_report_window_test.cpp
@@ -1100,14 +1156,12 @@ if(HAILSTONE_BUILD_TESTS)
     tests/mq_combat_test.cpp
     tests/automation_test.cpp
     tests/mq_lua_test.cpp
+    tests/mq_script_path_test.cpp
     tests/hailstone24/execution_state_test.cpp
     tests/hailstone24/session_bus_test.cpp
     tests/hailstone24/mq_login_import_test.cpp
     tests/hailstone24/group_profile_test.cpp
     tests/hailstone24/login_autoselect_test.cpp
-    tests/hailstone24/rgmercs_tlo_test.cpp
-    tests/hailstone24/rgmercs_native_ui_test.cpp
-    tests/hailstone24/rgmercs_trusted_loader_test.cpp
     tests/mq_event_pattern_test.cpp
     tests/lua_social_test.cpp
     tests/code_syntax_test.cpp
@@ -1136,6 +1190,9 @@ if(HAILSTONE_BUILD_TESTS)
     tests/zone_settle_test.cpp
     tests/work_budget_test.cpp
     tests/latest_jobs_test.cpp
+    tests/worker_pool_test.cpp
+    tests/precise_sleep_test.cpp
+    tests/scene_lanes_test.cpp
     tests/animation_track_test.cpp
     tests/character_memory_test.cpp
     tests/character_share_test.cpp
@@ -1152,6 +1209,8 @@ if(HAILSTONE_BUILD_TESTS)
     tests/target_indicator_test.cpp
     tests/item_options_test.cpp
     tests/option_commands_test.cpp
+    tests/client_flags_test.cpp
+    tests/close_camp_test.cpp
     tests/font_faces_test.cpp
     tests/process_test.cpp
     tests/flora_test.cpp
@@ -1192,6 +1251,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/ui_rules_vectors_test.cpp
     tests/net_login_test.cpp
     tests/net_packets_test.cpp
+    tests/shroud_packets_test.cpp
     tests/pfs_test.cpp
     tests/pfs_mapped_test.cpp
     tests/wld_deferred_test.cpp
@@ -1208,6 +1268,8 @@ if(HAILSTONE_BUILD_TESTS)
     tests/sky_colours_test.cpp
     tests/scene_light_test.cpp
     tests/horizon_test.cpp
+    tests/zone_fog_test.cpp
+    tests/horizon_terrain_test.cpp
     tests/tree_impostor_test.cpp
     tests/collision_test.cpp
     tests/nav_test.cpp
@@ -1217,8 +1279,14 @@ if(HAILSTONE_BUILD_TESTS)
     tests/atlas_test.cpp
     tests/zone_routes_test.cpp
     tests/zone_atlas_api_test.cpp
+    tests/zone_exits_test.cpp
     tests/map_windows_test.cpp
     tests/map_spawns_test.cpp
+    tests/map_policy_ui_test.cpp
+    tests/map_extensions_ui_test.cpp
+    tests/lua_find_identity_test.cpp
+    tests/server_path_requests_test.cpp
+    tests/tracking_admission_test.cpp
     tests/ui_windows_test.cpp
     tests/ui_labels_test.cpp
     tests/ui_more_windows_test.cpp
@@ -1255,11 +1323,13 @@ if(HAILSTONE_BUILD_TESTS)
     tests/spell_sets_test.cpp
     tests/hot_button_sets_test.cpp
     tests/group_commands_test.cpp
+    tests/shroud_flow_test.cpp
     tests/leadership_bonuses_test.cpp
     tests/leadership_spell_awareness_test.cpp
     tests/raid_invites_test.cpp
     tests/group_search_test.cpp
     tests/chat_ui_test.cpp
+    tests/chat_tabs_command_test.cpp
     tests/inventory_bandolier_ui_test.cpp
     tests/inventory_server_labels_ui_test.cpp
     tests/trade_ui_test.cpp
@@ -1284,10 +1354,17 @@ if(HAILSTONE_BUILD_TESTS)
     tests/equipment_illusions_test.cpp
     tests/appearance_vectors_test.cpp
     tests/combat_test.cpp
+    tests/hailstone24/combat_controller_test.cpp
     tests/pet_combat_chat_test.cpp
     tests/plate_test_test.cpp
     tests/nameplate_overlap_test.cpp
     tests/nameplate_style_test.cpp
+    tests/nameplate_canvas_api_test.cpp
+    tests/lua_nameplate_lifetime_test.cpp
+    tests/nameplate_canvas_painter_test.cpp
+    tests/nameplate_canvas_context_test.cpp
+    tests/nameplate_input_test.cpp
+    tests/spawn_pick_test.cpp
     tests/spells_test.cpp
     tests/spell_hit_modes_test.cpp
     tests/proc_cast_stage_test.cpp
@@ -1304,6 +1381,13 @@ if(HAILSTONE_BUILD_TESTS)
     tests/spell_ui_test.cpp
     tests/lua_gc_test.cpp
     tests/lua_ui_api_test.cpp
+    tests/lua_color_widgets_test.cpp
+    tests/lua_ui_contract_test.cpp
+    tests/lua_ui_hooks_test.cpp
+    tests/lua_ui_extension_drawing_test.cpp
+    tests/lua_ui_extensions_test.cpp
+    tests/lua_ui_inheritance_test.cpp
+    tests/ui_api_starter_test.cpp
     tests/lua_ui_modern_windows_test.cpp
     tests/tradeskill_batch_test.cpp
     tests/tradeskill_combine_test.cpp
@@ -1322,8 +1406,8 @@ if(HAILSTONE_BUILD_TESTS)
     tests/bank_test.cpp
     tests/bank_snapshot_test.cpp
     tests/real_estate_test.cpp
-    tests/lua_eq_pregame_test.cpp
-    tests/lua_eq_realestate_test.cpp
+    tests/lua_ui_pregame_test.cpp
+    tests/lua_ui_realestate_test.cpp
     tests/mock_real_estate_test.cpp
     tests/placement_test.cpp
     tests/mock_placement_test.cpp
@@ -1332,6 +1416,8 @@ if(HAILSTONE_BUILD_TESTS)
     tests/particles_test.cpp
     tests/spell_effect_timers_test.cpp
     tests/wld_particles_test.cpp
+    tests/legacy_particles_test.cpp
+    tests/switch_particles_test.cpp
     tests/wld_detail_test.cpp
     tests/movement_test.cpp
     tests/movement_vectors_test.cpp
@@ -1344,6 +1430,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/hot_button_state_test.cpp
     tests/group_packets_test.cpp
     tests/fellowship_packets_test.cpp
+    tests/guild_banner_packets_test.cpp
     tests/fellowship_connection_test.cpp
     tests/fellowship_ui_test.cpp
     tests/fellowship_categories_test.cpp
@@ -1353,8 +1440,8 @@ if(HAILSTONE_BUILD_TESTS)
     tests/reward_packets_test.cpp
     tests/reward_selection_test.cpp
     tests/reward_connection_test.cpp
-    tests/lua_eq_rewards_test.cpp
-    tests/lua_eq_evolving_test.cpp
+    tests/lua_ui_rewards_test.cpp
+    tests/lua_ui_evolving_test.cpp
     tests/reward_selection_ui_test.cpp
     tests/achievement_packets_test.cpp
     tests/achievements_test.cpp
@@ -1362,7 +1449,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/achievement_chat_test.cpp
     tests/stml_link_injection_test.cpp
     tests/achievement_chat_input_test.cpp
-    tests/lua_eq_achievements_test.cpp
+    tests/lua_ui_achievements_test.cpp
     tests/achievements_ui_test.cpp
     tests/social_test.cpp
     tests/friends_who_test.cpp
@@ -1372,9 +1459,9 @@ if(HAILSTONE_BUILD_TESTS)
     tests/xtarget_test.cpp
     tests/player_customization_test.cpp
     tests/char_select_scene_test.cpp
-    tests/lua_eq_args_test.cpp
-    tests/lua_eq_test.cpp
-    tests/lua_eq_tasks_test.cpp
+    tests/lua_ui_args_test.cpp
+    tests/lua_ui_bindings_test.cpp
+    tests/lua_ui_tasks_test.cpp
     tests/lua_task_journal_test.cpp
     tests/quest_journal_ui_test.cpp
     tests/ui_ini_test.cpp
@@ -1424,8 +1511,6 @@ if(HAILSTONE_BUILD_TESTS)
     tests/use_skill_vectors_test.cpp
     tests/picking_vectors_test.cpp
     tests/zoning_vectors_test.cpp
-    tests/neighbour_zones_test.cpp
-    tests/world_atlas_test.cpp
     tests/zone_liquid_test.cpp
     tests/depth_prepass_test.cpp
     tests/player_placement_test.cpp
@@ -1443,6 +1528,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/fuzz_alloc_guard.cpp
     tests/fuzz_net_test.cpp
     tests/fuzz_assets_test.cpp
+    tests/fuzz_server_cfg_test.cpp
     tests/movement_inputs_test.cpp
     tests/mock_server/profile_builder.cpp
     tests/mock_server/soe_endpoint.cpp
@@ -1454,6 +1540,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/tracking_death_test.cpp
     tests/mock_eqemu_compat_test.cpp
     tests/item_use_test.cpp
+    tests/game_connection_cast_test.cpp
     tests/spell_book_swap_test.cpp
     tests/feign_death_spell_test.cpp
     tests/loot_test.cpp
@@ -1484,6 +1571,12 @@ if(HAILSTONE_BUILD_TESTS)
   add_library(HostProbe MODULE tests/plugins/HostProbe.cpp)
   add_library(HostProbeThrow MODULE tests/plugins/HostProbe.cpp)
   target_compile_definitions(HostProbeThrow PRIVATE HAILSTONE_PROBE_THROW_INIT)
+  # A plugin built against the 0.7.1-beta SDK header (a frozen copy): released plugins must keep loading.
+  add_library(Sdk071Plugin MODULE tests/plugins/Sdk071Plugin.c)
+  target_include_directories(Sdk071Plugin PRIVATE tests/plugins/sdk071)
+  target_compile_options(Sdk071Plugin PRIVATE ${HAILSTONE_WARNINGS})
+  set_target_properties(Sdk071Plugin PROPERTIES PREFIX "")
+  add_dependencies(hailstone_tests Sdk071Plugin)
   foreach(p ExtendTest ExtendTestV1 ExtendTestNew HostProbe HostProbeThrow)
     target_include_directories(${p} PRIVATE sdk)
     set_target_properties(${p} PROPERTIES PREFIX "")
@@ -1515,6 +1608,7 @@ if(HAILSTONE_BUILD_TESTS)
   add_dependencies(hailstone_tests MQ2Example ExtendTest ExtendTestV1 ExtendTestNew HostProbe HostProbeThrow hailstone_mock_web_helper)
   target_compile_definitions(hailstone_tests PRIVATE HAILSTONE_EXAMPLE_PLUGIN="$<TARGET_FILE:MQ2Example>"
     HAILSTONE_PROBE_PLUGIN="$<TARGET_FILE:HostProbe>" HAILSTONE_PROBE_THROW_PLUGIN="$<TARGET_FILE:HostProbeThrow>"
+    HAILSTONE_SDK071_PLUGIN="$<TARGET_FILE:Sdk071Plugin>"
     HAILSTONE_EXTEND_PLUGIN="$<TARGET_FILE:ExtendTest>" HAILSTONE_EXTEND_PLUGIN_V1="$<TARGET_FILE:ExtendTestV1>"
     HAILSTONE_EXTEND_PLUGIN_NEW="$<TARGET_FILE:ExtendTestNew>"
     HAILSTONE_TEST_UPSCALERS_DIR="${HAILSTONE_TEST_UPSCALERS_DIR}"
@@ -1554,7 +1648,7 @@ if(HAILSTONE_LIBFUZZER)
   if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     message(FATAL_ERROR "HAILSTONE_LIBFUZZER needs Clang")
   endif()
-  foreach(target pfs wld texture soe packets decoders zip gpucache models)
+  foreach(target pfs wld texture soe packets decoders zip gpucache models server_cfg)
     string(TOUPPER ${target} upper)
     add_executable(fuzz_${target} tests/fuzz_libfuzzer.cpp)
     target_compile_definitions(fuzz_${target} PRIVATE HAILSTONE_FUZZ_${upper})

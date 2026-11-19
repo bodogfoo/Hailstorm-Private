@@ -4,7 +4,7 @@
 // the client's, not the original's (eqmain.dll's login and server select pages and CCharacterListWnd are not
 // followed), so the packs draw them in their own look over the same views and actions the ImGui screens of
 // ui/dev_screens.cpp use. A pack's window that reads a view each frame stands in for the client's screen
-// (EqApi::replaces); its buttons come back to the client as the screen's actions. Lists are 1-based here, 0 none.
+// (UiApi::replaces); its buttons come back to the client as the screen's actions. Lists are 1-based here, 0 none.
 // Only the pack's own windows (and the player's scripts in it) see these screens: a plugin's window
 // (LuaUi::caller_tag) gets nil and its actions do nothing, as the login view holds the typed or saved password.
 // One action is taken per frame: a second in the same frame replaces the first.
@@ -21,8 +21,7 @@
 
 #include <lua.hpp>
 
-#include "app/lua_eq_windows.h"
-#include "core/ascii_case.h"
+#include "app/lua_ui_windows.h"
 #include "core/server_profile.h"
 #include "game/eq_names.h"
 #include "game/zone_names.h"
@@ -34,7 +33,7 @@ namespace hailstone::app {
 
 namespace {
 
-EqHost& host_of(lua_State* L) { return *static_cast<EqHost*>(lua_touserdata(L, lua_upvalueindex(1))); }
+UiHost& host_of(lua_State* L) { return *static_cast<UiHost*>(lua_touserdata(L, lua_upvalueindex(1))); }
 
 // The pre-game screens are the pack's; a plugin's window has no part in them.
 bool plugin_window() { return !ui::lua::LuaUi::caller_tag().empty(); }
@@ -210,6 +209,7 @@ void emit_addons(Out& o, const ui::AddonsView& a) {
         o.str("source", sg.source);
         o.str("text", sg.text);
         o.boolean("fromServer", sg.from_server);
+        o.boolean("required", sg.required);
         o.close(i);
     }
     o.close("suggestions");
@@ -227,6 +227,7 @@ void emit_addons(Out& o, const ui::AddonsView& a) {
         o.str("key", of.key);
         o.str("installedVersion", of.installed_version);
         o.boolean("older", of.older);
+        o.boolean("autoload", of.autoload);
         o.str("blocked", of.blocked);
         emit_strings(o, "caps", of.caps);
         o.close("offer");
@@ -252,6 +253,8 @@ void emit_addons(Out& o, const ui::AddonsView& a) {
         o.str("note", r.note);
         o.str("consent", r.consent);
         o.boolean("autoUpdate", r.auto_update);
+        o.boolean("managed", r.managed);
+        o.boolean("enabled", r.enabled);
         o.boolean("signed", r.signed_);
         o.boolean("canUpdate", r.can_update);
         o.boolean("canRemove", r.can_remove);
@@ -371,6 +374,8 @@ void emit_login(Out& o, const ui::LoginView& v) {
         o.str("name", p.name);
         o.str("description", p.description);
         o.str("input", p.input);
+        o.boolean("available", p.available);
+        o.str("reason", p.unavailable_reason);
         o.close(i);
     }
     o.close("uiPacks");
@@ -421,73 +426,34 @@ void emit_login(Out& o, const ui::LoginView& v) {
     o.str("assetsDir", ui::selected_assets_dir(v).string());
     o.integer("boxCount", static_cast<lua_Integer>(ui::box_accounts(v).size()));
     o.boolean("boxReady", ui::box_ready(v));
-    o.str("profilesDir", v.profiles_dir.string());
-    o.table();
-    for (std::size_t i = 0; i < v.group_profiles.size(); ++i) {
-        const auto& gp = v.group_profiles[i];
-        o.table();
-        o.str("id", gp.id);
-        o.str("name", gp.name);
-        o.str("description", gp.description);
-        o.str("sourcePath", gp.source_path);
-        o.integer("slotCount", static_cast<lua_Integer>(gp.slot_count));
-        o.close(i);
-    }
-    o.close("groupProfiles");
-    o.integer("groupSelected",
-              v.group_selected >= 0 && v.group_selected < static_cast<int>(v.group_profiles.size())
-                  ? v.group_selected + 1
-                  : 0);
-    o.table();
-    for (std::size_t i = 0; i < v.group_slots.size(); ++i) {
-        const auto& s = v.group_slots[i];
-        o.table();
-        o.integer("slotNumber", s.slot_number);
-        o.integer("launchOrder", s.launch_order);
-        o.boolean("enabled", s.enabled);
-        o.str("sessionId", s.session_id);
-        o.str("character", s.character);
-        o.str("account", s.account);
-        o.str("serverId", s.server_id);
-        o.str("world", s.world);
-        o.str("classRole", s.class_role);
-        o.str("settingsPath", s.settings_path);
-        o.boolean("autoLogin", s.auto_login);
-        o.boolean("headless", s.headless);
-        o.str("status", s.status);
-        o.str("zone", s.zone);
-        o.boolean("online", s.online);
-        o.close(i);
-    }
-    o.close("groupSlots");
-    o.integer("groupSlotSelected",
-              v.group_slot_selected >= 0 && v.group_slot_selected < static_cast<int>(v.group_slots.size())
-                  ? v.group_slot_selected + 1
-                  : 0);
 }
 
-// view = eq.LoginScreen([revision])   -- nil unless the client shows its login screen; reading it draws the screen
+// view = hs.LoginScreen([revision])   -- nil unless the client shows its login screen; reading it draws the screen
 // in the client's place this frame. view.revision changes whenever anything in the view does: given the revision of
-// the table the script holds, eq.LoginScreen gives true while nothing changed (keep that table; nothing is built),
-// else a new view. (The same holds for eq.ServerSelect and eq.CharacterSelect.)
+// the table the script holds, hs.LoginScreen gives true while nothing changed (keep that table; nothing is built),
+// else a new view. (The same holds for hs.ServerSelect and hs.CharacterSelect.)
 // view: revision, busy, status {text, error}, transient (a test login: no saved servers), ready (Login can go),
 //   sessionTicketAvailable (the app holds a returned ticket for this endpoint; no ticket value is exposed),
 //   servers {name, host, port, id, ui}, selected (0: a new server), name, host, port, username, password, remember,
-//   savePassword, canSavePasswords, music, ui, defaultUi, uiPacks {id, name, description, input},
+//   savePassword, canSavePasswords, music, ui, defaultUi, uiPacks {id, name, description, input, available, reason},
 //   accounts {username, passwordSaved, box, canBox, world, character, characters {name, world, level, classes}},
 //   worlds, characters {name, world, level, classes, account, passwordSaved, last}, quick (0: none),
 //   gameFolders {path, label, live, usable} (the one in use first), gameFolderFixed, assetsDir, boxCount, boxReady,
-//   addons (docs/addons.md): open (the panel shown: eq.LoginSet "addonsOpen"), available (links can be installed;
+//   addons (docs/addons.md): open (the panel shown: hs.LoginSet "addonsOpen"), available (links can be installed;
 //     else whyOff says why), link, inspecting, status,
-//     server (the picked server's name), suggestions {name ("" a server's suggestion), source, text, fromServer} (the
-//     picked server's suggested add-ons the player does not have: docs/addons.md "Suggested add-ons"), offer {name, kind, version, author, description, source, page, notes, key
+//     server (the picked server's name), suggestions {name ("" a server's suggestion), source, text, fromServer,
+//       required} (the picked server's offered add-ons: docs/addons.md "Suggested add-ons"),
+//     offer {name, kind, version, author, description, source, page, notes, key
 //     (the signing key's start, "" unsigned), installedVersion, blocked (why not, "" it can), caps (in words)},
 //     rows {name, kind ("script"/"plugin"/"tool"/"upscaler"), group ("installed", "manual", "server"), version, source, page, author,
 //     description, state, stateText, newVersion, caps, newCaps, modified, note, autoUpdate, signed, canUpdate,
-//     canRemove, canStart (an installed tool: eq.LoginDo "addonStart"), folder, consent (the server's compiled plugins: "allowed", "denied", "unasked"; else "")}.
+//     canRemove, canStart (an installed tool: hs.LoginDo "addonStart"), folder, consent (the server's compiled plugins: "allowed", "denied", "unasked"; else "")}.
 int LoginScreen(lua_State* L) {
-    EqHost& h = host_of(L);
-    if (!h.login || plugin_window()) {
+    UiHost& h = host_of(L);
+    // An interface Hailstone does not ship never sees the login screen (UiHost::trusted_ui): the password and the
+    // add-on manager's installs, removals and approvals are the built-in pack's, which draws this screen under it
+    // (ClientApp::use_ui_pack).
+    if (!h.login || plugin_window() || !h.trusted_ui) {
         lua_pushnil(L);
         return 1;
     }
@@ -496,13 +462,13 @@ int LoginScreen(lua_State* L) {
     return push_view(L, 1, [&v](auto& o) { emit_login(o, v); });
 }
 
-// eq.LoginSet(field, value): a field as the player edits it. "name", "host", "username", "password", "ui" (a pack's
+// hs.LoginSet(field, value): a field as the player edits it. "name", "host", "username", "password", "ui" (a pack's
 // id: the client switches to it at once, and a saved server keeps it at once), strings; "port", 1..65535; "remember", "savePassword", "music" (the
 // pre-game music, kept in hailstone.ini at once), booleans; "quick", the Characters list's row (0: none); "addonLink",
 // the add-on link field; "addonsOpen", the add-ons panel shown.
 int LoginSet(lua_State* L) {
-    EqHost& h = host_of(L);
-    if (!h.login || h.login->busy || plugin_window()) return 0;
+    UiHost& h = host_of(L);
+    if (!h.login || h.login->busy || plugin_window() || !h.trusted_ui) return 0; // (LoginScreen)
     ui::LoginView& v = *h.login;
     const std::string_view field = luaL_checkstring(L, 1);
     auto text = [&] { return std::string(luaL_checkstring(L, 2)); };
@@ -548,18 +514,18 @@ int LoginSet(lua_State* L) {
     } else if (field == "groupSlot") {
         v.group_slot_selected = index_arg(L, 2, v.group_slots.size());
     } else {
-        return luaL_error(L, "eq.LoginSet: no field %s", lua_tostring(L, 1));
+        return luaL_error(L, "hs.LoginSet: no field %s", lua_tostring(L, 1));
     }
     return 0;
 }
 
 SavedAccount* account_named(ui::LoginView& v, std::string_view username) {
     for (auto& a : v.accounts)
-        if (iequals(a.username, username)) return &a;
+        if (a.username == username) return &a;
     return nullptr;
 }
 
-// ok = eq.LoginDo(action [, arg [, value]]): what the login screen's buttons do.
+// ok = hs.LoginDo(action [, arg [, value]]): what the login screen's buttons do.
 //   "login"            log in with the fields (only when ready)
 //   "resume_token"     use the app's returned session ticket (sessionTicketAvailable, not busy)
 //   "quit"             quit the client
@@ -600,8 +566,8 @@ SavedAccount* account_named(ui::LoginView& v, std::string_view username) {
 //   "addonStoreLook", src     open the install card of the store's add-on whose source is src
 // false when the action cannot go now (busy, not ready, no such row).
 int LoginDo(lua_State* L) {
-    EqHost& h = host_of(L);
-    if (!h.login || plugin_window()) {
+    UiHost& h = host_of(L);
+    if (!h.login || plugin_window() || !h.trusted_ui) { // (LoginScreen)
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -636,9 +602,9 @@ int LoginDo(lua_State* L) {
                                                              "addonAuto",    "addonFolder",  "addonPage",
                                                              "addonRevoke",  "addonAskAgain", "addonSuggestLook",
                                                              "addonSuggestLater", "addonSuggestNever",
-                                                             "addonBrowse",  "addonStoreLook", "addonStart"};
+                                                             "addonBrowse",  "addonStoreLook", "addonStart", "addonEnabled"};
         if (std::find(std::begin(kAddonActions), std::end(kAddonActions), what) == std::end(kAddonActions))
-            return luaL_error(L, "eq.LoginDo: no action %s", lua_tostring(L, 1));
+            return luaL_error(L, "hs.LoginDo: no action %s", lua_tostring(L, 1));
         if (what != "addonBrowse") luaL_optstring(L, 2, ""); // (addonBrowse's is a flag: any value)
         ui::AddonsView& a = v.addons;
         const std::string name = what == "addonInspect" || what == "addonInstall" || what == "addonCancel" ||
@@ -669,6 +635,12 @@ int LoginDo(lua_State* L) {
         } else if (what == "addonRemove") {
             ok = row && row->group == "installed" && row->can_remove && !v.busy;
             if (ok) action = A::AddonRemove;
+        } else if (what == "addonEnabled") {
+            ok = row && row->group == "installed" && row->managed && !v.busy && lua_type(L, 3) == LUA_TBOOLEAN;
+            if (ok) {
+                a.choice_on = lua_toboolean(L, 3) != 0;
+                action = A::AddonEnabled;
+            }
         } else if (what == "addonAuto") {
             ok = row && row->group == "installed";
             if (ok) {
@@ -676,16 +648,19 @@ int LoginDo(lua_State* L) {
                 action = A::AddonAuto;
             }
         } else if (what == "addonRevoke" || what == "addonAskAgain") {
-            // The server's own compiled plugin of that name (an installed add-on may share it).
-            const ui::AddonRowView* server = nullptr;
-            for (const auto& r : a.rows)
-                if (r.group == "server" && r.kind == "plugin" && r.name == name) server = &r;
-            ok = server && (what == "addonRevoke" ? server->consent == "allowed" : server->consent == "denied");
+            // A server-provided or required installed plugin whose per-server consent the client exposes.
+            const std::string_view wanted = what == "addonRevoke" ? "allowed" : "denied";
+            ok = std::any_of(a.rows.begin(), a.rows.end(), [&](const ui::AddonRowView& r) {
+                return (r.group == "server" || r.group == "installed") && r.kind == "plugin" &&
+                       r.name == name && r.consent == wanted;
+            });
             if (ok) action = what == "addonRevoke" ? A::AddonRevoke : A::AddonAskAgain;
         } else if (what.starts_with("addonSuggest")) {
             // A suggestion of the picked server's, by its source.
             ok = !v.busy && std::any_of(a.suggestions.begin(), a.suggestions.end(),
-                                        [&](const ui::AddonSuggestionView& sg) { return sg.source == name; });
+                                        [&](const ui::AddonSuggestionView& sg) {
+                                            return sg.source == name && (!sg.required || what == "addonSuggestLook");
+                                        });
             if (ok)
                 action = what == "addonSuggestLook"    ? A::AddonSuggestLook
                          : what == "addonSuggestLater" ? A::AddonSuggestLater
@@ -776,14 +751,14 @@ int LoginDo(lua_State* L) {
             a->character.clear();
             if (!w.empty())
                 for (const auto& c : a->characters)
-                    if (iequals(c.world, w) && a->character.empty()) a->character = c.name;
+                    if (c.world == w && a->character.empty()) a->character = c.name;
         } else if (ok) {
             // as the client's Character list: the world goes with the character (the account's own world first
             // when the name is on several)
             std::string c = luaL_optstring(L, 3, "");
             const SavedCharacter* pick = nullptr;
             for (const auto& sc : a->characters)
-                if (iequals(sc.name, c) && (!pick || iequals(sc.world, a->world))) pick = &sc;
+                if (sc.name == c && (!pick || sc.world == a->world)) pick = &sc;
             a->character.clear();
             if (pick) {
                 a->character = pick->name;
@@ -838,7 +813,7 @@ int LoginDo(lua_State* L) {
         ok = !v.transient && v.group_selected >= 0 && !v.group_slots.empty();
         if (ok) action = A::RelaunchGroup;
     } else {
-        return luaL_error(L, "eq.LoginDo: no action %s", lua_tostring(L, 1));
+        return luaL_error(L, "hs.LoginDo: no action %s", lua_tostring(L, 1));
     }
     if (action) h.login_action = static_cast<int>(*action);
     lua_pushboolean(L, ok);
@@ -847,14 +822,14 @@ int LoginDo(lua_State* L) {
 
 // ---------------------------------------------------------------- server select
 
-// view = eq.ServerSelect([revision])   -- nil unless the client shows its server select; reading it draws the screen
-// in the client's place (as the stock serverselect page's script did). revision: as eq.LoginScreen's.
+// view = hs.ServerSelect([revision])   -- nil unless the client shows its server select; reading it draws the screen
+// in the client's place (as the stock serverselect page's script did). revision: as hs.LoginScreen's.
 // view: revision, busy, status {text, error}, server (the saved server's name), servers {name, status, canJoin,
 //  favorite} (no player count: no UI shows one; the favourites first, then by name), selected (0: none), last (the
 //  row of the world played last here, 0: none), addonHint (a world listed has an add-on the player does not have:
 //  the sentence that says so, "" none; docs/addons.md "Suggested add-ons").
 template <class Out>
-void emit_server_select(Out& o, const EqHost& h, const ui::ServerSelectView& v) {
+void emit_server_select(Out& o, const UiHost& h, const ui::ServerSelectView& v) {
     o.boolean("busy", v.busy);
     emit_status(o, v.status);
     o.str("server", h.login_server);
@@ -868,17 +843,16 @@ void emit_server_select(Out& o, const EqHost& h, const ui::ServerSelectView& v) 
         o.boolean("canJoin", s.can_join);
         o.boolean("favorite", s.favorite);
         o.close(i);
-        if (!h.last_server.empty() && iequals(s.name, h.last_server) && last == 0) last = i + 1;
+        if (!h.last_server.empty() && s.name == h.last_server && last == 0) last = i + 1;
     }
     o.close("servers");
-    o.str("filter", v.filter);
     o.integer("selected", v.selected >= 0 && v.selected < static_cast<int>(v.servers.size()) ? v.selected + 1 : 0);
     o.integer("last", static_cast<lua_Integer>(last));
     o.str("addonHint", v.addon_hint);
 }
 
 int ServerSelect(lua_State* L) {
-    EqHost& h = host_of(L);
+    UiHost& h = host_of(L);
     if (!h.server_select || plugin_window()) {
         lua_pushnil(L);
         return 1;
@@ -888,11 +862,26 @@ int ServerSelect(lua_State* L) {
     return push_view(L, 1, [&h, &v](auto& o) { emit_server_select(o, h, v); });
 }
 
-// ok = eq.ServerSelectDo(action [, i]): "select", i; "play" [, i] (the picked world, or row i; only one that can be
+// ok = hs.ServerSelectDo(action [, i]): "select", i; "play" [, i] (the picked world, or row i; only one that can be
 // joined); "favorite", i (marks or unmarks row i as a favourite: the list is sorted again the next frame); "back" (to
 // the login screen).
+int ServerSelectSet(lua_State* L) {
+    UiHost& h = host_of(L);
+    if (!h.server_select || plugin_window()) return 0;
+    ui::ServerSelectView& v = *h.server_select;
+    const std::string_view field = luaL_checkstring(L, 1);
+    if (field == "filter") {
+        std::string s = luaL_checkstring(L, 2);
+        if (s.size() > 128) s.resize(128);
+        v.filter = std::move(s);
+    } else {
+        return luaL_error(L, "hs.ServerSelectSet: no field %s", lua_tostring(L, 1));
+    }
+    return 0;
+}
+
 int ServerSelectDo(lua_State* L) {
-    EqHost& h = host_of(L);
+    UiHost& h = host_of(L);
     bool ok = false;
     if (h.server_select && !plugin_window()) {
         ui::ServerSelectView& v = *h.server_select;
@@ -918,37 +907,22 @@ int ServerSelectDo(lua_State* L) {
                 }
             }
         } else {
-            return luaL_error(L, "eq.ServerSelectDo: no action %s", lua_tostring(L, 1));
+            return luaL_error(L, "hs.ServerSelectDo: no action %s", lua_tostring(L, 1));
         }
     }
     lua_pushboolean(L, ok);
     return 1;
 }
 
-int ServerSelectSet(lua_State* L) {
-    EqHost& h = host_of(L);
-    if (!h.server_select || plugin_window()) return 0;
-    ui::ServerSelectView& v = *h.server_select;
-    const std::string_view field = luaL_checkstring(L, 1);
-    if (field == "filter") {
-        std::string s = luaL_checkstring(L, 2);
-        if (s.size() > 128) s.resize(128);
-        v.filter = std::move(s);
-    } else {
-        return luaL_error(L, "eq.ServerSelectSet: no field %s", lua_tostring(L, 1));
-    }
-    return 0;
-}
-
 // ---------------------------------------------------------------- character select
 
-// view = eq.CharacterSelect([revision])   -- nil unless the client shows its character select; reading it draws the
-// screen in the client's place. revision: as eq.LoginScreen's.
+// view = hs.CharacterSelect([revision])   -- nil unless the client shows its character select; reading it draws the
+// screen in the client's place. revision: as hs.LoginScreen's.
 // view: revision, busy, status {text, error}, world (the world's name), server (the saved server's name), scene (the
 //   model is drawn in the middle of the screen), selected (0: none), characters {name, level, race, raceName,
 //   classes {ids}, className ("Shadow Knight / Cleric"), classShort ("SHD/CLR"), zone}.
 template <class Out>
-void emit_char_select(Out& o, const EqHost& h, const ui::CharacterSelectView& v) {
+void emit_char_select(Out& o, const UiHost& h, const ui::CharacterSelectView& v) {
     o.boolean("busy", v.busy);
     emit_status(o, v.status);
     o.str("world", v.server_name);
@@ -977,7 +951,7 @@ void emit_char_select(Out& o, const EqHost& h, const ui::CharacterSelectView& v)
 }
 
 int CharacterSelect(lua_State* L) {
-    EqHost& h = host_of(L);
+    UiHost& h = host_of(L);
     if (!h.char_select || plugin_window()) {
         lua_pushnil(L);
         return 1;
@@ -987,12 +961,12 @@ int CharacterSelect(lua_State* L) {
     return push_view(L, 1, [&h, &v](auto& o) { emit_char_select(o, h, v); });
 }
 
-// ok = eq.CharacterSelectDo(action [, arg]): "select", i (the scene shows that character); "enter" [, i] (enter the
+// ok = hs.CharacterSelectDo(action [, arg]): "select", i (the scene shows that character); "enter" [, i] (enter the
 // world with the picked one, or row i); "create" (character creation); "delete" (the picked one, permanently: ask
 // first); "home" (Return Home: the picked one enters the world in its home city, when its canGoHome allows; ask first
 // with its homeQuestion); "back" / "logout" (to the login screen).
 int CharacterSelectDo(lua_State* L) {
-    EqHost& h = host_of(L);
+    UiHost& h = host_of(L);
     bool ok = false;
     if (h.char_select && !plugin_window()) {
         ui::CharacterSelectView& v = *h.char_select;
@@ -1014,7 +988,7 @@ int CharacterSelectDo(lua_State* L) {
         } else if (what == "home") {
             if (picked && v.characters[static_cast<std::size_t>(v.selected)].can_go_home) action = A::ReturnHome;
         } else {
-            return luaL_error(L, "eq.CharacterSelectDo: no action %s", lua_tostring(L, 1));
+            return luaL_error(L, "hs.CharacterSelectDo: no action %s", lua_tostring(L, 1));
         }
         if (action) {
             h.char_select_action = static_cast<int>(*action);
@@ -1046,7 +1020,7 @@ void push_choices(lua_State* L, const char* key, const std::vector<std::uint32_t
     set_int(L, index_key, at);
 }
 
-// view = eq.CharacterCreate()   -- nil unless the client shows its character creation (and not while the
+// view = hs.CharacterCreate()   -- nil unless the client shows its character creation (and not while the
 // customization window is up on the model); reading it draws the screen in the client's place.
 // view: busy, status {text, error}, scene (the model is drawn in the middle of the screen), name, namePending (a
 //   random name is on its way), gender (0 male, 1 female), race, raceName, class, className, deity, deityName,
@@ -1055,7 +1029,7 @@ void push_choices(lua_State* L, const char* key, const std::vector<std::uint32_t
 //   cityIndex (1-based rows of those lists, 0 none), stats {name, short, value, base, cap, favored (the class puts
 //   points in it)}, pointsLeft, ready (Create can go: a name of 4 letters or more, every point spent).
 int CharacterCreate(lua_State* L) {
-    EqHost& h = host_of(L);
+    UiHost& h = host_of(L);
     if (!h.char_create_view || plugin_window()) {
         lua_pushnil(L);
         return 1;
@@ -1112,16 +1086,16 @@ int CharacterCreate(lua_State* L) {
     return 1;
 }
 
-// text, title = eq.CharacterCreateHelp(kind, id): the game's description of a choice (dbstr_us.txt, as the stock
+// text, title = hs.CharacterCreateHelp(kind, id): the game's description of a choice (dbstr_us.txt, as the stock
 // page's help box: a race's type 8, a class's 9, a stat's 10, a deity's 14, a start city's 15) and its name. kind:
 // "race", "class", "deity", "city" (by id) or "stat" (1..7, STR..CHA). "" when the game folder has none.
 int CharacterCreateHelp(lua_State* L) {
-    EqHost& h = host_of(L);
+    UiHost& h = host_of(L);
     const std::string_view kind = luaL_checkstring(L, 1);
     const lua_Integer id = luaL_checkinteger(L, 2);
     // (the kind checked before a C++ object is made: a Lua error longjmps past destructors)
     if (kind != "race" && kind != "class" && kind != "deity" && kind != "city" && kind != "stat")
-        return luaL_error(L, "eq.CharacterCreateHelp: no kind %s", lua_tostring(L, 1));
+        return luaL_error(L, "hs.CharacterCreateHelp: no kind %s", lua_tostring(L, 1));
     std::uint32_t type = 0, key = 0;
     std::string title;
     if (id >= 0 && id <= 0xffff) key = static_cast<std::uint32_t>(id);
@@ -1141,7 +1115,7 @@ int CharacterCreateHelp(lua_State* L) {
     return 2;
 }
 
-// ok = eq.CharacterCreateDo(action [, value]): what the creation's controls do.
+// ok = hs.CharacterCreateDo(action [, value]): what the creation's controls do.
 //   "name", text       the name as typed (the client keeps letters only and capitalises it on Create)
 //   "randomName"       asks the server for a name for the race and gender (OP_RandomNameGenerator); it fills name
 //   "race", id         a race of races; "class", id: a class of classes; "gender", 0 / 1
@@ -1153,7 +1127,7 @@ int CharacterCreateHelp(lua_State* L) {
 //   "cancel"           back to the character select
 // A race, class or deity resets the stats. false when the action cannot go now (busy, no such choice).
 int CharacterCreateDo(lua_State* L) {
-    EqHost& h = host_of(L);
+    UiHost& h = host_of(L);
     bool ok = false;
     if (h.char_create_view && !plugin_window()) {
         ui::CharacterCreateView& v = *h.char_create_view;
@@ -1210,7 +1184,7 @@ int CharacterCreateDo(lua_State* L) {
         } else if (what == "create") {
             if (ui::create_ready(v)) action = A::Create;
         } else {
-            return luaL_error(L, "eq.CharacterCreateDo: no action %s", lua_tostring(L, 1));
+            return luaL_error(L, "hs.CharacterCreateDo: no action %s", lua_tostring(L, 1));
         }
         ui::create_normalize(v);
         if (action) {
@@ -1224,12 +1198,12 @@ int CharacterCreateDo(lua_State* L) {
 
 } // namespace
 
-void register_pregame_api(lua_State* L, EqHost& host, ScreenReplacements& screens) {
+void register_pregame_api(lua_State* L, UiHost& host, ScreenReplacements& screens) {
     static const luaL_Reg fns[] = {{"LoginScreen", LoginScreen},         {"LoginSet", LoginSet},
                                    {"LoginDo", LoginDo},                 {"ServerSelect", ServerSelect},
-                                   {"ServerSelectSet", ServerSelectSet}, {"ServerSelectDo", ServerSelectDo},
-                                   {"CharacterSelect", CharacterSelect}, {"CharacterSelectDo", CharacterSelectDo},
-                                   {"CharacterCreate", CharacterCreate}, {"CharacterCreateHelp", CharacterCreateHelp},
+                                   {"ServerSelectSet", ServerSelectSet}, {"ServerSelectDo", ServerSelectDo},   {"CharacterSelect", CharacterSelect},
+                                   {"CharacterSelectDo", CharacterSelectDo}, {"CharacterCreate", CharacterCreate},
+                                   {"CharacterCreateHelp", CharacterCreateHelp},
                                    {"CharacterCreateDo", CharacterCreateDo}, {nullptr, nullptr}};
     lua_pushlightuserdata(L, &host);
     lua_pushlightuserdata(L, &screens);

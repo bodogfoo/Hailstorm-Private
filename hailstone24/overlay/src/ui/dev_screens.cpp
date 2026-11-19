@@ -123,19 +123,6 @@ bool contains_ci(std::string_view hay, std::string_view needle) {
     return it != hay.end();
 }
 
-std::string_view trim_sv(std::string_view s) {
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
-    return s;
-}
-
-bool is_favorite_world(std::string_view name, const std::vector<std::string>& favorites) {
-    const std::string_view trimmed = trim_sv(name);
-    if (trimmed.empty()) return false;
-    return std::any_of(favorites.begin(), favorites.end(),
-                       [&](const std::string& f) { return iequals(trim_sv(f), trimmed); });
-}
-
 // ---- The gamepad on the pre-game screens ----------------------------------
 
 struct ScreenPad {
@@ -422,11 +409,14 @@ LoginAction addon_suggestions(const AddonsView& a, std::string& choice) {
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
         };
-        button("Look at it", LoginAction::AddonSuggestLook, "What it is and what it asks to do; nothing is installed yet");
-        ImGui::SameLine();
-        button("Not now", LoginAction::AddonSuggestLater, "Not suggested again until Hailstone starts again");
-        ImGui::SameLine();
-        button("Don't ask again", LoginAction::AddonSuggestNever, "Not suggested again for this server");
+        button(sg.required ? "Review required add-on" : "Look at it", LoginAction::AddonSuggestLook,
+               "What it is and what it asks to do; nothing is installed yet");
+        if (!sg.required) {
+            ImGui::SameLine();
+            button("Not now", LoginAction::AddonSuggestLater, "Not suggested again until Hailstone starts again");
+            ImGui::SameLine();
+            button("Don't ask again", LoginAction::AddonSuggestNever, "Not suggested again for this server");
+        }
         ImGui::PopID();
     }
     return action;
@@ -457,19 +447,23 @@ LoginAction addons_window(AddonsView& a, bool busy, bool* open) {
     if (a.offer) {
         const AddonOfferView& o = *a.offer;
         ImGui::Separator();
-        ImGui::Text("%s %s (%s)", o.name.c_str(), o.version.c_str(), o.kind.c_str());
+        ImGui::Text("%s %s (%s)", o.name.c_str(), o.version.c_str(), o.autoload ? "managed add-on" : o.kind.c_str());
         if (!o.author.empty()) ImGui::TextDisabled("by %s, from %s", o.author.c_str(), o.source.c_str());
         else ImGui::TextDisabled("from %s", o.source.c_str());
         if (!o.description.empty()) ImGui::TextWrapped("%s", o.description.c_str());
+        if (o.autoload) ImGui::TextWrapped("Starts automatically when enabled. Manage it from My add-ons.");
         if (!o.installed_version.empty()) ImGui::Text("Installed now: %s", o.installed_version.c_str());
-        if (o.kind != "tool" && o.kind != "upscaler") {
+        if (o.kind != "tool" && o.kind != "upscaler" && o.kind != "ui") {
             ImGui::TextUnformatted("It asks to:");
             list(o.caps);
         }
         ImGui::TextWrapped("%s", o.key.empty() ? "Not signed: later versions are taken from whoever controls the "
                                                  "repository."
                                                : ("Signed with key " + o.key + ": later versions must carry it.").c_str());
-        if (o.kind == "plugin")
+        if (o.kind == "ui") {
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Full client interface access");
+            ImGui::TextWrapped("A UI pack can call host interface, account and game actions. Install only interfaces you trust.");
+        } else if (o.kind == "plugin")
             ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s",
                                "A plugin is a program: the permissions limit what it does through Hailstone, not what "
                                "it can do on your computer. Install only plugins you trust.");
@@ -579,7 +573,8 @@ LoginAction addons_window(AddonsView& a, bool busy, bool* open) {
         for (const auto& r : a.rows) {
             if (r.group != group) continue;
             ImGui::PushID((group + ":" + r.name).c_str());
-            const std::string label = r.name + (r.version.empty() ? "" : " " + r.version) + "  (" + r.kind + ")";
+            const std::string label = r.name + (r.version.empty() ? "" : " " + r.version) + "  (" +
+                                      (r.managed ? std::string("add-on") : r.kind) + ")";
             if (ImGui::TreeNode("##row", "%s", label.c_str())) {
                 if (!r.description.empty()) ImGui::TextWrapped("%s", r.description.c_str());
                 if (!r.source.empty()) ImGui::TextDisabled("from %s%s", r.source.c_str(), r.signed_ ? ", signed" : "");
@@ -595,6 +590,17 @@ LoginAction addons_window(AddonsView& a, bool busy, bool* open) {
                 if (!r.modified.empty()) ImGui::TextDisabled("Changed by you: %zu file(s)", r.modified.size());
                 if (!r.note.empty()) ImGui::TextWrapped("%s", r.note.c_str());
                 if (r.group == "installed") {
+                    if (r.managed) {
+                        bool enabled = r.enabled;
+                        ImGui::BeginDisabled(busy);
+                        if (ImGui::Checkbox("Enabled", &enabled)) {
+                            a.choice = r.name;
+                            a.choice_on = enabled;
+                            action = LoginAction::AddonEnabled;
+                        }
+                        ImGui::EndDisabled();
+                        ImGui::TextDisabled("Starts automatically when this server allows it.");
+                    }
                     bool on = r.auto_update;
                     if (ImGui::Checkbox("Update by itself", &on)) {
                         a.choice = r.name;
@@ -822,8 +828,7 @@ LoginAction login_screen(LoginView& view) {
                         ImGui::PushID(s.slot_number * 100 + i);
                         std::string num_lbl = std::format("{}:{}", s.launch_order, s.slot_number);
                         if (ImGui::Selectable(num_lbl.c_str(), view.group_slot_selected == i,
-                                              ImGuiSelectableFlags_SpanAllColumns |
-                                                  ImGuiSelectableFlags_AllowDoubleClick)) {
+                                              ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
                             view.group_slot_selected = i;
                             if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                                 view.group_slot_choice = s.slot_number;
@@ -988,15 +993,20 @@ LoginAction login_screen(LoginView& view) {
         if (ImGui::BeginCombo("##ui", ui_pack ? ui_pack->name.c_str() : view.ui.c_str())) {
             for (const auto& p : view.ui_packs) {
                 ImGui::PushID(p.id.c_str());
-                if (ImGui::Selectable(p.name.c_str(), &p == ui_pack)) view.ui = p.id;
-                if (ImGui::IsItemHovered() && !p.description.empty())
-                    ImGui::SetTooltip("%s\nMade for: %s", p.description.c_str(), p.input.c_str());
+                ImGui::BeginDisabled(!p.available);
+                if (ImGui::Selectable(p.name.c_str(), &p == ui_pack) && p.available) view.ui = p.id;
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("%s\nMade for: %s%s%s", p.description.c_str(), p.input.c_str(),
+                        p.available ? "" : "\nUnavailable: ", p.available ? "" : p.unavailable_reason.c_str());
                 ImGui::PopID();
             }
             ImGui::EndCombo();
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("The look and layout of the game's windows on this server. Kept with the server.");
+            ImGui::SetTooltip("The look and layout of the game's windows on this server. Kept with the server.%s%s",
+                ui_pack && !ui_pack->available ? "\nUnavailable: " : "",
+                ui_pack && !ui_pack->available ? ui_pack->unavailable_reason.c_str() : "");
     }
     label("Username");
     // The server's saved accounts in a list beside the field: picking one fills its saved password.
@@ -1088,12 +1098,12 @@ LoginAction login_screen(LoginView& view) {
                             action = LoginAction::AccountsChanged;
                         }
                         for (const std::string& w : view.worlds) {
-                            if (ImGui::Selectable(w.c_str(), iequals(w, a.world)) && !iequals(w, a.world)) {
+                            if (ImGui::Selectable(w.c_str(), w == a.world) && w != a.world) {
                                 a.world = w;
                                 // Its character there: the one entered last on it, else the first seen.
                                 a.character.clear();
                                 for (const auto& c : a.characters)
-                                    if (iequals(c.world, w) && a.character.empty()) a.character = c.name;
+                                    if (c.world == w && a.character.empty()) a.character = c.name;
                                 action = LoginAction::AccountsChanged;
                             }
                         }
@@ -1114,11 +1124,10 @@ LoginAction login_screen(LoginView& view) {
                             action = LoginAction::AccountsChanged;
                         }
                         for (const auto& c : a.characters) {
-                            if (!a.world.empty() && !iequals(c.world, a.world)) continue;
+                            if (!a.world.empty() && c.world != a.world) continue;
                             std::string row = c.name + (c.level > 0 ? std::format("  {} {}", c.level, c.classes) : "");
                             if (a.world.empty()) row += "  (" + c.world + ")";
-                            if (ImGui::Selectable(row.c_str(), iequals(c.name, a.character)) &&
-                                !iequals(c.name, a.character)) {
+                            if (ImGui::Selectable(row.c_str(), c.name == a.character) && c.name != a.character) {
                                 a.character = c.name;
                                 a.world = c.world;
                                 action = LoginAction::AccountsChanged;
@@ -2111,11 +2120,10 @@ void loading_screen(const LoadingView& view) {
     ImGui::End();
 }
 
-void loading_overlay(const LoadingView& view) {
-    // Drawn into the foreground list, over every window of the frame (the UI pack's windows draw beneath it), on
-    // the loading screen's background, with loading_screen's panel: title, detail, bar.
+namespace {
+// The loading screen's backdrop and panel (title, detail, bar), drawn into `dl` (loading_overlay).
+void draw_loading_presentation(ImDrawList* dl, const LoadingView& view) {
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImDrawList* dl = ImGui::GetForegroundDrawList();
     if (view.picture.id) draw_screen_picture(dl, view.picture);
     else dl->AddRectFilled(vp->Pos, ImVec2(vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y), IM_COL32(0, 0, 0, 255));
     const ImGuiStyle& style = ImGui::GetStyle();
@@ -2163,6 +2171,42 @@ void loading_overlay(const LoadingView& view) {
         dl->PathArcTo(sc, r * 0.8f, t, t + kPi * 1.5f, 24);
         dl->PathStroke(ImGui::GetColorU32(ImGuiCol_ButtonActive), 0, r * 0.3f);
     }
+}
+} // namespace
+
+void loading_overlay(const LoadingView& view) {
+    // Drawn into the foreground list, over every window of the frame (the UI pack's windows draw beneath it), on
+    // the loading screen's background, with loading_screen's panel: title, detail, bar.
+    draw_loading_presentation(ImGui::GetForegroundDrawList(), view);
+}
+
+void loading_overlay(const LoadingView& view, bool cover_ui) {
+    if (cover_ui) {
+        loading_overlay(view);
+        return;
+    }
+    // The foreground list would hide the plugin question too. The same presentation in a window of its own over the
+    // viewport, raised over every window begun so far: the world's names (background list) and the other windows
+    // stay beneath it and it takes their mouse presses, and the question's windows go above it when they are raised
+    // after it (lua::raise_guarded_windows).
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->Pos);
+    ImGui::SetNextWindowSize(vp->Size);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::Begin(kLoadingCoverWindow, nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing |
+                     ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoBackground |
+                     ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleVar(3);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->PushClipRect(vp->Pos, ImVec2(vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y));
+    draw_loading_presentation(dl, view);
+    dl->PopClipRect();
+    ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+    ImGui::End();
 }
 
 // ---- In game --------------------------------------------------------------

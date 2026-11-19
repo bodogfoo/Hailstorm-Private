@@ -71,7 +71,7 @@ struct SessionSnapshot {
     std::uint8_t group_slot = 0;
     std::string group_leader;
     app::ExecutionState exec_state = app::ExecutionState::Disconnected;
-    std::string rgmercs_state; // "Running", "Paused", "Stopped"
+    std::string combat_state; // "Idle", "Combat", "Paused", "EmergencyStop"
     std::string script_health; // "OK", "ERR:..."
     std::uint32_t ping_ms = 0;
     std::uint32_t rss_mib = 0;
@@ -98,7 +98,7 @@ struct CommandPacket {
     std::string target;      // character or channel name
     std::string sender_char;
     std::string sender_zone;
-    std::string command;     // e.g. "/lua run rgmercs" or "/sit"
+    std::string command;     // e.g. "/combat start" or "/combat estop"
 };
 
 struct CommandAckPacket {

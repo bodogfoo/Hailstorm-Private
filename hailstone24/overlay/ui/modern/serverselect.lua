@@ -1,9 +1,10 @@
--- Server select: the client's world list in this UI's look (eq.ServerSelect, app/lua_eq_pregame.cpp; the client's
+-- Server select: the client's world list in this UI's look (hs.ServerSelect, app/lua_ui_pregame.cpp; the client's
 -- screen, as ui/dev_screens.cpp server_select_screen draws it, not the original's page). A card in the middle of the
 -- screen: the world played last here as one button, then every world the login server listed as a row with its
 -- status (green when it can be joined). No player count is shown. A click picks a world, a double click or Play plays it,
 -- Enter plays the picked one, Back returns to the login screen. The star on a row marks the world a favourite: the
 -- favourites are listed first, then the other worlds, each by name (the client sorts them).
+local API = hs.UI
 local P = dofile("lib/pregame.lua")
 local T = P.T
 local C = T.color
@@ -29,85 +30,74 @@ local function star(cx, cy, r, filled, c, a)
 end
 
 local PLAY = { "Play" }
-local CLEAR = { "Clear" }
-local filterText = ""
-local lastViewFilter = nil
-
-local function matchesFilter(name, query)
-  local q = query:lower()
-  for token in q:gmatch("%S+") do
-    if not name:lower():find(token, 1, true) then
-      return false
-    end
-  end
-  return true
-end
 
 local function card(view, s, bh)
-  if view.filter ~= nil and view.filter ~= lastViewFilter then
-    filterText = view.filter
-    lastViewFilter = view.filter
-  end
   P.Title("Choose a world", view.server ~= "" and view.server or nil, s)
   local last = view.servers[view.last]
   ui.BeginDisabled(view.busy)
   if last then
     if P.Primary("Play " .. last.name .. "  (last played)", -1, bh, last.canJoin) then
-      eq.ServerSelectDo("play", view.last)
+      API.pregame.ServerSelectDo("play", view.last)
     end
     P.Tip(last.canJoin and "The world you played last on this server" or (last.name .. ": " .. last.status))
     ui.Dummy(0, 4 * s)
   end
-  P.Heading("Worlds")
-
+  local filter = view.filter or ""
+  ui.SetNextItemWidth(ui.GetContentRegionAvail() - 108 * s)
+  local newFilter, enterInFilter = ui.InputTextWithHint("##worldfilter", "Filter worlds by keyword...", filter, 128,
+    ui.InputTextFlags.EnterReturnsTrue)
+  if newFilter ~= filter then
+    API.pregame.ServerSelectSet("filter", newFilter)
+    view.filter = newFilter
+    held = nil
+    filter = newFilter
+  end
+  ui.SameLine()
+  ui.BeginDisabled(filter == "")
+  if ui.Button("Clear", 52 * s, 0) then
+    API.pregame.ServerSelectSet("filter", "")
+    view.filter = ""
+    held = nil
+    filter = ""
+  end
+  ui.EndDisabled()
+  local tokens = {}
+  for w in string.gmatch(string.lower(filter), "%S+") do tokens[#tokens + 1] = w end
   local visible = {}
   local selectedVisible = false
   for i, sv in ipairs(view.servers) do
-    if matchesFilter(sv.name, filterText) then
-      visible[#visible + 1] = { idx = i, sv = sv }
-      if view.selected == i then selectedVisible = true end
+    local lower = string.lower(sv.name)
+    local ok = true
+    for _, tok in ipairs(tokens) do
+      if not string.find(lower, tok, 1, true) then
+        ok = false
+        break
+      end
+    end
+    if ok then
+      visible[#visible + 1] = { index = i, sv = sv }
+      if i == view.selected then selectedVisible = true end
     end
   end
-  if not selectedVisible and #visible > 0 then
-    eq.ServerSelectDo("select", visible[1].idx)
-    view.selected = visible[1].idx
-  end
-
-  local countText = string.format("%d/%d", #visible, #view.servers)
-  local clearW = P.ButtonsWidth(CLEAR, s)
-  local countW = ui.CalcTextSize(countText) + 6 * s
-  ui.SetNextItemWidth(math.max(120 * s, ui.GetContentRegionAvail() - clearW - countW - 16 * s))
-  local nextFilter, enterInFilter = ui.InputTextWithHint("##worldfilter", "Filter worlds by keyword...", filterText,
-    128, ui.InputTextFlags.EnterReturnsTrue)
-  if nextFilter ~= filterText then
-    filterText = nextFilter
-    lastViewFilter = nextFilter
-    eq.ServerSelectSet("filter", filterText)
+  if not selectedVisible and #visible > 0 and view.selected ~= visible[1].index then
+    API.pregame.ServerSelectDo("select", visible[1].index)
   end
   ui.SameLine()
-  ui.BeginDisabled(filterText == "")
-  if ui.Button("Clear") then
-    filterText = ""
-    lastViewFilter = ""
-    eq.ServerSelectSet("filter", "")
-  end
-  ui.EndDisabled()
-  ui.SameLine()
-  P.Muted(countText)
+  P.Muted(string.format("%d/%d", #visible, #view.servers))
   ui.Dummy(0, 2 * s)
-
+  P.Heading("Worlds")
   local _, lh = ui.CalcTextSize("Ag")
   local rowH = lh + 16 * s
-  local shown = math.max(1, math.min(#view.servers, 8))
+  local shown = math.max(1, math.min(#visible, 8))
   ui.PushStyleVar(ui.StyleVar.ItemSpacing, 8 * s, 3 * s)
   ui.BeginChild("##worlds", 0, shown * (rowH + 3 * s), false)
   if #view.servers == 0 then
     P.Faint("No worlds listed.")
   elseif #visible == 0 then
-    P.Faint(string.format("No worlds match \"%s\".", filterText))
+    P.Faint("No worlds match '" .. filter .. "'.")
   end
-  for _, entry in ipairs(visible) do
-    local i, sv = entry.idx, entry.sv
+  for _, row in ipairs(visible) do
+    local i, sv = row.index, row.sv
     ui.PushID(i)
     local clicked, double, x0, y0, x1, y1 = P.Row("##world", view.selected == i, rowH, s)
     -- the star at the left takes its own clicks: it marks or unmarks the world as a favourite
@@ -115,10 +105,10 @@ local function card(view, s, bh)
     local sx0, sx1 = x0 + 10 * s, x0 + 10 * s + 2 * sr + 8 * s
     local onStar = ui.IsMouseHoveringRect(sx0, y0, sx1, y1)
     if clicked and onStar then
-      eq.ServerSelectDo("favorite", i)
+      API.pregame.ServerSelectDo("favorite", i)
     elseif clicked then
-      eq.ServerSelectDo("select", i)
-      if double and sv.canJoin then eq.ServerSelectDo("play", i) end
+      API.pregame.ServerSelectDo("select", i)
+      if double and sv.canJoin then API.pregame.ServerSelectDo("play", i) end
     end
     local hot = onStar and ui.IsItemHovered()
     star((sx0 + sx1) / 2, (y0 + y1) / 2, sr, sv.favorite, (sv.favorite or hot) and C.gold or C.faint,
@@ -150,22 +140,22 @@ local function card(view, s, bh)
   end
   local picked = selectedVisible and view.servers[view.selected] or nil
   local canPlay = not view.busy and picked ~= nil and picked.canJoin
-  if ui.Button("Back", 0, bh) then eq.ServerSelectDo("back") end
+  if ui.Button("Back", 0, bh) then API.pregame.ServerSelectDo("back") end
   P.Tip("Back to the login screen")
   ui.SameLine()
   local playW = P.ButtonsWidth(PLAY, s) + 40 * s
   P.AlignRight(playW)
-  if P.Primary("Play", playW, bh, canPlay) then eq.ServerSelectDo("play") end
+  if P.Primary("Play", playW, bh, canPlay) then API.pregame.ServerSelectDo("play") end
   -- Enter plays the picked world (from filter input or anywhere on screen when not typing elsewhere)
   if canPlay and (enterInFilter or (ui.IsKeyPressed(ui.Key.Enter) and not ui.GetIO().typing)) then
-    eq.ServerSelectDo("play")
+    API.pregame.ServerSelectDo("play")
   end
 end
 
-local held = nil -- the view drawn last frame: eq.ServerSelect gives true while it still holds (its revision)
+local held = nil -- the view drawn last frame: hs.ServerSelect gives true while it still holds (its revision)
 
 ui.window("Server Select", function()
-  local view = eq.ServerSelect(held and held.revision)
+  local view = API.pregame.ServerSelect(held and held.revision)
   if view == true then view = held else held = view end
   if not view then return end
   local s = P.Scale()

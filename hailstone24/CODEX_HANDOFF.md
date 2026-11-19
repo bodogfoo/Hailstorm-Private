@@ -1,23 +1,34 @@
 # Project Hailstone 24 — Ubuntu Workstation Build & Validation Handoff
 
-## What Was Built
-- **Decoupled `ExecutionState` Engine**: `Disconnected`, `BackgroundHeadless`, `Transitioning`, `ForegroundFull`. Background clients (`--headless-bg`) hide their window, suspend Vulkan swapchains (`vk_.suspend_for_background()`), mute audio, and skip ImGui/particle/Lua UI builds while continuing network packets, `StepClock` physics, `Detour` navigation, and `RG Mercs` Lua coroutines at `--bg-tick-hz` (default `25 Hz`, range `10..60 Hz`).
-- **Local `AF_UNIX` IPC Bus & Process Supervisor (`hailstone24_broker`, `hailstone24_manager`)**: Same-UID `SO_PEERCRED` socket for `< 250 ms` foreground switching (`/switch` or manager hotkeys/click), `/bca`/`/bcaa`/`/bc`/`/rc`/`/dgt`/`/dquery`/`/dobserve` dispatch with ACKs, and `require('actors')` mailbox routing.
-- **Linux Shared GPU IPC (`VK_KHR_external_memory_fd` + `SCM_RIGHTS`)**: Unlocks `hailstone_gpu_cache_broker` and `--gpu-mode shared-broker` alongside `cached` (default for 32 GB Intel Arc Pro B70) and `deferred`.
-- **MacroQuest AutoLogin Importer (`--import-mq-logins`) & End-to-End Auto-Login (`--auto-login`, `--world`, `--auto-kick`)**: Read-only import (`SQLITE_OPEN_READONLY`) of MQ `login.db` (plaintext & `master_pass` XOR-encrypted), `MQ2AutoLogin.ini`, and `server^acct^char^pass` files into Hailstone's isolated `--data-dir` + `libsecret` keyring, writing a passwordless `[global]`/`[slot01..slot24]` `hailstone24_roster.ini`. Supports full end-to-end auto-login (server -> world -> character -> enter world), interactive `"Auto-login"` toggle (`login.auto_login`), Server Select keyword filtering, case-insensitive favorite pinning at the top, and automatic kick-existing confirmation (`--auto-kick` / `login.auto_kick=1` / headless mode). **Existing EverQuest & MacroQuest files are never modified.**
-- **RG Mercs Compatibility & Native Hailstone UI (`RGMercsWnd`)**:
-  - **Native ImGui Presentation (`ui/modern/rgmercs.lua`)**: Static, Hailstone-native window titled `RGMercs` (`hud.Dialog("RGMercsWnd", ...)`), accessible from the EQ cascade menu (`RGMercs`), Lua Scripts `"UI"` button, and `/rgmercs` / `/rgui` client commands. Zero Zep, `IM_COL32`, `ImHashStr`, `GetForegroundDrawList`, or unsupported ImGui bindings.
-  - **Header & Status Banner**: Shows Character (`Stabbinyah`), Class, Server (`EZ Server`), live state (`Running`/`Paused`/`Stopped`/`Ended`/`Error`), `Start`/`Stop`/`Pause`/`Resume`/`Reload` controls, `Autorun`, `Native UI only` (`suppress_script_ui`), `Save`/`Reset`, and visible Status + Error banner (plus Dismiss / jump to Debug Log) without opening game chat.
-  - **9 Navigation Sections**: `Combat`, `Targeting`, `Healing`, `Buffs`, `Debuffs`, `Movement`, `Loot`, `Class settings`, and `Debug/logging` (module enable/status table, bounded scrolling log viewer with Clear & Copy to clipboard, and `/rgl` command sender).
-  - **Decoupled Adapter Boundary (`src/mq/rgmercs_bridge.{h,cpp}`, `src/app/lua_eq_rgmercs.cpp`, `hailstone.rgmercs`)**: Keeps RG Mercs gameplay/combat logic separate from presentation via `eq.RGMercs*` on the UI side and `hailstone.rgmercs` (`using_native_ui`, `get_setting`, `get_settings`, `set_setting`, `set_module`, `log`, `set_status`, `clear_error`, `take_pending_changes`) on the script side; suppresses `mq.imgui` script draw callbacks for `rgmercs` when `suppress_script_ui` is enabled.
-  - **Sandboxed Per-Character Persistence & Read-Only Migration**: Persists settings to `<character_dir>/rgmercs_settings.ini` strictly confined inside canonical `data_dir`. Scans `<data_dir>/scripts/config` for existing RG Mercs SQLite DBs (`SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX`, no URI) and Lua config tables for one-time auto-import or manual re-import. Missing, empty, comment-only, or `nil`-pickled config tables safely normalize to `{}` so Lua `next()`/`pairs()` never fail with `bad argument #1 to next (table expected, got nil)`.
-  - **Trusted Script-Root Loader (`l_load_trusted_script`)**: Separates approved script-root executable loading (for `scripts/rgmercs/` modules and `class_configs/` such as `Live/rog_class_config.lua`, with server policy/capability checks, `mq`, `require`, `ImGui`, and compat modules in the active environment, plus `package.path`/`package.searchpath`/`package.searchers` and `.lua`/slash `require`) from the restricted data-only config loader (`mq.configDir`/`scripts/config/`/`mq.pickle`). Requests pointing to `config/...` or `scripts/config/...` are never executed, and `Write`/`class_configs/` helpers confine writes to `config_dir` while reading class configs strictly from script roots.
-  - **Script Runtime Foundation**: Native C `lsqlite3` & `lfs`, sandboxed `io` (`mq.configDir`), safe `package`/`debug`, IPC-bridged `actors`, `bit32`, `mq.DataType.new`, `mq.AddTopLevelObject`, `mq.PackageMan`, `ImGui.Dummy` arg fix, and `Raid`, `AltAbility`, `InvSlot`, `MacroQuest`, `Lua`, `DanNet`, `Mercenary`, `Nav` TLOs.
-- **MacroQuest-Style Group / Box Profiles (`profiles/*.ini`, `profiles/*.json`)**:
-  - **Human-Editable Group Definitions (`src/core/group_profile.{h,cpp}`)**: Supports `${HAILSTONE_DATA_DIR}/profiles/<profile>.ini` and `.json` (examples in `hailstone24/configs/profiles/ez_6box_example.{ini,json}`) defining per-slot `character`, `account`, `server_id`, `world`, `class_role`, `settings_path` (strictly confined under `--data-dir`), `auto_login`, `launch_order`, `slot_number`, `session_id`, `enabled`, `headless`, `auto_kick`, `bg_tick_hz`, and `gpu_mode`.
-  - **Pre-AutoLogin Resolution & Isolation**: `--profile`, `--slot`, `--settings-path`, or `[login] group_profile` resolve **before** keyring lookup and auto-login so each character launches with its own server, world, account, settings file, and per-slot `auto_login` flag.
-  - **Passwordless Import/Export**: `--import-mq-logins` exports grouped MacroQuest roster/autologin profiles into `${HAILSTONE_DATA_DIR}/profiles/*.ini` without ever writing plaintext passwords; credentials remain solely in `platform::CredentialStore` (`libsecret`).
-  - **In-Client UI & Manager Controls**: Native Lua login screen (`ui/modern/login.lua`), ImGui dev Login screen (`src/ui/dev_screens.cpp`), `hailstone24_broker --profile <name_or_path>`, and `hailstone24_manager --profile <name_or_path>` list profiles, show per-slot login/connection status, and launch single characters or stop/launch/relaunch an entire group in launch order.
+## Clean Baseline & Architecture
+- **Upstream Baseline Commit**: `61e5135f78c6b492ad88ac029a469fee114f60cb`
+- **Legacy Archive**: Earlier MacroQuest/RGMercs Lua compatibility artifacts are archived under `hailstone24/reference/rgmercs_mq_compat/` and excluded from `hailstone24.patch` and `hailstone24/overlay/`.
+- **Native Hailstone Combat Controller (`src/combat/*`, `src/app/hailstone_combat_adapter.{h,cpp}`, `src/app/lua_ui_combat.{h,cpp}`, `ui/modern/combat.lua`)**:
+  - **Zero MacroQuest / RGMercs Dependencies**: No RGMercs Lua scripts, no MQ plugins, no MQ TLO evaluations, and no `/stick` commands.
+  - **9-State FSM (`CombatEngine`)**: `Idle`, `Assist`, `Engage`, `Combat`, `Disengage`, `Retreat`, `Dead`, `Paused`, `EmergencyStop`. Every state transition logs timestamp, `from -> to`, and reason; `Idle` computes an explicit diagnostic `idleReason`.
+  - **Hard Safety Rules & Emergency Stop**: Immediate halt of movement, spell casting, auto-attack, and pet attack on `Stop`, target death/disappearance/invalidity, range exit, or `EmergencyStop` (`EMERGENCY STOP` button in UI, `/estop`, `/combat estop`, or IPC bus `/estop`). `EmergencyStop` latches until explicit `Reset E-Stop` (`/combat reset_estop`).
+  - **Native `NavControl` Movement (`MovementController`)**: Supports `None`, `Follow`, `AssistRange`, `MeleeRange` (including `melee_behind` positioning for ROG), `RangedRange`, and `DisengageDistance` via `NavControl`. Manual player movement or backing away triggers a `Paused` manual-override cooldown (`manual_override_cooldown_ms`) without snapping back.
+  - **Native Spell & Ability Management (`SpellManager`)**: Reads `GameConnection::spell_state()`, `spell_table()`, and `use_ability_named()`. Supports pipe-separated fallback spell lines, cooldown/mana/HP/range/combat-state rule conditions, and gem slot auditing. **Never overwrites manually changed gems unless `auto_loadout=true`**; safely rememorizes missing profile spells only into empty slots when `rememorize_missing=true`. Built-in class profiles prioritize **NEC**, followed by **ROG**, **CLR**, **WAR**, and fallback EQ classes.
+  - **Native INI Profile Format & Security (`CombatProfile`)**: Stores character profiles at `<character_dir>/combat_profile.ini` and optional group defaults at `${HAILSTONE_DATA_DIR}/profiles/<group_id>.combat.ini` (examples in `hailstone24/configs/combat/{nec,rog,clr,group_defaults}_example.ini`). Enforces secret-key filtering (`is_combat_secret_key`), canonical root confinement (`is_path_within_root`), and read-only migration from `<character_dir>/hailstone.ini`.
+  - **Native UI (`CombatWnd`) & Slash Commands**: Accessible via EQ cascade menu `Combat Controller`, `/combat`, or `/estop`. Displays live state, target/assist telemetry, `Idle`/transition reason banner, `Dry-Run Sim` toggle, manual-gem protection status, rules table, gem loadout audit table, and transition/action logs.
+- **Preserved Hailstone Systems**:
+  - MacroQuest login/password import (`--import-mq-logins`, `SQLITE_OPEN_READONLY`) into system keyring (`libsecret`) + passwordless `hailstone24_roster.ini`.
+  - Server/world selection, auto-login (`--auto-login`, `--auto-kick`), group profiles (`profiles/<name>.ini` / `.json`), and per-character isolation.
+  - Multi-session `ExecutionState` (`ForegroundFull` / `BackgroundHeadless`), `SessionBus` `AF_UNIX` IPC, Linux `GPU IPC`, `hailstone24_broker`, and `hailstone24_manager`.
+
+---
+
+## Container Verification Results (Verified Before Handoff)
+- **Patch & Overlay Integrity**: `git apply --check` and `git apply` applied `hailstone24/hailstone24.patch` cleanly onto upstream `61e5135f78c6b492ad88ac029a469fee114f60cb` with `0` `rgmercs` hits across `src/`, `ui/`, and `CMakeLists.txt`.
+- **C++20 Unit Tests (`g++ -std=c++20 -Wall -Wextra -Werror`)**:
+  - `combat_controller_test`: **7/7 test cases, 123/123 assertions passed**.
+  - `execution_state_test`: **2/2 test cases, 30/30 assertions passed**.
+  - `session_bus_test`: **1/1 test case, 21/21 assertions passed**.
+  - Example INI Loader Smoke Test (`nec_example.ini`, `rog_example.ini`, `clr_example.ini`, `group_defaults_example.ini`): **4/4 loaded and validated**.
+- **UI Contract & Lua Checks**:
+  - `lua_ui_api.cpp` `static_assert(valid_catalog())` compiled cleanly with `g++ -std=c++20`.
+  - Lua 5.4 syntax checks passed on `ui/modern/combat.lua`, `ui/modern/lib/escape.lua`, `ui/modern/lib/menuicons.lua`, and all `ui/modern/*.lua` files.
+*(Note: Full Vulkan/SDL3/CEF client linking and live EverQuest server testing must be run on Ubuntu 24.04 workstation as detailed below.)*
 
 ---
 
@@ -31,8 +42,7 @@ sudo apt install -y \
   libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
   vulkan-tools libvulkan-dev glslang-tools mesa-vulkan-drivers
 ```
-> Verify your Intel Arc Pro B70 is visible to Vulkan:
-> `vulkaninfo --summary`
+> Verify GPU Vulkan visibility: `vulkaninfo --summary`
 
 ---
 
@@ -40,6 +50,7 @@ sudo apt install -y \
 ```bash
 git clone https://github.com/projecthailstone/hailstone-client.git hailstone24-src
 cd hailstone24-src
+git checkout 61e5135f78c6b492ad88ac029a469fee114f60cb
 git apply /path/to/hailstone24/hailstone24.patch
 
 cmake -B build -G Ninja \
@@ -49,21 +60,19 @@ cmake -B build -G Ninja \
 
 cmake --build build -j"$(nproc)"
 ```
-*(Set `-DHAILSTONE_BROWSER=ON` if you want CEF in-game browser support.)*
 
 ---
 
 ## 3. Run Unit & Integration Tests
 ```bash
-ctest --test-dir build --output-on-failure -R "ExecutionController|FramePace|SessionBus|MQ AutoLogin|GroupProfile|Login auto-select|Server select|RG Mercs|RGMercsBridge|TrustedScriptLoader|eq.RGMercs|EQ menu|GPU IPC"
-# Or run the full upstream + Hailstone 24 suite:
+ctest --test-dir build --output-on-failure -R "Combat|ExecutionController|FramePace|SessionBus|MQ AutoLogin|GroupProfile|Login auto-select|Server select|EQ menu|GPU IPC"
+# Or run full test binary:
 ./build/hailstone_tests
 ```
 
 ---
 
-## 4. Import All MacroQuest Logins & Group Profiles Safely (Isolated Data Directory)
-Never point `--data-dir` inside your EverQuest folder. Use an isolated directory such as `~/.local/share/hailstone24`:
+## 4. Import Logins & Configure Isolated Data Directory
 ```bash
 export HAILSTONE_DATA_DIR="${HOME}/.local/share/hailstone24"
 mkdir -p "${HAILSTONE_DATA_DIR}/profiles"
@@ -78,24 +87,12 @@ export MQ_MASTER_PASSWORD
 
 unset MQ_MASTER_PASSWORD
 ```
-Copy `hailstone24/configs/hailstone24.ini` to `"${HAILSTONE_DATA_DIR}/hailstone.ini"` and set `[assets] path=/path/to/your/everquest_rof2`.
-You can also copy `hailstone24/configs/profiles/ez_6box_example.ini` (or `.json`) into `"${HAILSTONE_DATA_DIR}/profiles/"` and customize your accounts/characters without storing any passwords in the profile files.
+Copy `hailstone24/configs/hailstone24.ini` to `"${HAILSTONE_DATA_DIR}/hailstone.ini"` and configure `[assets] path=/path/to/everquest_rof2`.
+Optionally copy `hailstone24/configs/combat/*.ini` templates into `"${HAILSTONE_DATA_DIR}/profiles/<group>.combat.ini"` or character folders as `combat_profile.ini`.
 
 ---
 
-## 5. Install RG Mercs Into Hailstone Isolated Scripts Folder
-```bash
-git clone https://github.com/DerpleDude/rgmercs.git "${HAILSTONE_DATA_DIR}/scripts/rgmercs"
-```
-Keep executable Lua scripts and `class_configs/` under `${HAILSTONE_DATA_DIR}/scripts/rgmercs/` (do **not** place executable Lua class configs under `scripts/config/`; `scripts/config/` is enforced data-only).
-Once logged into world (e.g., `Stabbinyah`, ROG, on `EZ Server`):
-- Open the native `RGMercs` window via the EQ cascade menu (`RGMercs`), the `UI` button in `Lua Scripts`, or `/rgmercs` (`/rgui`).
-- Existing RG Mercs SQLite/Lua configs under `${HAILSTONE_DATA_DIR}/scripts/config` are detected read-only and offered for import (or auto-imported once per character), with settings persisted per character at `<character_dir>/rgmercs_settings.ini`.
-
----
-
-## 6. Launch & Manage Profiles / 24 Sessions
-Launch a single character slot directly from a group profile (resolves account, server, world, and character settings before auto-login):
+## 5. Launch & Smoke Test Native Combat Controller
 ```bash
 ./build/hailstone/hailstone \
   --data-dir "${HAILSTONE_DATA_DIR}" \
@@ -103,31 +100,9 @@ Launch a single character slot directly from a group profile (resolves account, 
   --slot Stabbinyah \
   --auto-login
 ```
-
-Or launch & supervise an entire group profile (or 24-box roster):
-```bash
-# Terminal 1 (Broker launching from a group profile in launch_order):
-./build/hailstone/hailstone24_broker \
-  --data-dir "${HAILSTONE_DATA_DIR}" \
-  --game-dir "/path/to/your/everquest_rof2" \
-  --profile ez_6box_example \
-  --launch-all \
-  --bg-tick-hz 25 \
-  --gpu-mode cached \
-  --stagger-ms 400
-
-# Terminal 2 (Interactive GUI / TUI Manager with profile selector & per-slot status):
-./build/hailstone/hailstone24_manager --profile ez_6box_example
-
-./build/hailstone/hailstone24_manager --profile ez_6box_example --status
-./build/hailstone/hailstone24_manager --switch slot05
-./build/hailstone/hailstone24_manager --cmd "/bcaa /lua run rgmercs"
-```
-
----
-
-## 7. Run the 24-Box Benchmark & Hardware Validation
-```bash
-chmod +x hailstone24/scripts/bench_24box.sh
-./hailstone24/scripts/bench_24box.sh ./build/hailstone "${HAILSTONE_DATA_DIR}/hailstone24_roster.ini"
-```
+Verify in-game (NEC first, then ROG / CLR / WAR):
+1. Open `Combat Controller` from the EQ menu or run `/combat`.
+2. Toggle `Dry-Run` ON, click `Start`, target/assist an NPC, and verify `Transitions & Log` records `[DRY-RUN]` decisions and explicit `Idle` reasons without casting or moving.
+3. Verify manual back-away (`S` / `BACK`) pauses controller without snapping back.
+4. Inspect `Spell Loadout` tab: verify manual gem changes show `ManualChange` and are not overwritten when `Auto Loadout` is OFF.
+5. Disable `Dry-Run`, test normal engage/cast/melee, then press `EMERGENCY STOP` or type `/estop` and verify casting, movement, auto-attack, and pet attack halt immediately until `Reset E-Stop`.

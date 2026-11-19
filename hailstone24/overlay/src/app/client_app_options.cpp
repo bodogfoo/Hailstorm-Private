@@ -2,6 +2,7 @@
 // frame settings (window mode, resolution, vertical sync, frame caps, field of view, UI scale).
 
 #include "app/client_app_internal.h"
+#include "core/group_profile.h"
 #include "app/frame_pace.h"
 #include "core/ascii_case.h"
 #include "game/appearance.h"
@@ -79,6 +80,40 @@ std::optional<int> ClientApp::video_option(std::string_view name) const {
     return std::nullopt;
 }
 
+bool ClientApp::select_ui_pack(std::string_view requested) {
+    const auto* pack = ui::find_ui_pack_exact(ui_packs_, requested);
+    if (!pack) return false;
+    const std::string id = pack->id;
+    auto failed = [&](const char* reason) {
+        ui_selection_error_ = reason;
+        return false;
+    };
+    if (!server_profile_.id.empty()) {
+        auto saved = load_profile(server_profile_.id, login_view_.servers_dir);
+        if (!saved) return failed("Cannot read this server's interface selection");
+        saved->ui = id;
+        if (!save_profile(*saved, login_view_.servers_dir)) return failed("Cannot save this server's interface selection");
+        server_profile_.ui = id;
+        for (auto& profile : login_view_.profiles) if (profile.id == saved->id) profile.ui = id;
+        if (ui::selected_profile_id(login_view_) == saved->id) login_view_.ui = id;
+    } else {
+        // Save only the shared default, independently of unrelated character-layer writes. Neither live state nor
+        // the pending load changes on failure; after the atomic write succeeds, update the in-memory setting too.
+        Config shared;
+        std::error_code ec;
+        const bool exists = std::filesystem::exists(config_path_, ec);
+        if (ec || (exists && !shared.load(config_path_))) return failed("Cannot read the default interface selection");
+        shared.set("ui.name", id);
+        if (!shared.save(config_path_)) return failed("Cannot save the default interface selection");
+        config_.set("ui.name", id);
+        login_view_.default_ui = id;
+        if (login_view_.transient || ui::selected_profile_id(login_view_).empty()) login_view_.ui = id;
+    }
+    ui_selection_error_.clear();
+    pending_ui_pack_ = id;
+    return true;
+}
+
 bool ClientApp::set_video_option(std::string_view name, int value) {
     if (name == "window_mode") {
         int m = std::clamp(value, 0, 2);
@@ -97,7 +132,7 @@ bool ClientApp::set_video_option(std::string_view name, int value) {
         config_.set("display.vsync", kVsyncModes[v]);
         vk_.set_vsync(static_cast<render::VkContext::Vsync>(v));
     } else if (name == "max_fps") {
-        opts_.max_fps = value <= 0 ? 0 : std::clamp(value, 10, 1000);
+        opts_.max_fps = max_fps_setting(value); // kMaxFpsAuto: just under the display's refresh rate
         config_.set_int("display.max_fps", opts_.max_fps);
     } else if (name == "background_fps") {
         background_fps_ = background_fps_setting(value);
@@ -109,20 +144,8 @@ bool ClientApp::set_video_option(std::string_view name, int value) {
         config_.set("display.fov", value < 0 ? std::string() : std::format("{:.2f}", units));
     } else if (name == "ui_name") {
         if (value < 0 || value >= static_cast<int>(ui_packs_.size())) return true;
-        const std::string& id = ui_packs_[static_cast<std::size_t>(value)].id;
-        // The saved server's own (its server.ini, as the login screen picks it); a test login's, ui.name.
-        std::optional<ServerProfile> saved;
-        if (!server_profile_.id.empty()) saved = load_profile(server_profile_.id, login_view_.servers_dir);
-        if (saved) {
-            saved->ui = id;
-            if (!save_profile(*saved, login_view_.servers_dir)) return true;
-            server_profile_.ui = id;
-            for (auto& p : login_view_.profiles)
-                if (p.id == saved->id) p.ui = id;
-            if (ui::selected_profile_id(login_view_) == saved->id) login_view_.ui = id;
-            return true;
-        }
-        config_.set("ui.name", id);
+        select_ui_pack(ui_packs_[static_cast<std::size_t>(value)].id);
+        return true; // handled here; the helper separately reports whether the choice was saved and queued
     } else if (name == "ui_scale") {
         config_.set_int("ui.scale", value <= 0 ? 0 : std::clamp(value, 50, 300)); // ui_scale_setting, at the next start
     } else {
@@ -135,7 +158,9 @@ bool ClientApp::set_video_option(std::string_view name, int value) {
 void ClientApp::apply_frame_options() {
     vk_.set_vsync(static_cast<render::VkContext::Vsync>(
         index_of(kVsyncModes, 3, config_.get_string("display.vsync", "on"), 1)));
-    opts_.max_fps = max_fps_arg_ ? *max_fps_arg_ : std::max(0, config_.get_int("display.max_fps", 0)); // --max-fps first
+    // --max-fps first; -1 (kMaxFpsAuto) is auto.
+    const int max_fps = max_fps_arg_ ? *max_fps_arg_ : config_.get_int("display.max_fps", 0);
+    opts_.max_fps = max_fps == kMaxFpsAuto ? kMaxFpsAuto : std::max(0, max_fps); // as read before auto came
     background_fps_ = background_fps_setting(config_.get_int("display.background_fps", 0));
     float fov = config_float("display.fov", 0.0f);
     (iso() ? iso_saved_fov_ : camera_.fov_units) = fov > 0.0f ? fov : game::kStockFovUnits;
@@ -361,7 +386,7 @@ std::optional<int> ClientApp::option_value(std::string_view o) const {
         if (auto v = conn_->character_setting(o)) return v;
     // The pet window's PopupOnPet (COptionsWnd +0x250 shows CPetInfoWnd +0x765): the window keeps it in the UI ini.
     if (o == "pet_window_popup")
-        return conn_ && eq_api_ ? eq_api_->window_setting("PetInfoWindow", "popup") : std::nullopt;
+        return conn_ && ui_api_ ? ui_api_->window_setting("PetInfoWindow", "popup") : std::nullopt;
     if (auto d = display_option(o)) return d;
     if (auto v = video_option(o)) return v;
     if (auto i = iso_option(o)) return i;
@@ -389,6 +414,8 @@ std::optional<int> ClientApp::option_value(std::string_view o) const {
     if (o == "npc_names") return npc_names_ ? 1 : 0;
     // Hailstone: NPC names in their consider colour, on by default (draw_nameplates).
     if (o == "con_name_colour") return con_name_colour_ ? 1 : 0;
+    // Hailstone: "[Name]" for invisibility versus undead the client knows of, off by default (name_invisibility).
+    if (o == "show_invis_undead") return show_invis_undead_ ? 1 : 0;
     // Hailstone: the item comparison in the item tooltips and displays (docs/item-compare.md), and its verdict; on by
     // default. Read by the UI packs only.
     if (o == "item_compare") return config_.get_bool("items.compare", true) ? 1 : 0;
@@ -411,13 +438,13 @@ std::optional<int> ClientApp::option_value(std::string_view o) const {
     }
     // Hailstone: the hot button states the original leaves out (game/hot_button_state.h), on by default.
     if (o == "hotbutton_extras") return config_.get_bool("ui.hotbutton_extras", true) ? 1 : 0;
-    // Hailstone: the layout copy window offered at a character's first entry (app/lua_eq_layout.cpp), on by default.
+    // Hailstone: the layout copy window offered at a character's first entry (app/lua_ui_layout.cpp), on by default.
     if (o == "offer_layout_copy") return config_.get_bool("ui.offer_layout_copy", true) ? 1 : 0;
     // Hailstone: Tab's NPC cycle leaves out players' pets and mercenaries (game/targeting.h), on by default.
     if (o == "tab_skip_pets") return config_.get_bool("target.skip_pets", true) ? 1 : 0;
     // Hailstone: Tab's NPC cycle takes only the NPCs in the player's line of sight (game/targeting.h), on by default.
     if (o == "tab_line_of_sight") return config_.get_bool("target.line_of_sight", true) ? 1 : 0;
-    // Hailstone: a book spell dropped on a gem that holds another spell memorizes over it (app/lua_eq_spellbook.cpp
+    // Hailstone: a book spell dropped on a gem that holds another spell memorizes over it (app/lua_ui_spellbook.cpp
     // gem_takes_book_spell), on by default; off, the gem refuses it as the original's does.
     if (o == "replace_gem_spell") return config_.get_bool("spells.replace_gem", true) ? 1 : 0;
     // Hailstone: auto attack stays on past the target's death while the extended target list holds a spawn
@@ -472,7 +499,7 @@ void ClientApp::set_option_value(std::string_view o, int v) {
     if (conn_ && conn_->set_character_setting(o, v)) return;
     if (o == "pet_window_popup") {
         // GeneralPageWndNotification's +0x250: CPetInfoWnd::SetShowOnSummon (only with a pet window).
-        if (eq_api_) eq_api_->set_window_setting("PetInfoWindow", "popup", v);
+        if (ui_api_) ui_api_->set_window_setting("PetInfoWindow", "popup", v);
         return;
     }
     if (set_display_option(o, v) || set_video_option(o, v) || set_iso_option(o, v)) return;
@@ -548,6 +575,12 @@ void ClientApp::set_option_value(std::string_view o, int v) {
     if (o == "con_name_colour") {
         con_name_colour_ = v != 0;
         config_.set_bool("display.con_name_colour", v != 0);
+        config_.save(config_path_);
+        return;
+    }
+    if (o == "show_invis_undead") {
+        show_invis_undead_ = v != 0;
+        config_.set_bool("display.show_invis_undead", show_invis_undead_);
         config_.save(config_path_);
         return;
     }
@@ -700,7 +733,8 @@ void ClientApp::detect_graphics_at_first_start() {
 }
 
 void ClientApp::apply_settings() {
-    // display.lighting = modern (docs/graphics.md) | classic (the original's look); /lighting switches.
+    // display.lighting = modern (docs/graphics.md) | smooth (the classic, per pixel) | classic (the original's look);
+    // /lighting switches.
     lighting_mode_ = render::parse_lighting_mode(config_.get_string("display.lighting", "modern"))
                          .value_or(render::LightingMode::Modern);
     apply_scene_options();
@@ -714,6 +748,7 @@ void ClientApp::apply_settings() {
     pc_names_ = config_.get_bool("display.pc_names", true);
     npc_names_ = config_.get_bool("display.npc_names", true);
     con_name_colour_ = config_.get_bool("display.con_name_colour", true);
+    show_invis_undead_ = config_.get_bool("display.show_invis_undead", false);
     // display.extra_shields (Hailstone, a deliberate difference): later shields on the shield point, not in the hand.
     // Read at start only: dressed models are cached.
     if (!settings_applied_) game::set_extra_shields(config_.get_bool("display.extra_shields", true));
@@ -730,10 +765,9 @@ void ClientApp::apply_settings() {
     flora_reach_ = std::clamp(static_cast<float>(config_.get_int("display.flora_distance", static_cast<int>(render::kFloraReach))),
                               render::kFloraReach, render::kMaxFloraReach);
     grass_density_ = render::grass_density_percent(config_.get_int("display.grass_density", 100));
-    neighbour_zones_ = config_.get_bool("display.neighbour_zones", true);
     horizon_hills_ = config_.get_bool("display.horizon_hills", true);
     volumetric_clouds_ = config_.get_bool("display.volumetric_clouds", true);
-    neighbour_tint_ = config_.get_bool("display.neighbour_tint", false);
+    edge_fog_ = config_.get_bool("display.zone_fog", true);
     tree_detail_ = std::clamp(config_.get_int("display.tree_detail", 100), 50, 200);
     ring_cues_ = config_.get_bool("display.target_ring_cues", true);
     ring_xray_ = config_.get_bool("display.target_ring_xray", false);
@@ -772,6 +806,7 @@ void ClientApp::apply_settings() {
 }
 
 void ClientApp::apply_connection_settings() {
+    conn_->set_combat_report_range(config_.get_float("combat.report_range", 0.0f)); // unset: RoF2's ranges
     conn_->set_attack_until_xtarget_clear(config_.get_bool("combat.attack_until_xtarget_clear", false));
     conn_->set_auto_target_xtarget(config_.get_bool("combat.auto_target_xtarget", true));
     conn_->set_face_on_attack(config_.get_bool("combat.face_on_attack", true));

@@ -11,8 +11,8 @@
 #include <lua.hpp>
 
 #include "app/actions_ui.h"
-#include "app/lua_eq_values.h"
-#include "app/lua_eq_windows.h"
+#include "app/lua_ui_values.h"
+#include "app/lua_ui_windows.h"
 #include "game/combat.h"
 #include "game/hotbuttons.h"
 #include "game/mechanics/abilities.h"
@@ -61,7 +61,7 @@ ChildArt image(const std::optional<ui::UiTextures::Cell>& c) {
 
 // ---------------------------------------------------------------- PetInfoWindow (CPetInfoWnd)
 
-// The command buttons Pet0..Pet13 (game::PetButtonLayout, EqHost::pet_buttons): the constructor's commands, then the
+// The command buttons Pet0..Pet13 (game::PetButtonLayout, UiHost::pet_buttons): the constructor's commands, then the
 // UI ini's PetButtonState; a click runs the command the button holds as /pet does (WndNotification: the eqstr words
 // 7512 "report health" .. 13103 "target"); the right button down on one pops up the command menu.
 int pet_button_index(std::string_view id) {
@@ -79,7 +79,7 @@ bool pet_command_checked(const net::GameConnection& c, const game::PetButtonLayo
 
 } // namespace
 
-std::optional<bool> pet_button_checked(EqHost& host, int index) {
+std::optional<bool> pet_button_checked(UiHost& host, int index) {
     // CPetInfoWnd::GetButton(index) and its +0x258 (enabled: while there is a pet) / +0x1e4 (checked).
     if (!host.conn || index < 0 || index >= game::kPetWindowButtons || !host.conn->pets().focused) return std::nullopt;
     const int i = host.pet_buttons.command_of(index);
@@ -101,7 +101,7 @@ class PetWindow : public StockWindow {
 public:
     PetWindow() : StockWindow("PetInfoWindow", false) {}
 
-    void ini_loaded(EqHost& host, ui::UiIni& ini, const std::filesystem::path& user_dir) override {
+    void ini_loaded(UiHost& host, ui::UiIni& ini, const std::filesystem::path& user_dir) override {
         ini_ = &ini;
         // A character's UI ini (not a copied layout's reload): the window is made again.
         if (user_dir != ini_dir_) {
@@ -116,7 +116,7 @@ public:
         layout = {};
         if (!layout.load(ini.get("PetInfoWindow", "PetButtonState").value_or(""))) save_layout(layout);
     }
-    void frame(EqHost& host) override {
+    void frame(UiHost& host) override {
         // The window is made when the character enters the world (InitGameUI, after the UI ini is read).
         if (host.in_game && host.conn && !host.conn->pet_window_linked()) link(host);
         const game::Spawn* p = host.conn ? pet(host) : nullptr;
@@ -141,7 +141,7 @@ public:
         if (name == "popup") return popup_ ? 1 : 0;
         return std::nullopt;
     }
-    bool set_setting(EqHost&, std::string_view name, int value) override {
+    bool set_setting(UiHost&, std::string_view name, int value) override {
         if (name != "popup") return false;
         popup_ = value != 0;
         if (ini_) {
@@ -151,7 +151,7 @@ public:
         return true;
     }
 
-    void child(EqHost& host, std::string_view id, Child& out) override {
+    void child(UiHost& host, std::string_view id, Child& out) override {
         if (!host.conn) return;
         const auto& c = *host.conn;
         if (int b = pet_button_index(id); b >= 0) {
@@ -197,7 +197,7 @@ public:
         }
     }
 
-    std::optional<BuffInfo> buff(EqHost& host, std::string_view id, unsigned) override {
+    std::optional<BuffInfo> buff(UiHost& host, std::string_view id, unsigned) override {
         int n = index_after(id, "PetBuff");
         if (!host.conn || n < 0) return std::nullopt;
         const auto& buffs = host.conn->pet_buffs();
@@ -205,11 +205,15 @@ public:
         const auto& b = buffs[static_cast<std::size_t>(n)].second;
         const auto* s = host.conn->spell_table().get(b.spell);
         if (!s) return std::nullopt;
-        BuffInfo info{b.spell, game::buff_is_permanent(b.tics, s) ? -1 : static_cast<std::int64_t>(game::buff_ms_left(b.tics, b.received_ms, net::GameConnection::now_ms())), s->name, s->beneficial()};
+        // The pet's suspendable buffs wait in a zone that suspends buffs, as the server's do.
+        const auto ms = game::buff_ms_left(b, s, false, host.conn->spell_state().zone_suspends_buffs,
+                                           net::GameConnection::now_ms());
+        BuffInfo info{b.spell, game::buff_is_permanent(b.tics, s) ? -1 : static_cast<std::int64_t>(ms), s->name,
+                      s->beneficial()};
         return info;
     }
 
-    bool click(EqHost& host, std::string_view id, std::string_view button, bool) override {
+    bool click(UiHost& host, std::string_view id, std::string_view button, bool) override {
         if (!host.conn) return false;
         if (int b = pet_button_index(id); b >= 0) {
             if (button == "rightdown" || button == "right") {
@@ -243,7 +247,7 @@ public:
 
     // WndNotification message 0x17 (a drag from a command button): the hot button "Pet <its text>" of the button's
     // index (game/pet_buttons.h); a button holding no command is disabled and gives nothing.
-    std::optional<game::HotButton> pick_up(EqHost& host, std::string_view id, int) override {
+    std::optional<game::HotButton> pick_up(UiHost& host, std::string_view id, int) override {
         int b = pet_button_index(id);
         if (!host.conn || b < 0 || !host.pet_buttons.enabled(b)) return std::nullopt;
         return game::pet_command_hot_button(b, host.conn->strings().format(game::kStrPet, {}), host.pet_buttons.text(b));
@@ -255,7 +259,7 @@ private:
     bool popup_ = true;    // +0x765
     bool had_pet_ = false; // +0x764: the pet state the window last saw
     // CPetInfoWnd_LoadButtonToggleStates @0x70ed20: PetButtonToggleState0..9 (ReadUIINIBool, default 0).
-    void load_toggles(EqHost& host) {
+    void load_toggles(UiHost& host) {
         game::PetToggleStates st{};
         if (ini_)
             for (int index = 4; index < 14; ++index)
@@ -264,9 +268,9 @@ private:
     }
     // A new connection in the world (a login, camp and back): the toggle bytes from the UI ini, as the constructor
     // reads them, then the window's side of cmd_pet and the pet's arrival (its first refresh).
-    void link(EqHost& host) {
+    void link(UiHost& host) {
         net::GameConnection::PetWindowLink l;
-        EqHost* h = &host;
+        UiHost* h = &host;
         l.usable = [h](std::uint32_t command) {
             const game::Spawn* p = h->conn ? pet(*h) : nullptr;
             return p && game::can_use_pet_command(query(*h, *p), command);
@@ -282,7 +286,7 @@ private:
         host.conn->link_pet_window(std::move(l));
     }
     // What CanUsePetCommand reads of the pet and the character.
-    static game::PetCommandQuery query(EqHost& host, const game::Spawn& p) {
+    static game::PetCommandQuery query(UiHost& host, const game::Spawn& p) {
         game::PetCommandQuery q;
         q.has_pet = true;
         q.race = p.race;
@@ -300,10 +304,10 @@ private:
     }
     // WndNotification 0x2d: +0x8fc = the button, and the command menu (+0x8f8) pops up at the mouse; a row chosen
     // (0x14) goes to that button (game::PetButtonLayout::choose), then SavePetButtonState.
-    void command_menu(EqHost& host, int b) {
-        std::vector<EqHost::MenuRow> rows;
+    void command_menu(UiHost& host, int b) {
+        std::vector<UiHost::MenuRow> rows;
         for (const auto& r : host.pet_buttons.menu()) {
-            EqHost::MenuRow row;
+            UiHost::MenuRow row;
             row.text = std::string(r.name);
             const int item = r.item;
             row.act = [this, &host, b, item] {
@@ -319,7 +323,7 @@ private:
         if (!on_button && r[2] >= 0) mp = {r[2], (r[1] + r[3]) / 2};
         host.open_menu(mp.x, mp.y, std::move(rows));
     }
-    static const game::Spawn* pet(EqHost& host) {
+    static const game::Spawn* pet(UiHost& host) {
         const auto& w = host.conn->world();
         auto it = w.spawns.find(host.conn->pets().focused);
         return host.conn->pets().focused && it != w.spawns.end() ? &it->second : nullptr;
@@ -328,7 +332,7 @@ private:
 
 } // namespace
 
-std::optional<bool> pet_hot_button_checked(EqHost& host, std::string_view label) {
+std::optional<bool> pet_hot_button_checked(UiHost& host, std::string_view label) {
     if (!host.conn) return std::nullopt;
     const auto& c = *host.conn;
     // Only a label of the pet word, a space and a command can match (game::pet_hot_button_checked compares the whole
@@ -365,7 +369,7 @@ class ActionsWindow : public StockWindow {
 public:
     ActionsWindow() : StockWindow("ActionsWindow", false) {}
 
-    void child(EqHost& host, std::string_view id, Child& out) override {
+    void child(UiHost& host, std::string_view id, Child& out) override {
         if (!host.conn) return;
         const auto& c = *host.conn;
         // The main page's pairs share a place; one of each shows: what the player can do now.
@@ -408,7 +412,7 @@ public:
         }
     }
 
-    bool click(EqHost& host, std::string_view id, std::string_view button, bool) override {
+    bool click(UiHost& host, std::string_view id, std::string_view button, bool) override {
         if (!host.conn) return false;
         if (button == "right" || button == "rightup") {
             // SocialsPageWndNotification: a right click (notification 3, the button's right button up) on a social
@@ -476,7 +480,7 @@ public:
     }
 
     // CActionsWnd: dragging a button makes a hotbutton of it (the same button its click runs).
-    std::optional<game::HotButton> pick_up(EqHost& host, std::string_view id, int) override {
+    std::optional<game::HotButton> pick_up(UiHost& host, std::string_view id, int) override {
         game::HotButton b;
         static constexpr std::pair<std::string_view, game::MenuButton> kMenu[] = {
             {"AMP_WhoButton", game::MenuButton::Who},         {"AMP_InviteButton", game::MenuButton::InviteFollow},
@@ -508,11 +512,11 @@ public:
         return b;
     }
 
-    std::optional<int> tab_page(EqHost&, std::string_view id) override {
+    std::optional<int> tab_page(UiHost&, std::string_view id) override {
         if (id == "ACTW_ActionsSubwindows") return page_;
         return std::nullopt;
     }
-    void set_tab_page(EqHost&, std::string_view id, int page) override {
+    void set_tab_page(UiHost&, std::string_view id, int page) override {
         if (id == "ACTW_ActionsSubwindows") page_ = page;
     }
 
@@ -524,7 +528,7 @@ private:
             if (id.substr(4).starts_with(kOrd[i])) return i;
         return -1;
     }
-    static std::optional<std::int32_t> ability(EqHost& host, std::string_view id) {
+    static std::optional<std::int32_t> ability(UiHost& host, std::string_view id) {
         static constexpr std::string_view kOrd[] = {"First", "Second", "Third", "Fourth", "Fifth", "Sixth"};
         if (!host.hot_buttons) return std::nullopt;
         for (int i = 0; i < 6; ++i) {
@@ -546,16 +550,16 @@ private:
 // game/mechanics/use_skill.cpp handles, split as this client does: the original's lists are not decoded). Both
 // pages use this one window (CActionsWnd: CSkillsSelectWnd::SetTypesToDisplay 3 for the Abilities page, 2 for the
 // Combat page); a click puts the skill on the button chosen with a right click and closes. (CombatSkillSelectWnd is
-// the combat ability window's list, app/lua_eq_abilities.cpp.)
+// the combat ability window's list, app/lua_ui_abilities.cpp.)
 class SkillSelectWindow : public StockWindow {
 public:
     SkillSelectWindow() : StockWindow("SkillsSelectWindow", false) {}
 
-    bool shown(EqHost& host) override { return host.in_game && g_skill_pick.slot >= 0; }
-    void set_shown(EqHost&, bool show) override {
+    bool shown(UiHost& host) override { return host.in_game && g_skill_pick.slot >= 0; }
+    void set_shown(UiHost&, bool show) override {
         if (!show) g_skill_pick.slot = -1;
     }
-    const ListData* list(EqHost& host, std::string_view id) override {
+    const ListData* list(UiHost& host, std::string_view id) override {
         if (!host.conn || !host.actions || id != "SKSW_SkillSelectorList") return nullptr;
         list_ = {};
         skills_.clear();
@@ -568,7 +572,7 @@ public:
         }
         return &list_;
     }
-    bool list_click(EqHost& host, std::string_view id, int row, bool, int) override {
+    bool list_click(UiHost& host, std::string_view id, int row, bool, int) override {
         if (id != "SKSW_SkillSelectorList" || !host.actions || row < 0 || row >= static_cast<int>(skills_.size()))
             return false;
         host.actions->set_ability_button(g_skill_pick.combat, g_skill_pick.slot, skills_[static_cast<std::size_t>(row)]);
@@ -592,13 +596,13 @@ public:
 
 // ---------------------------------------------------------------- AggroMeterWnd (CAggroMeterWnd, not decoded)
 
-// Its labels and gauge are EQTypes (app/lua_eq_values.cpp 149, 302..307); the window opens when the server first
+// Its labels and gauge are EQTypes (app/lua_ui_values.cpp 149, 302..307); the window opens when the server first
 // sends the meter.
 class AggroMeterWindow : public StockWindow {
 public:
     AggroMeterWindow() : StockWindow("AggroMeterWnd", false) {}
-    bool shown(EqHost& host) override { return host.conn && host.conn->aggro().window_open; }
-    void set_shown(EqHost& host, bool show) override {
+    bool shown(UiHost& host) override { return host.conn && host.conn->aggro().window_open; }
+    void set_shown(UiHost& host, bool show) override {
         if (host.conn) host.conn->set_aggro_window_open(show);
     }
 };
@@ -609,8 +613,8 @@ public:
 class BreathWindow : public StockWindow {
 public:
     BreathWindow() : StockWindow("BreathWindow", false) {}
-    bool shown(EqHost& host) override { return host.in_game && host.air >= 0 && host.air < host.max_air; }
-    void set_shown(EqHost&, bool) override {}
+    bool shown(UiHost& host) override { return host.in_game && host.air >= 0 && host.air < host.max_air; }
+    void set_shown(UiHost&, bool) override {}
 };
 
 // ---------------------------------------------------------------- AuraWindow (CAuraWnd, not decoded)
@@ -623,8 +627,8 @@ public:
 class AuraWindow : public StockWindow {
 public:
     AuraWindow() : StockWindow("AuraWindow", false) {}
-    bool shown(EqHost& host) override { return host.conn && open_; }
-    const ListData* list(EqHost& host, std::string_view id) override {
+    bool shown(UiHost& host) override { return host.conn && open_; }
+    const ListData* list(UiHost& host, std::string_view id) override {
         if (!host.conn || id != "AuraList") return nullptr;
         list_ = {};
         for (const auto& a : host.conn->auras()) {
@@ -634,7 +638,7 @@ public:
         }
         return &list_;
     }
-    bool list_click(EqHost& host, std::string_view id, int row, bool right, int) override {
+    bool list_click(UiHost& host, std::string_view id, int row, bool right, int) override {
         if (id != "AuraList" || !host.conn) return false;
         const auto& a = host.conn->auras();
         if (right && row >= 0 && row < static_cast<int>(a.size())) host.conn->remove_aura(a[static_cast<std::size_t>(row)].spawn_id);
@@ -653,18 +657,18 @@ public:
     // CSpellBookWnd's open and close rules are the connection's (game/spell_book.h): AboutToShow may refuse
     // (open_spell_book() false: its message is printed, the window stays closed); standing up, moving and zoning close
     // the book, so the window follows spell_book_open().
-    bool shown(EqHost& host) override {
+    bool shown(UiHost& host) override {
         if (!host.conn) return false;
         if (int p = host.conn->spellbook_page(); p != book_page_) left_page_ = book_page_ = p; // /book <n>
         return host.conn->spell_book_open();
     }
-    void set_shown(EqHost& host, bool show) override {
+    void set_shown(UiHost& host, bool show) override {
         if (!host.conn || show == host.conn->spell_book_open()) return;
         if (show) host.conn->open_spell_book();
         else host.conn->close_spell_book();
     }
 
-    void child(EqHost& host, std::string_view id, Child& out) override {
+    void child(UiHost& host, std::string_view id, Child& out) override {
         if (!host.conn) return;
         const auto& c = *host.conn;
         // UpdateSpellBookDisplay: page numbers, then each slot's icon (CBuffWindow::SetBuffIcon) and name.
@@ -696,7 +700,7 @@ public:
         }
     }
 
-    bool click(EqHost& host, std::string_view id, std::string_view button, bool outside) override {
+    bool click(UiHost& host, std::string_view id, std::string_view button, bool outside) override {
         if (!host.conn) return false;
         auto& c = *host.conn;
         // WndNotification @0x75e810, XWM_LCLICK: PageUp (the right-hand arrow) turns forward, PageDown back
@@ -753,14 +757,14 @@ private:
 } // namespace
 
 // The compass's heading error (CCompassWnd::OnProcessFrame, game/compass.h), in heading units.
-static int compass_error(const EqHost& host) { return host.actions ? host.actions->compass().error() : 0; }
+static int compass_error(const UiHost& host) { return host.actions ? host.actions->compass().error() : 0; }
 
-// left1, left2, w, degrees = eq.CompassStrips()   -- where CCompassWnd::OnProcessFrame puts the two strips for the
+// left1, left2, w, degrees = hs.CompassStrips()   -- where CCompassWnd::OnProcessFrame puts the two strips for the
 // heading: x = trunc(heading * 0.3515625 - 145) + 47, wrapped below 1 by 180; the second 180 to the right. The heading
 // is the one the compass shows: the true heading plus its error below Sense Heading 200 (game/compass.h), so degrees
 // (the 4th answer) carries the error too.
 int CompassStrips(lua_State* L) {
-    auto* host = static_cast<EqHost*>(lua_touserdata(L, lua_upvalueindex(1)));
+    auto* host = static_cast<UiHost*>(lua_touserdata(L, lua_upvalueindex(1)));
     if (!host || !host->in_game) {
         lua_pushnil(L);
         return 1;
@@ -779,11 +783,11 @@ int CompassStrips(lua_State* L) {
     return 4;
 }
 
-// { x, ... } = eq.CompassMarkers()   -- this client's marks on the compass (not decoded): the window x of each point
+// { x, ... } = hs.CompassMarkers()   -- this client's marks on the compass (not decoded): the window x of each point
 // GameConnection::compass_points gives, the strips' half a pixel per degree from the centre (x 49 faces the heading;
 // a point to the left has a larger heading), only those within the window's 98 pixels.
 int CompassMarkers(lua_State* L) {
-    auto* host = static_cast<EqHost*>(lua_touserdata(L, lua_upvalueindex(1)));
+    auto* host = static_cast<UiHost*>(lua_touserdata(L, lua_upvalueindex(1)));
     lua_newtable(L);
     if (!host || !host->in_game || !host->conn) return 1;
     const game::Spawn* me = host->conn->world().player();
@@ -812,14 +816,14 @@ class TrackingWindow : public StockWindow {
 public:
     TrackingWindow() : StockWindow("TrackingWnd", false) {}
 
-    bool shown(EqHost& host) override { return host.conn && host.conn->tracking().open; }
-    void set_shown(EqHost& host, bool show) override {
+    bool shown(UiHost& host) override { return host.conn && host.conn->tracking_admitted() && host.conn->tracking().open; }
+    void set_shown(UiHost& host, bool show) override {
         if (!host.conn) return;
         if (show && !host.conn->tracking().open) host.conn->open_tracking();
         else if (!show) host.conn->close_tracking();
     }
 
-    void child(EqHost& host, std::string_view id, Child& out) override {
+    void child(UiHost& host, std::string_view id, Child& out) override {
         if (!host.conn) return;
         const auto& t = host.conn->tracking();
         // CTrackingWnd::sub_00779ed0: the con filters and the sort are a ranger's (disabled, and shown as 0, for
@@ -836,12 +840,15 @@ public:
         else if (id == "TRW_TrackMercsCheckbox") out.checked = t.filter.mercs;
     }
 
-    const ListData* list(EqHost& host, std::string_view id) override {
+    const ListData* list(UiHost& host, std::string_view id) override {
         if (!host.conn || id != "TRW_TrackingList") return nullptr;
         list_ = {};
         list_.columns = 1;
         list_.labels = {""};
         list_.widths = {200};
+        const auto context = host.conn->interaction_context();
+        if (connection_ != host.conn || context_ != context || revision_ != host.conn->tracking().revision) selected_id_ = 0;
+        connection_ = host.conn; context_ = context; revision_ = host.conn->tracking().revision;
         ids_.clear();
         for (const auto& l : host.conn->tracking_lines()) {
             if (l.spawn_id == selected_id_) list_.selected = static_cast<int>(list_.rows.size());
@@ -850,13 +857,15 @@ public:
         }
         return &list_;
     }
-    bool list_click(EqHost&, std::string_view id, int row, bool, int) override {
+    bool list_click(UiHost& host, std::string_view id, int row, bool, int) override {
         if (id != "TRW_TrackingList" || row < 0 || row >= static_cast<int>(ids_.size())) return false;
+        if (!host.conn || !host.conn->tracking_admitted() || host.conn != connection_ || host.conn->interaction_context() != context_ ||
+            host.conn->tracking().revision != revision_) return false;
         selected_id_ = ids_[static_cast<std::size_t>(row)];
         return true;
     }
 
-    const ComboData* combo(EqHost& host, std::string_view id) override {
+    const ComboData* combo(UiHost& host, std::string_view id) override {
         if (!host.conn) return nullptr;
         const auto& t = host.conn->tracking();
         auto fill = [&](ComboData& c, std::initializer_list<std::uint32_t> ids, int selected) {
@@ -874,10 +883,11 @@ public:
     }
     // CTrackingWnd::WndNotification: a choice runs /tracksort with its letters, or /trackplayers with the on / off /
     // group word (so it prints, is saved and refilters as the command does).
-    bool combo_select(EqHost& host, std::string_view id, int index) override {
+    bool combo_select(UiHost& host, std::string_view id, int index) override {
         if (!host.conn || index < 0) return false;
         auto& c = *host.conn;
         static constexpr const char* kSorts[] = {"N", "A", "D", "C", "RA", "RD", "RC"};
+        if (!c.tracking_admitted()) return false;
         if (id == "TRW_TrackSortCombobox" && index <= 6) c.track_window_command("Cmd_tracksort", kSorts[index]);
         else if (id == "TRW_TrackPlayersCombobox" && index <= 2) {
             static constexpr std::uint32_t kWords[] = {0x3292, 0x3293, 0x335c};
@@ -886,17 +896,19 @@ public:
         return true;
     }
 
-    bool click(EqHost& host, std::string_view id, std::string_view button, bool) override {
+    bool click(UiHost& host, std::string_view id, std::string_view button, bool) override {
         if (!host.conn || button != "left") return false;
         auto& c = *host.conn;
         auto on_off = [&](bool on) { return c.strings().format(on ? 0x3293 : 0x3292, {}); };
+        if (!c.tracking_admitted()) return false;
         for (const auto& [name, bit, letters] : kFilters)
             if (id == name) {
                 c.track_window_command("Cmd_trackfilter", letters); // toggles the colour, with its message
                 return true;
             }
         if (id == "TRW_TrackButton") {
-            if (selected_id_ != 0) c.track_spawn(selected_id_);
+            if (selected_id_ != 0 && &c == connection_ && c.interaction_context() == context_)
+                c.track_spawn(selected_id_, revision_);
         } else if (id == "DoneButton") {
             c.close_tracking();
         } else if (id == "TRW_AutoUpdateButton") {
@@ -912,7 +924,7 @@ public:
     }
 
 private:
-    static bool ranger_(const EqHost& host) { return host.conn->profile() && host.conn->profile()->class_ == 4; }
+    static bool ranger_(const UiHost& host) { return host.conn->profile() && host.conn->profile()->class_ == 4; }
     // The con filter buttons, their colour bit and the letters the window passes to /trackfilter.
     struct Filter {
         std::string_view name;
@@ -927,6 +939,9 @@ private:
     ListData list_;
     std::vector<std::int32_t> ids_;
     std::int32_t selected_id_ = 0;
+    const net::GameConnection* connection_ = nullptr;
+    std::uint64_t context_ = 0;
+    std::uint32_t revision_ = 0;
     ComboData sort_, players_;
 };
 
@@ -940,14 +955,14 @@ class RespawnWindow : public StockWindow {
 public:
     RespawnWindow() : StockWindow("RespawnWnd", false) {}
 
-    bool shown(EqHost& host) override { return host.conn && host.conn->respawn_window().has_value(); }
-    void set_shown(EqHost&, bool) override {} // the server's window: it closes when we are moved
+    bool shown(UiHost& host) override { return host.conn && host.conn->respawn_window().has_value(); }
+    void set_shown(UiHost&, bool) override {} // the server's window: it closes when we are moved
 
-    void child(EqHost& host, std::string_view id, Child& out) override {
+    void child(UiHost& host, std::string_view id, Child& out) override {
         if (!host.conn || !host.conn->respawn_window()) return;
         sync_selection(host);
         const auto& w = *host.conn->respawn_window();
-        // TimeGauge is the XML's EQType 28 (app/lua_eq_values.cpp).
+        // TimeGauge is the XML's EQType 28 (app/lua_ui_values.cpp).
         if (id == "SelectButton") {
             const auto* selected = option(w);
             out.enabled = host.conn->respawn_ready() && selected && host.conn->respawn_option_available(selected->id);
@@ -955,7 +970,7 @@ public:
             out.enabled = !host.conn->respawn_chosen();
         }
     }
-    const ListData* list(EqHost& host, std::string_view id) override {
+    const ListData* list(UiHost& host, std::string_view id) override {
         if (!host.conn || !host.conn->respawn_window() || id != "OptionsList") return nullptr;
         sync_selection(host);
         const auto& w = *host.conn->respawn_window();
@@ -990,7 +1005,7 @@ public:
         }
         return &list_;
     }
-    bool list_click(EqHost& host, std::string_view id, int row, bool, int) override {
+    bool list_click(UiHost& host, std::string_view id, int row, bool, int) override {
         if (!host.conn || !host.conn->respawn_window() || id != "OptionsList") return false;
         sync_selection(host);
         const auto& opts = host.conn->respawn_window()->options;
@@ -1000,7 +1015,7 @@ public:
         }
         return true;
     }
-    bool click(EqHost& host, std::string_view id, std::string_view button, bool) override {
+    bool click(UiHost& host, std::string_view id, std::string_view button, bool) override {
         if (id != "SelectButton") return false;
         sync_selection(host);
         if (button == "left" && host.conn && host.conn->respawn_window())
@@ -1008,7 +1023,7 @@ public:
                 host.conn->choose_respawn(o->id);
         return true;
     }
-    void frame(EqHost& host) override {
+    void frame(UiHost& host) override {
         if (!host.conn || !host.conn->respawn_window()) {
             chosen_.reset();
             manual_choice_ = false;
@@ -1016,7 +1031,7 @@ public:
     }
 
 private:
-    void sync_selection(EqHost& host) {
+    void sync_selection(UiHost& host) {
         if (!host.conn) return;
         if (connection_ != host.conn || session_ != host.conn->respawn_session()) {
             connection_ = host.conn;
@@ -1057,9 +1072,9 @@ void add_misc_windows(std::vector<std::unique_ptr<StockWindow>>& out) {
     out.push_back(std::make_unique<BreathWindow>());
     out.push_back(std::make_unique<SpellBookWindow>());
     out.push_back(make_player_notes_window());
-    out.push_back(std::make_unique<StockWindow>("BrowserWnd", false)); // the in-game browser (app/lua_eq_web.cpp)
-    out.push_back(std::make_unique<StockWindow>("ScriptsWnd", false)); // the Lua scripts (app/lua_eq_scripts.cpp)
-    out.push_back(std::make_unique<StockWindow>("RGMercsWnd", false)); // native RG Mercs window (app/lua_eq_rgmercs.cpp)
+    out.push_back(std::make_unique<StockWindow>("BrowserWnd", false)); // the in-game browser (app/lua_ui_web.cpp)
+    out.push_back(std::make_unique<StockWindow>("ScriptsWnd", false)); // the Lua scripts (app/lua_ui_scripts.cpp)
+    out.push_back(std::make_unique<StockWindow>("CombatWnd", false));  // Native combat controller (app/lua_ui_combat.cpp)
 }
 
 } // namespace hailstone::app

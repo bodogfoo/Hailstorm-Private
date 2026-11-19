@@ -47,7 +47,7 @@ const char* toggle_command_window(int command);
 
 // Whether the EQ menu offers a row running `command`: not a command left out on purpose (game::key_command_dropped:
 // the Marketplace, polls, real estate ...), and one this client runs: a window toggle whose window the UI pack
-// draws (`replaces`, EqApi::replaces; the guild, raid, friends, actions, skills, combat abilities, options and first
+// draws (`replaces`, UiApi::replaces; the guild, raid, friends, actions, skills, combat abilities, options and first
 // hot bar keys have a window of the client's own otherwise), or the inventory, spell book, mercenary and camp
 // commands. Newer games' CascadeMenu.txt (an asset folder of a later client) name windows RoF2 does not have or
 // this client does not draw (the zone guide, Overseer, the adventure request outside a recruiter ...): those rows
@@ -62,8 +62,7 @@ inline constexpr int kMenuWebBrowser = 0x10001;
 // Hailstone's "Lua Scripts" row (the Scripts window, ScriptsWnd: run, stop and autorun the MacroQuest Lua scripts;
 // docs/plugins.md "The Scripts window"), before Web Browser.
 inline constexpr int kMenuScripts = 0x10002;
-// Hailstone's native "RGMercs" row (RGMercsWnd), offered when the UI pack draws RGMercsWnd.
-inline constexpr int kMenuRGMercs = 0x10004;
+inline constexpr int kMenuCombat = 0x10003;
 // Hailstone: the plugins' menu entries (plugin/ui_bridge.h) in a "Plugins" submenu; entry i's row returns
 // kMenuPluginFirst + i.
 inline constexpr int kMenuPluginFirst = 0x20000;

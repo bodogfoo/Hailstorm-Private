@@ -1,7 +1,7 @@
 // ClientApp: Zone load and unload, scene fog, listener and music, entering the zone.
 
 #include "app/client_app_internal.h"
-#include "app/neighbour_zones.h"
+#include "app/terrain_cache.h"
 
 #include <array>
 #include <algorithm>
@@ -17,13 +17,11 @@
 #include "core/ini_file.h"
 #include "core/server_profile.h"
 #include "mq/lua_mq.h"
-#include "game/eq_names.h"
 #include "game/mechanics/abilities.h"
 #include "game/option_commands.h"
 #include "game/particles.h"
 #include "game/revamped_zone.h"
 #include "nav/zone_nav.h"
-#include "platform/paths.h"
 #include "platform/process.h"
 #include <unordered_set>
 
@@ -72,6 +70,27 @@ void ClientApp::load_zone(const std::string& short_name) {
         mark("flora");
         zone_particles_ = std::make_unique<ZoneParticles>(vk_, game_, shader_dir_, *zone_);
         zone_particles_->set_density(environment_particle_density_);
+        switch_particles_ = std::make_unique<SwitchParticles>(vk_, game_, shader_dir_);
+        switch_particles_->set_density(environment_particle_density_);
+        if (conn_) {
+            door_particles_.local_player = [this] {
+                return switch_particles_ && conn_ && conn_->world().player();
+            };
+            door_particles_.update_day_night = [this](game::Door& door) {
+                if (door.particle && switch_particles_ && !switch_particles_->active(door)) door.particle = false;
+                if (conn_)
+                    if (const auto time = conn_->current_time_of_day())
+                        game::update_particle_switch_day_night(door, time->hour);
+            };
+            door_particles_.start = [this](game::Door& door, std::int32_t effect) {
+                const auto* me = conn_ ? conn_->world().player() : nullptr;
+                return switch_particles_ && me && switch_particles_->start(door, effect, me->level);
+            };
+            door_particles_.stop = [this](game::Door& door) {
+                if (switch_particles_) switch_particles_->stop(door);
+            };
+            conn_->set_door_particles(&door_particles_);
+        }
         // PlayerClient::PostBuildInit makes the spawns' lights only with ShowDynamicLights (/dynamiclights: "takes
         // effect the next time you zone").
         dynamic_lights_ = config_.get_bool("display.dynamic_lights", true);
@@ -89,19 +108,41 @@ void ClientApp::load_zone(const std::string& short_name) {
             log::info("zone fires: {} flames, {} lights added for them", zone_fires_.size(), lights);
             if (!fire_renderer_) fire_renderer_ = std::make_unique<render::FireRenderer>(vk_, shader_dir_);
         }
+        // The zone's CPU-only builds (collision, moving parts, ladders, baked light) read the finished zone and nothing
+        // else: they run on the worker threads while this thread makes the zone's GPU objects below, which only read
+        // it too, and are waited for where they are used. Nothing changes the zone until then. On an exception the
+        // tasks' handles wait in their destructors, before the zone is unloaded.
+        const assets::Zone& built_from = *zone_;
+        std::optional<game::CollisionMesh> built_collision;
+        std::optional<game::AnimatedObjects> built_animated;
+        std::vector<game::ZoneLadder> built_ladders;
+        std::optional<render::AmbientProbe> built_probe;
+        auto start = [pool = workers_.get()](std::function<void()> work) {
+            if (pool) return pool->run(std::move(work));
+            work();
+            return core::WorkerPool::Task{};
+        };
+        core::WorkerPool::Task collision_task, animated_task, ladders_task, probe_task;
+        if (!tested_collision)
+            collision_task = start([&] { built_collision = game::CollisionMesh::build(built_from); });
+        animated_task = start([&] { built_animated = game::AnimatedObjects::build(built_from); });
+        ladders_task = start([&] { built_ladders = game::zone_ladders(built_from); });
+        probe_task = start([&] { built_probe.emplace(built_from); });
         {
-            // The neighbours' ground measured on earlier visits shapes the land round the zone (app/neighbour_zones.h),
-            // and past them the zones of the world atlas (app/world_atlas.h).
             auto options = render::zone_render_options(game_);
-            atlas_land_ = atlas_land(game_, server_profile_.id, zone_->name,
-                                     horizon_cache_entries(game_, horizon_cache_dir(server_profile_.id, zone_->name),
-                                                           zone_->name));
-            options.horizon_sources = atlas_land_.sources;
+            options.terrain_cache = terrain_cache_path(server_profile_.id, zone_->name);
+            options.light_shadow_keys = true; // render::plan_point_shadows shadows this zone's lights
             zone_renderer_ = std::make_unique<render::ZoneRenderer>(vk_, *zone_, shader_dir_, options);
         }
-        distant_hidden_key_ = 0;
         vk_.reset_history(); // the temporal upscaler's history shows the last zone
         mark("zone renderer");
+        try {
+            world_geometry_renderer_ = std::make_unique<render::WorldGeometryRenderer>(vk_, shader_dir_);
+        } catch (const std::exception& e) {
+            world_geometry_renderer_.reset();
+            if (automation_) automation_->world_unavailable();
+            log::warn("world geometry rendering unavailable in {}: {}", short_name, e.what());
+        }
         flora_renderer_.reset();
         if (!zone_->flora.empty()) flora_renderer_ = std::make_unique<render::FloraRenderer>(vk_, *zone_, shader_dir_);
         mark("flora renderer");
@@ -109,8 +150,14 @@ void ClientApp::load_zone(const std::string& short_name) {
         if (spell_particles_) spell_particles_->clear();
         if (spell_bolts_) spell_bolts_->clear();
         if (actor_emitters_) actor_emitters_->clear();
-        collision_ = tested_collision ? std::move(*tested_collision) : game::CollisionMesh::build(*zone_);
-        animated_objects_ = game::AnimatedObjects::build(*zone_);
+        collision_task.wait();
+        collision_ = tested_collision ? std::move(*tested_collision) : std::move(*built_collision);
+        // Built only after the renderer selected/uploaded this zone's refined terrain and replacement objects.
+        // World scene availability is not published until this finishes; an upload/build failure retires it all.
+        world_visual_collision_ = game::CollisionMesh::build_visual(*zone_);
+        if (++world_collision_revision_ == 0) ++world_collision_revision_;
+        animated_task.wait();
+        animated_objects_ = std::move(*built_animated);
         zone_animation_origin_ms_ = static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start_time_).count());
         if (!animated_objects_->empty())
@@ -118,14 +165,16 @@ void ClientApp::load_zone(const std::string& short_name) {
                       animated_objects_->part_count());
         mark("collision");
         if (conn_) conn_->reground(); // ground_npcs measured the spawns against no floor, or the last zone's
-        zone_ladders_ = game::zone_ladders(*zone_);
+        ladders_task.wait();
+        zone_ladders_ = std::move(built_ladders);
         if (nav_)
             nav_->zone_loaded(*collision_, &zone_->regions,
                               platform::cache_dir() / "navmesh" /
                                   (server_profile_.id.empty() ? std::string("default") : server_profile_.id) /
                                   nav::ZoneNav::cache_name(short_name));
         mark("navigation");
-        ambient_probe_ = render::AmbientProbe(*zone_);
+        probe_task.wait();
+        ambient_probe_ = std::move(*built_probe);
         mark("ambient probe");
         probe_blend_.reset();
         // Zone-line boxes under the terrain (a client addition, game/zone_lines.h): walking over them fires them.
@@ -148,9 +197,9 @@ void ClientApp::load_zone(const std::string& short_name) {
     world_objects_->set_zone(zone_ ? &*zone_ : nullptr, nullptr);
     try {
         auto library = characters_.library_for_zone(game_, short_name);
-        eq_host_.char_library = nullptr; // the old renderer's library goes with it
+        ui_host_.char_library = nullptr; // the old renderer's library goes with it
         actor_renderer_ = std::make_unique<render::ActorRenderer>(vk_, library, shader_dir_, std::move(actor_kept_));
-        eq_host_.char_library = &actor_renderer_->library();
+        ui_host_.char_library = &actor_renderer_->library();
         actor_library_ = library;
         world_objects_->set_zone(zone_ ? &*zone_ : nullptr, library); // item models for dropped items
     } catch (const std::exception& e) {
@@ -197,6 +246,9 @@ void ClientApp::load_zone(const std::string& short_name) {
     }
     if (loading_since_)
         zone_loaded_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - *loading_since_).count();
+    // A retained scene or another instance must not answer for the current world.
+    if (conn_ && zone_ && collision_ && short_name == conn_->world().zone_short_name)
+        world_scene_ = {conn_.get(), world_epoch_, conn_->zone_id(), conn_->zone_instance(), short_name};
 }
 
 namespace {
@@ -227,12 +279,7 @@ void ClientApp::update_zone_settle() {
         return;
     }
     auto now = Clock::now();
-    if (execution_.is_headless()) {
-        settle_frame_.actors_waiting = 0;
-        settle_frame_.shadow_builds = 0;
-    } else if (actor_renderer_) {
-        settle_frame_.actors_waiting = actor_renderer_->stats().undressed;
-    }
+    if (actor_renderer_) settle_frame_.actors_waiting = actor_renderer_->stats().undressed;
     bool done = zone_settle_.update(settle_frame_, std::chrono::duration<double>(now - start_time_).count());
     settle_frame_ = {};
     loading_view_.detail = zone_settle_.detail();
@@ -284,23 +331,30 @@ void ClientApp::update_zone_settle() {
 }
 
 void ClientApp::unload_zone() {
+    if (combat_engine_) {
+        HailstoneCombatAdapter actions(conn_.get(), nav_.get(), &ui_host_);
+        combat_engine_->on_zone_change(&actions, "");
+    }
+    retire_world_geometry();
     zone_settle_.cancel();
     if (pre_game_loaded_) {
         // Character select's scene goes with its zone: the model player and its camera's field of view.
         pre_game_loaded_ = false;
-        eq_host_.model_player = nullptr;
+        ui_host_.model_player = nullptr;
         camera_.fov_units = pre_game_saved_fov_;
     }
     pre_game_world_.reset();
     missiles_.clear(); // CEverQuest_ClearZoneWorldState -> EQMissile_UpdateAll
     if (audio_) audio_->set_zone("");
-    if (zone_renderer_) vk_.wait_idle();
-    if (neighbours_) neighbours_->clear();
-    eq_host_.zone_exits.clear();
-    eq_host_.zone_exits_zone = 0;
+    if (zone_renderer_ || world_geometry_renderer_) vk_.wait_idle();
+    world_geometry_renderer_.reset();
+    ui_host_.zone_exits.clear();
+    ui_host_.zone_exits_zone = 0;
     zone_renderer_.reset();
     flora_renderer_.reset(); // holds the zone's plants
     zone_particles_.reset(); // reads the zone's archives
+    if (conn_) conn_->set_door_particles(nullptr);
+    switch_particles_.reset();
     zone_fires_.clear();
     zone_mesh_fires_.clear();
     frame_fires_.clear();
@@ -308,7 +362,7 @@ void ClientApp::unload_zone() {
     sky_renderer_.reset();
     if (actor_renderer_) actor_kept_ = actor_renderer_->release_kept();
     actor_renderer_.reset();
-    eq_host_.char_library = nullptr; // its library went with it (update_eq_host sets it again)
+    ui_host_.char_library = nullptr; // its library went with it (update_ui_host sets it again)
     for (auto& slot : previews_) {
         slot.view.reset();
         slot.serial = 0xffffffffu;
@@ -316,6 +370,7 @@ void ClientApp::unload_zone() {
     actor_library_.reset();
     if (nav_) nav_->zone_unloaded();
     collision_.reset();
+    world_visual_collision_.reset();
     animated_objects_.reset();
     zone_ladders_.clear();
     zone_line_.set_buried({});
@@ -536,8 +591,7 @@ void ClientApp::enter_zone() {
     target_manager_ = {};
     zone_entered_ = Clock::now();
     zone_line_.reset();
-    // The character's own files: servers/<profile>/characters/<world>/<name>/ (core/character_files.h),
-    // or the group profile slot's explicit settings_path override (confined within data_dir).
+    // The character's own files: servers/<profile>/characters/<world>/<name>/ (core/character_files.h).
     std::string profile = files_profile();
     CharacterFiles files = character_files(profile, char_view_.server_name, game::display_name(me->name));
     const bool use_slot_override =
@@ -557,16 +611,9 @@ void ClientApp::enter_zone() {
         use_character_settings(files.dir); // (taken over at the entry into the world: the same, unless the name differs)
     }
     actions_ui_->enter_zone(files.hot_buttons());
+    load_combat_profile_for_zone(files.dir, game::class_short_name(me->class_id));
     // The character's autorun scripts (the Scripts window; the same file at each zone-in starts nothing again).
-    if (automation_) {
-        automation_->scripts().set_autorun_file(files.scripts_ini());
-        std::string cls;
-        if (me->class_id != 0) cls = game::class_short_name(me->class_id);
-        else if (conn_->player_class_mask() != 0) cls = game::class_mask_name(conn_->player_class_mask());
-        automation_->rgmercs().attach_character(platform::data_dir(), files.dir, game::display_name(me->name),
-                                                char_view_.server_name, std::move(cls));
-    }
-    eq_host_.rgmercs_server = char_view_.server_name;
+    if (automation_) automation_->scripts().set_autorun_file(files.scripts_ini());
     // The UI's window layout is the character's (ui-<pack>.txt), its other settings shared.
     ui_character_dir_ = files.dir;
     if (lua_ui_) lua_ui_->set_character_settings(files.ui_settings(ui_name_));
@@ -578,33 +625,34 @@ void ClientApp::enter_zone() {
             if (actions_ui_) actions_ui_->write_char_ini(section, key, value);
         });
     conn_->load_name_change_flags();
-    if (eq_api_) {
+    conn_->restore_blocked_buffs();
+    if (ui_api_) {
         // The window places: the character's UI.ini over the game's defaults.ini; the game's own
         // UI_<name>_<server>.ini, when there is one, is the starting layout (InitCharacterIniFilenames). Both are
         // only read. The map edits go to the server's maps folder.
         std::string file = files.ui_ini().string();
         if (file != layout_for_) {
             layout_for_ = file;
-            eq_host_.maps_dir = profile_maps_dir(profile);
-            eq_host_.server_dir = profile_dir(profile);
+            ui_host_.maps_dir = profile_maps_dir(profile);
+            ui_host_.server_dir = profile_dir(profile);
             // Made empty, so the player sees where maps for every server go.
-            eq_host_.global_maps_dir = platform::maps_dir();
+            ui_host_.global_maps_dir = platform::maps_dir();
             std::error_code maps_ec;
-            std::filesystem::create_directories(eq_host_.global_maps_dir, maps_ec);
+            std::filesystem::create_directories(ui_host_.global_maps_dir, maps_ec);
             auto defaults = game_.find("defaults.ini");
             auto seed = game_.find("UI_" + game::display_name(me->name) + "_" + char_view_.server_name + ".ini");
             std::error_code ui_ec;
             bool first_entry = !files.empty() && !seed && !std::filesystem::exists(files.ui_ini(), ui_ec);
-            eq_api_->load_layout(defaults ? *defaults : std::filesystem::path(), files.ui_ini(),
+            ui_api_->load_layout(defaults ? *defaults : std::filesystem::path(), files.ui_ini(),
                                  seed ? *seed : std::filesystem::path());
             // CDisplay::InitGameUI: the story window when there is a new story and Automatic is on, above level 1.
-            if (conn_->player_status().level > 1) eq_api_->activate_window("StoryWnd", 0);
+            if (conn_->player_status().level > 1) ui_api_->activate_window("StoryWnd", 0);
             // Hailstone: a character with no layout of its own yet is offered another character's (the layout copy
-            // window's activate, app/lua_eq_layout.cpp; not in the original).
-            if (first_entry) eq_api_->activate_window("LayoutCopyWindow", 0);
+            // window's activate, app/lua_ui_layout.cpp; not in the original).
+            if (first_entry) ui_api_->activate_window("LayoutCopyWindow", 0);
         }
         // CEverQuest::ProcessGame at each zone-in: the tip of the day (CTipWnd::Activate(pinstCTipWnd_1, -1, 0)).
-        eq_api_->activate_tip_of_day(false);
+        ui_api_->activate_tip_of_day(false);
     }
     if (!opts_.abilities_test.empty()) {
         std::vector<std::uint32_t> skills;
@@ -771,6 +819,7 @@ void ClientApp::set_particle_density(std::string_view kind, float density) {
     } else {
         environment_particle_density_ = density;
         if (zone_particles_) zone_particles_->set_density(density);
+        if (switch_particles_) switch_particles_->set_density(density);
     }
     config_.set(std::format("display.{}_particle_density", kind), std::format("{:.2f}", density));
 }
@@ -816,7 +865,8 @@ std::optional<int> ClientApp::display_option(std::string_view name) const {
             return std::clamp(config_.get_int(std::format("display.{}", name), 3), 0, 3);
     if (const auto* r = slider_range(name))
         return std::clamp(static_cast<int>(std::lround((config_float(r->key, r->fallback) - r->at_zero) / r->per_tick)), 0, 20);
-    if (name == "lighting") return lighting_mode_ == render::LightingMode::Modern ? 0 : 1;
+    // 0 Classic, 1 Smooth Classic, 2 Modern (render::LightingMode, low to high).
+    if (name == "lighting") return static_cast<int>(lighting_mode_);
     if (name == "ao") return config_.get_bool("display.ao", true) ? 1 : 0;
     if (name == "render_scale")
         return std::clamp(config_.get_int("display.render_scale", 100), render::kMinRenderScalePercent, 100);
@@ -832,10 +882,12 @@ std::optional<int> ClientApp::display_option(std::string_view name) const {
         return render::upscaler_choice(config_.get_string("display.upscaler", "off"),
                                        upscaler_providers());
     if (name == "distance_blur") return config_.get_bool("display.distance_blur", true) ? 1 : 0;
+    // The zone's depth pre-pass (render/zone_renderer.h set_depth_prepass), off by default; switched at once.
+    if (name == "depth_prepass") return config_.get_bool("display.depth_prepass", false) ? 1 : 0;
     if (name == "color_grade") return config_.get_bool("display.color_grade", true) ? 1 : 0;
-    if (name == "neighbour_zones") return neighbour_zones_ ? 1 : 0;
     if (name == "horizon_hills") return horizon_hills_ ? 1 : 0;
     if (name == "volumetric_clouds") return volumetric_clouds_ ? 1 : 0;
+    if (name == "zone_fog") return edge_fog_ ? 1 : 0;
     if (name == "tree_detail") return tree_detail_;
     // Hailstone: NPCs the server leaves in the air are drawn on the floor (game::WorldState::ground_npcs), on by default.
     if (name == "ground_npcs") return config_.get_bool("display.ground_npcs", true) ? 1 : 0;
@@ -905,17 +957,17 @@ bool ClientApp::set_display_option(std::string_view name, int value) {
         config_.save(config_path_);
         return true;
     }
-    if (name == "neighbour_zones") {
-        // The zones past the outdoor zone lines (app/neighbour_zones.h): freed at once when turned off.
-        neighbour_zones_ = value != 0;
-        config_.set_bool("display.neighbour_zones", neighbour_zones_);
-        config_.save(config_path_);
-        return true;
-    }
     if (name == "horizon_hills") {
         // The distant hills round an outdoor zone (render/horizon.h).
         horizon_hills_ = value != 0;
         config_.set_bool("display.horizon_hills", horizon_hills_);
+        config_.save(config_path_);
+        return true;
+    }
+    if (name == "zone_fog") {
+        // The fog bank past an outdoor zone's edge (render/zone_fog.h).
+        edge_fog_ = value != 0;
+        config_.set_bool("display.zone_fog", edge_fog_);
         config_.save(config_path_);
         return true;
     }
@@ -974,9 +1026,10 @@ bool ClientApp::set_display_option(std::string_view name, int value) {
         config_.set(std::string(r->key), std::format("{:.2f}", v));
         if (name == "view_distance") view_distance_ = v;
     } else if (name == "lighting") {
-        lighting_command(value == 0 ? "modern" : "classic"); // saves and applies
+        lighting_command(render::lighting_mode_name(static_cast<render::LightingMode>(std::clamp(value, 0, 2))));
+        // (saves and applies)
         return true;
-    } else if (name == "ao" || name == "distance_blur" || name == "color_grade") {
+    } else if (name == "ao" || name == "distance_blur" || name == "color_grade" || name == "depth_prepass") {
         config_.set_bool("display." + std::string(name), value != 0);
     } else if (name == "render_scale") {
         config_.set_int("display.render_scale", std::clamp(value, render::kMinRenderScalePercent, 100));
@@ -1013,21 +1066,24 @@ void ClientApp::lighting_command(std::string_view args) {
     std::string a(args);
     for (char& c : a) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     if (a.empty()) {
-        lighting_mode_ = lighting_mode_ == render::LightingMode::Classic ? render::LightingMode::Modern
-                                                                         : render::LightingMode::Classic;
+        // Without a mode: modern and a classic one in turn, as before the smooth classic.
+        lighting_mode_ = lighting_mode_ == render::LightingMode::Modern ? render::LightingMode::Classic
+                                                                        : render::LightingMode::Modern;
     } else if (auto mode = render::parse_lighting_mode(a)) {
         lighting_mode_ = *mode;
     } else {
-        if (conn_) conn_->ui_message("Usage: /lighting [modern | classic]");
+        if (conn_) conn_->ui_message("Usage: /lighting [modern | smooth | classic]");
         return;
     }
-    bool modern = lighting_mode_ == render::LightingMode::Modern;
-    config_.set("display.lighting", modern ? "modern" : "classic");
+    config_.set("display.lighting", std::string(render::lighting_mode_name(lighting_mode_)));
     config_.save(config_path_);
     apply_scene_options(); // the automatic tonemap follows the mode
     if (conn_)
-        conn_->ui_message(modern ? "Lighting: modern (per-pixel sun, sky and point lights)."
-                                 : "Lighting: classic (the original's look).");
+        conn_->ui_message(lighting_mode_ == render::LightingMode::Modern
+                              ? "Lighting: modern (per-pixel sun, sky and point lights)."
+                          : lighting_mode_ == render::LightingMode::SmoothClassic
+                              ? "Lighting: smooth classic (the original's light, worked out per pixel)."
+                              : "Lighting: classic (the original's look).");
 }
 
 void ClientApp::update_missiles() {

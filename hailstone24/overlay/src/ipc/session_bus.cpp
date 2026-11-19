@@ -211,7 +211,7 @@ std::vector<std::uint8_t> encode_snapshot(const SessionSnapshot& s) {
     w.u8(s.group_slot);
     w.str(s.group_leader);
     w.u8(static_cast<std::uint8_t>(s.exec_state));
-    w.str(s.rgmercs_state);
+    w.str(s.combat_state);
     w.str(s.script_health);
     w.u32(s.ping_ms);
     w.u32(s.rss_mib);
@@ -239,7 +239,7 @@ bool decode_snapshot(const std::uint8_t* data, std::size_t size, SessionSnapshot
     out.group_slot = r.u8();
     out.group_leader = r.str();
     out.exec_state = static_cast<app::ExecutionState>(r.u8());
-    out.rgmercs_state = r.str();
+    out.combat_state = r.str();
     out.script_health = r.str();
     out.ping_ms = r.u32();
     out.rss_mib = r.u32();

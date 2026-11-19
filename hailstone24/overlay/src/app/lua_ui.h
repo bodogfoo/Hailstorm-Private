@@ -1,17 +1,18 @@
 #pragma once
 
-// The `eq` table of the Lua UI packs (ui/<pack>): the scripts are written against the original client's
+// The `hs` table of the Lua UI packs (ui/<pack>): the scripts are written against the original client's
 // CXWnd tree; here the same functions, with the same arguments and returns,
-// answer from this client's own state. A stock window is a model (app/lua_eq_windows.h) keyed by its XML screen
+// answer from this client's own state. A stock window is a model (app/lua_ui_windows.h) keyed by its XML screen
 // name, and each of its children by its XML ScreenID: what the original window's code would have set on that
 // child (text, shown, enabled, art, gauge) is computed from GameConnection, the spell, item and group state, and a
 // click on a child runs the client action the original's handler does.
 //
-// Labels and gauges with an EQType read app/lua_eq_values.h, the original's __GetLabelFromEQ and
+// Labels and gauges with an EQType read app/lua_ui_values.h, the original's __GetLabelFromEQ and
 // __GetGaugeValueFromEQ.
 
 #include <cstdint>
 #include <functional>
+#include "combat/combat_types.h"
 #include <future>
 #include <filesystem>
 #include <memory>
@@ -29,6 +30,7 @@
 #include "game/pet_buttons.h"
 #include "mq/tlo.h"
 #include "plugin/consent.h"
+#include "ui/ui_packs.h"
 
 struct lua_State;
 
@@ -36,12 +38,13 @@ namespace hailstone::net { class GameConnection; struct Item; struct ItemSlot; s
 namespace hailstone::game { class HotButtonStore; struct HotButton; namespace mechanics { class Character; } }
 namespace hailstone { class GameDir; }
 namespace hailstone::assets { class CharacterLibrary; struct CharacterModel; }
-namespace hailstone::mq { class ScriptHost; class Registry; struct Context; class RGMercsBridge; }
+namespace hailstone::mq { class ScriptHost; class Registry; struct Context; }
 namespace hailstone::ui {
 class UiTextures; class UiIni; struct ChatView; struct ServerSelectView; struct LoginView; struct CharacterSelectView;
 struct CharacterCreateView;
+struct AddonPolicyView;
 }
-namespace hailstone::game { struct ItemLink; struct QuantityOpen; struct Spawn; class CharCreateLook; }
+namespace hailstone::game { struct ItemLink; struct QuantityOpen; struct Spawn; class CharCreateLook; class NameplateCanvasRegistry; }
 
 namespace hailstone::plugin { class UiBridge; class WebAccess; }
 namespace hailstone::app {
@@ -49,17 +52,25 @@ namespace hailstone::app {
 class ActionsUi;
 class Gamepad;
 
-// What the eq.* functions read and drive; the client fills it in every frame.
-struct EqHost {
+// What the hs.* functions read and drive; the client fills it in every frame.
+struct UiHost {
+    game::NameplateCanvasRegistry* nameplates = nullptr;
+    std::function<std::vector<ui::UiPack>()> interface_list;
+    std::function<ui::InterfaceStatus()> interface_status;
     net::GameConnection* conn = nullptr;   // the world / zone connection, null before login
     // Wall-clock seconds for display timers; empty uses the system clock.
     std::function<std::int64_t()> unix_time;
     bool in_game = false;                  // a character is in the world
     bool ui_ready = false;                 // in game or at character select
+    // The interface loaded is one Hailstone ships (ui::trusted_ui_pack). Only then may its code read the login
+    // password, act in the add-on manager or answer the compiled-plugin consent question, and the client's own
+    // questions (PluginConsent, confirmations, trades ...) give way to its windows. An add-on or hand-placed
+    // interface gets the rest of the UI: it draws the game and acts in it as the player does.
+    bool trusted_ui = true;
     int game_state = 0;                    // CEverQuest::GameState: 1 character select, 2 creation, 5 in game
     const game::mechanics::Character* character = nullptr; // the player as the original computes it
     ui::UiTextures* textures = nullptr;
-    // The in-game browser (app/lua_eq_web.cpp over app/web_service.h, docs/browser.md), and a plugin's capabilities
+    // The in-game browser (app/lua_ui_web.cpp over app/web_service.h, docs/browser.md), and a plugin's capabilities
     // by its owner tag ("plugin:<name>", "script:<name>": LuaUi::caller_tag), which its windows act with
     // (Automation::plugin_caps).
     plugin::WebAccess* web = nullptr;
@@ -69,7 +80,7 @@ struct EqHost {
     // one (the hot bar's Lock layout). Empty without a Lua UI.
     std::function<std::string(std::string_view key)> layout_setting;
     std::function<void(std::string_view key, std::string_view value)> set_layout_setting;
-    // The pet window's command buttons (CPetInfoWnd +0x234.., +0x26c; app/lua_eq_misc.cpp): what each holds, read by
+    // The pet window's command buttons (CPetInfoWnd +0x234.., +0x26c; app/lua_ui_misc.cpp): what each holds, read by
     // the hot buttons it checks (SyncHotButtonStates).
     game::PetButtonLayout pet_buttons;
     // CHotButtonWnd::DoHotButton: bar 0..9, button 0..11 of the bar's current page; `mouse`: a click on the button (the
@@ -104,14 +115,14 @@ struct EqHost {
     // "combat_music": 0 / 1): hailstone.ini's audio.* keys.
     std::function<int(std::string_view option)> get_option;
     std::function<void(std::string_view option, int value)> set_option;
-    // The option by name, nullopt for one the client does not have (eq.Option), and the choices of one the client
-    // lists (eq.OptionChoices: "resolution").
+    // The option by name, nullopt for one the client does not have (hs.Option), and the choices of one the client
+    // lists (hs.OptionChoices: "resolution").
     std::function<std::optional<int>(std::string_view option)> find_option;
     std::function<std::vector<std::string>(std::string_view option)> option_choices;
     // Whether a book spell dropped or clicked onto gem `gem` (0-based) starts memorizing there: an empty usable gem,
     // or (Hailstone, option replace_gem_spell, on by default) one that holds another spell, which the server forgets
     // as it memorizes the new one (Client::MemSpell). The original refuses a gem that holds a spell
-    // (StartSpellMemorization bReplace 0). Defined in lua_eq_spellbook.cpp.
+    // (StartSpellMemorization bReplace 0). Defined in lua_ui_spellbook.cpp.
     bool gem_takes_book_spell(int gem) const;
     // The spell display windows (SpellDisplayWindow, #2 ..): spell id, shown only while a right button is held.
     std::vector<std::pair<std::int32_t, bool>> spell_displays;
@@ -129,7 +140,7 @@ struct EqHost {
     std::function<void(const std::string& line)> submit_chat;    // a typed line (CEverQuest::InterpretCmd)
     std::function<void(const game::ItemLink& link)> click_link;  // an item link clicked in chat
     float heading = 0.0f;                   // the player's heading, 0..512 (the compass and the map)
-    // The map (app/lua_eq_map.cpp): the zone the player is in, the player's feet in world coordinates
+    // The map (app/lua_ui_map.cpp): the zone the player is in, the player's feet in world coordinates
     // (game/coords.h) and the zone's box, the terrain's min / max (pinstSceneGraph +0x50, game/collision.h
     // CollisionMesh::bounds).
     std::string zone_short_name;
@@ -143,7 +154,7 @@ struct EqHost {
     // The server's own folder (servers/<profile>, core/server_profile.h): the map's zone links are kept there
     // (game/zone_routes.h).
     std::filesystem::path server_dir;
-    // The current zone's exits, from its zone-line regions and zone points (game::collect_neighbour_lines), worked
+    // The current zone's exits, from its zone-line regions and zone points (game::collect_zone_exits), worked
     // out by the app once the zone points are in: each zone a line leads to, and where (world coordinates). For the
     // map's exits and the zone finder's "lead me there" (docs/navigation.md "Zone atlas").
     struct ZoneExit {
@@ -163,22 +174,23 @@ struct EqHost {
     std::function<bool()> target_in_melee_range;
     // A script holds autoskill off (Automation::autoskill_held): it uses nothing meanwhile.
     std::function<bool()> autoskill_held;
-    // The social editor (SocialEditWnd, 0x758bb0) on social 0..119; EqApi sets it.
+    // The social editor (SocialEditWnd) on social 0..119; UiApi sets it.
     std::function<void(std::int32_t social)> open_social_editor;
     int social_editing = -1; // the social SocialEditWnd is open on (0..119), -1 while it is closed
-    // Lua socials (app/lua_eq_luasocial.cpp): the script host they run in, MQ's TLOs for the editor's completion, and
+    // Lua socials (app/lua_ui_luasocial.cpp): the script host they run in, MQ's TLOs for the editor's completion, and
     // a request to open the Lua social editor on social 0..119 (-1 none; the editor window takes it).
     mq::ScriptHost* scripts = nullptr;
-    mq::RGMercsBridge* rgmercs = nullptr;
-    std::string rgmercs_server;
-    std::function<bool(const std::string&)> run_rgmercs_command;
     const mq::Registry* registry = nullptr;
-    // What the plugins give the UI (plugin/ui_bridge.h; app/lua_eq_plugins.h): null without plugins.
+    // What the plugins give the UI (plugin/ui_bridge.h; app/lua_ui_plugins.h): null without plugins.
     plugin::UiBridge* plugin_ui = nullptr;
-    // The server's compiled plugins waiting for the player's word (Automation::plugin_consent; eq.PluginConsent), and
+    // The server's compiled plugins waiting for the player's word (Automation::plugin_consent; hs.PluginConsent), and
     // the answer (true allow, false refuse, nullopt put away). Empty: none.
     std::function<std::optional<plugin::ConsentPrompt>()> plugin_consent;
     std::function<void(std::optional<bool> allow)> answer_plugin_consent;
+    // A required add-on that failed in the world (hs.AddonPolicy) and the player's Retry (hs.AddonPolicyAction).
+    // Null / empty: none. Only the client's own interfaces see or act on them (trusted_ui).
+    const ui::AddonPolicyView* addon_policy = nullptr;
+    std::function<void()> retry_required_addons;
     std::function<const mq::Context&()> tlo_context;
     int lua_social_edit = -1;
     std::function<std::string(std::uint32_t skill)> skill_name;
@@ -191,12 +203,12 @@ struct EqHost {
     // The Actions window's open state and page (ActionsUi keeps them for the keys).
     // The keep-C++-windows switch (config ui.cpp_windows): with it on, the C++ windows stay on next to the Lua ones.
     bool keep_cpp_windows = false;
-    // The Find window (app/lua_eq_find.cpp, a Hailstone addition that replaces the original's FindLocationWnd): open
+    // The Find window (app/lua_ui_find.cpp, a Hailstone addition that replaces the original's FindLocationWnd): open
     // or not. The find key (CMD_TOGGLE_FIND_WINDOW) and the Actions window's Find toggle it; each pack draws it (the
     // modern pack as a page of the map, the gamepad pack as a window of its own).
     bool find_open = false;
     // The Find window's guide path (app/guide_path.h): starts it to an NPC (false: no such NPC), ends it, and while
-    // it is shown its line (the player first) for the maps. Unset (tests): eq.FindNpcPath asks the server's find path.
+    // it is shown its line (the player first) for the maps. Unset (tests): hs.FindNpcPath asks the server's find path.
     std::function<bool(std::uint32_t spawn)> guide_to;
     std::function<void()> end_guide;
     // The Find window's Walk there: the navigator walks the player to the NPC (/nav id), the guide path showing;
@@ -206,7 +218,7 @@ struct EqHost {
 
     // A quantity dialog a window opened (CQuantityWnd::Open with that window as the owner; the stack split's
     // dialog is the connection's quantity_request()): the slider's range and start, where it shows (none:
-    // centred), and the owner's handler for the accepted quantity (open_quantity() in app/lua_eq_dialogs.cpp).
+    // centred), and the owner's handler for the accepted quantity (open_quantity() in app/lua_ui_dialogs.cpp).
     struct UiQuantity {
         std::int32_t min = 0, max = 0, slider = 0;
         std::optional<std::pair<int, int>> position;
@@ -216,10 +228,10 @@ struct EqHost {
     };
     std::optional<UiQuantity> quantity;
     std::int32_t air = -1, max_air = 0; // the air supply (PlayerMovement; -1 not yet counted) and its maximum
-    // A search for the Advanced Inventory (/finditem <text>), until its window takes it (eq.TakeItemSearch).
+    // A search for the Advanced Inventory (/finditem <text>), until its window takes it (hs.TakeItemSearch).
     std::optional<std::string> item_search;
-        bool body_tint_open = false; // BodyTintWnd (the inventory's Tint button opens it; app/lua_eq_tint.cpp)
-    // The player customization window (PlayerCustomizationWnd, app/lua_eq_customization.cpp): the character library
+        bool body_tint_open = false; // BodyTintWnd (the inventory's Tint button opens it; app/lua_ui_tint.cpp)
+    // The player customization window (PlayerCustomizationWnd, app/lua_ui_customization.cpp): the character library
     // and the model the player is drawn with (the window tries features on it), and the window's camera: -1 while
     // it is closed, else CharSelect_PositionCameraForModel's zoom (100 the face, 0 the whole body).
     const assets::CharacterLibrary* char_library = nullptr;
@@ -270,10 +282,10 @@ struct EqHost {
     }
     // The key map and its capture (the options window's Keys page).
     ActionsUi* actions = nullptr;
-    // The gamepad's state, mode and bindings (app/gamepad.h; eq.gamepad, app/lua_eq_gamepad.cpp).
+    // The gamepad's state, mode and bindings (app/gamepad.h; hs.gamepad, app/lua_ui_gamepad.cpp).
     Gamepad* gamepad = nullptr;
 
-    // The game's context menus (CContextMenuManager) a window opened: menus.lua draws them (eq.GameMenus). A row runs
+    // The game's context menus (CContextMenuManager) a window opened: menus.lua draws them (hs.GameMenus). A row runs
     // `act` when chosen and closes the menus; a row with `submenu` opens it beside the row when hovered.
     // A disabled row keeps its colour, as CContextMenu::AddMenuItem's (enabled 0) does; EnableMenuItem(row, false)
     // @0085bae0 also sets kMenuDisabledRgb.
@@ -311,20 +323,20 @@ struct EqHost {
         color_pick.reset();
     }
     // A menu row that opens the window's own menu (the stock "Window" submenu: CContextMenuManager's default menu,
-    // which this client's window menu stands for): sidl.lua opens it for `window_menu` (eq.TakeWindowMenu).
+    // which this client's window menu stands for): sidl.lua opens it for `window_menu` (hs.TakeWindowMenu).
     std::string window_menu;
     // CLOSE_TOP_WINDOW (Escape) went down and no window of the client's own took it: the UI pack may close one of
-    // its windows (eq.TakeCloseTopWindow, once). Cleared after each UI frame, so a press nothing took is not kept.
+    // its windows (hs.TakeCloseTopWindow, once). Cleared after each UI frame, so a press nothing took is not kept.
     bool close_top_window = false;
     // CHelpWnd::SetFile(page) and Activate: the help window on help\\<page> (a tip page's WndNotify 1000 link).
     std::function<void(const std::string& page)> open_help;
-    // The help window's Tips button: CTipWnd::Activate(pinstCTipWnd_1, -1, 1) (EqApi::activate_tip_of_day).
+    // The help window's Tips button: CTipWnd::Activate(pinstCTipWnd_1, -1, 1) (UiApi::activate_tip_of_day).
     std::function<void()> show_tip_of_day;
-    // CTipWnd::Activate(tip, 0) on the context tip window (EqApi::activate_tip), for the windows that show one.
+    // CTipWnd::Activate(tip, 0) on the context tip window (UiApi::activate_tip), for the windows that show one.
     std::function<void(int tip)> activate_tip;
     // A window's Activate on another stock window (the inventory's Face button: CPlayerCustomizationWnd).
     std::function<void(std::string_view screen)> show_window;
-    // The layout copy window (app/lua_eq_layout.cpp, EqApi's __CopyLayout): the layouts there are to copy
+    // The layout copy window (app/lua_ui_layout.cpp, UiApi's __CopyLayout): the layouts there are to copy
     // (a UI ini and the resolution its keys are stored for: "1280x1024", "Windowed"), and the copy, which answers
     // the eqstr of a refusal and its arguments (none: copied).
     struct LayoutSource {
@@ -345,13 +357,13 @@ struct EqHost {
     std::function<void(const std::filesystem::path& character_dir)> copy_ui_layout;
     std::function<std::optional<std::pair<std::uint32_t, std::vector<std::string>>>(
         const LayoutSource& from, const LayoutCopyParts& parts)> copy_layout;
-    // The server select screen (eqmain's serverselect, app/lua_eq_login.cpp) while the client shows it: the client's
+    // The server select screen (eqmain's serverselect, app/lua_ui_login.cpp) while the client shows it: the client's
     // view of the world list, the world played last on this login server (empty: none), and what the window asked
     // for (ui::ServerSelectAction as an int; the client takes it).
     ui::ServerSelectView* server_select = nullptr;
     std::string last_server;
     std::optional<int> server_select_action;
-    // Hailstone: the client's own login and character select screens drawn by a UI pack (app/lua_eq_pregame.cpp):
+    // Hailstone: the client's own login and character select screens drawn by a UI pack (app/lua_ui_pregame.cpp):
     // their views while the client shows them, and what the pack's window asked for (ui::LoginAction and
     // ui::CharacterSelectAction as ints; the client takes them). login_server: the saved server's name after the
     // login (server and character select).
@@ -364,7 +376,7 @@ struct EqHost {
     ui::CharacterCreateView* char_create_view = nullptr;
     std::optional<int> char_create_action;
     std::string login_server;
-    // The character creation (CCharacterCreation, app/lua_eq_login.cpp) while the client shows it, and its two ends:
+    // The character creation (CCharacterCreation, app/lua_ui_login.cpp) while the client shows it, and its two ends:
     // the name and character sent for approval (Send_OP_ApproveName), and Cancel (back to the character list).
     bool char_create_open = false;
     std::function<void(const std::string& name, const net::CharCreate& request)> char_create_submit;
@@ -388,20 +400,27 @@ struct EqHost {
     const SavedBugReport* crash_report = nullptr;
     std::function<void(const std::string& note)> crash_report_note;
     std::function<void()> crash_report_close;
+
+    struct CombatBridge {
+        std::function<combat::CombatStatusSnapshot()> status;
+        std::function<combat::CombatProfile()> profile;
+        std::function<bool(std::string_view action, std::string_view arg, std::string& message)> command;
+    };
+    CombatBridge combat;
 };
 
 // CQuantityWnd::Open (game/quantity_dialog.h) for a window: accepted at once calls `done`, else shows the dialog.
-void open_quantity(EqHost& host, const game::QuantityOpen& in, std::function<void(std::int32_t)> done,
+void open_quantity(UiHost& host, const game::QuantityOpen& in, std::function<void(std::int32_t)> done,
                    std::function<bool()> owner_valid = {});
 
-class EqApi {
+class UiApi {
 public:
-    explicit EqApi(EqHost& host);
-    ~EqApi();
-    EqApi(const EqApi&) = delete;
-    EqApi& operator=(const EqApi&) = delete;
+    explicit UiApi(UiHost& host);
+    ~UiApi();
+    UiApi(const UiApi&) = delete;
+    UiApi& operator=(const UiApi&) = delete;
 
-    // Adds the functions to the `eq` table on the top of the stack.
+    // Adds the functions to the `hs` table on the top of the stack.
     void register_functions(lua_State* L);
     // Once per frame before the scripts run (frame count, per-frame caches).
     void begin_frame();
@@ -416,7 +435,7 @@ public:
     bool activate_window(std::string_view screen, int arg);
     // A click on spell gem `gem` (0-based) of the spell bar (CCastSpellWnd::HandleSpellLeftClick / RightClick).
     bool click_gem(int gem, bool right);
-    // Whether a Lua window stands in for the stock window `screen` (its script asked for it with eq.ReplaceWindow
+    // Whether a Lua window stands in for the stock window `screen` (its script asked for it with hs.ReplaceWindow
     // during the last frames), so the matching temporary C++ window stays off.
     bool replaces(std::string_view screen) const;
     // The stock window's open state, as the game's show / hide calls change it (keys, buttons).
@@ -499,22 +518,22 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-// The chat keys (game/chat_input.h; app/lua_eq_chat.cpp): the active chat window's input takes the keyboard with
-// `text` added (eq.ChatTakeFocus), and the chat buffer is cleared (slots 479 / 480).
+// The chat keys (game/chat_input.h; app/lua_ui_chat.cpp): the active chat window's input takes the keyboard with
+// `text` added (hs.ChatTakeFocus), and the chat buffer is cleared (slots 479 / 480).
 void request_chat_focus(const std::string& text);
 // Hailstone: the chat's lines to the character's chat_history.txt (what the windows keep, each its last 1000; on
 // camping, quitting, going back to the login and every few minutes). `ending`: the session's lines go now, so the next entry into the world puts them
 // back (chat_layout_loaded) instead of keeping them.
 void save_chat_history(bool ending);
 // The loot window's Link All (CLootWnd_LinkItemToChat): these item tags into the active chat window's input, which
-// sends each line that fills up (eq.ChatTakeFocus).
+// sends each line that fills up (hs.ChatTakeFocus).
 void request_chat_link_all(std::vector<std::string> tags);
 // The REPLY key: the active chat window's input holds "/tell <the last tell's player> " and takes the keyboard.
 void reply_to_last_tell();
 // The active chat window's input holds `text` instead of what was typed and takes the keyboard (the TELL,
 // CMDMODE_SAY and CMDMODE_EMOTE keys).
 void put_chat_input(const std::string& text);
-// The chat keys of ClientApp::key_command (app/lua_eq_chat.cpp): TELL ("/tell "), RTARGET ("/rtarget <the player at
+// The chat keys of ClientApp::key_command (app/lua_ui_chat.cpp): TELL ("/tell "), RTARGET ("/rtarget <the player at
 // the reply index>"), HISTORY_UP / HISTORY_DOWN (a line sent before into the input) and PAGEUP / PAGEDOWN (the
 // active window's output scrolls a page; dir -1 up, 1 down).
 void tell_key();
@@ -534,14 +553,17 @@ std::string chat_visible_text();
 ui::UiIni* chat_ui_ini();
 void clear_chat_windows(bool all);
 // One of the player's abilities as the Ability Book sees it, for MQ's Me.AbilityReady and the rest
-// (app/lua_eq_abilitybook.cpp): by its name (a discipline's also without its " Rk. II"), an AA's group or a skill's
+// (app/lua_ui_abilitybook.cpp): by its name (a discipline's also without its " Rk. II"), an AA's group or a skill's
 // number. nullopt when the player has no such ability (a passive AA counts as none).
-std::optional<mq::AbilityState> ability_state(EqHost& h, mq::AbilityKind kind, std::string_view name);
+std::optional<mq::AbilityState> ability_state(UiHost& h, mq::AbilityKind kind, std::string_view name);
 // The character's autoskill list in order, with each ability's name ("" for one the player no longer has), for
 // scripts (hailstone.autoskill_list).
-std::vector<std::pair<game::AutoskillRule, std::string>> autoskill_list(EqHost& h);
+std::vector<std::pair<game::AutoskillRule, std::string>> autoskill_list(UiHost& h);
 // Uses one of the player's abilities as its hot button does (the Ability Book's path; hailstone.use_ability): false
 // when the player has no such ability or is not in the world. Readiness is the server's and the game's to refuse.
-bool use_ability(EqHost& h, mq::AbilityKind kind, std::string_view name);
+bool use_ability(UiHost& h, mq::AbilityKind kind, std::string_view name);
+// /doability <name> (Hailstone's extension): the player's ability of that name, as use_ability finds it, trying a
+// skill first, then a discipline, then an activated AA. nullopt when none matches, else whether it was used.
+std::optional<bool> use_ability_named(UiHost& h, std::string_view name);
 
 } // namespace hailstone::app
