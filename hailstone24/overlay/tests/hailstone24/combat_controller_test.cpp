@@ -799,3 +799,25 @@ TEST_CASE("CombatProfile: INI persistence, secret rejection, confinement, group 
     CHECK(resolved.assist_target == "MainTankBob");
     CHECK(resolved.melee_range == doctest::Approx(14.0f));
 }
+
+
+TEST_CASE("CombatEngine: set_follow_target toggles Follow movement mode safely") {
+    CombatEngine engine;
+    CombatProfile prof = default_combat_profile_for_class("NEC");
+    prof.movement_mode = MovementMode::RangedRange;
+    engine.set_profile(prof);
+
+    // Clearing follow_target when not in Follow preserves RangedRange.
+    engine.set_follow_target("");
+    CHECK(engine.profile().movement_mode == MovementMode::RangedRange);
+
+    // Setting a follow_target automatically switches movement_mode to Follow.
+    engine.set_follow_target("Tanker");
+    CHECK(engine.profile().follow_target == "Tanker");
+    CHECK(engine.profile().movement_mode == MovementMode::Follow);
+
+    // Clearing follow_target while in Follow returns movement_mode to None.
+    engine.set_follow_target("");
+    CHECK(engine.profile().follow_target.empty());
+    CHECK(engine.profile().movement_mode == MovementMode::None);
+}

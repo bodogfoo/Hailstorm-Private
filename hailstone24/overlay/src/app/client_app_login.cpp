@@ -276,7 +276,7 @@ void ClientApp::login_action(ui::LoginAction action) {
     case ui::LoginAction::SelectGroupProfile:
         select_group_profile(login_view_.group_profile_choice);
         if (active_group_profile_) {
-            config_.set_string("login.group_profile", active_group_profile_->id);
+            config_.set("login.group_profile", active_group_profile_->id);
             config_.save(config_path_);
             if (!active_group_profile_->default_server_id.empty()) {
                 ui::select_profile_named(login_view_, active_group_profile_->default_server_id);

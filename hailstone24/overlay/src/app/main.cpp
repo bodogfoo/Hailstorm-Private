@@ -143,6 +143,21 @@ struct Options {
     std::string host;                              // --host for the auto-login
     std::string server;                            // --server: a saved server (servers/<id>), by id or name
     std::string account;                           // --account: a saved account of that server
+    std::string data_dir;                           // --data-dir: isolated Hailstone data folder
+    bool headless_bg = false;
+    bool auto_login = false;
+    bool auto_kick = false;
+    int bg_tick_hz = 0;
+    std::string gpu_mode;
+    std::string session_id;
+    std::string ipc_socket;
+    std::string profile;
+    std::string slot;
+    std::string settings_path;
+    std::string import_mq_logins;
+    std::string mq_master_pass;
+    std::string roster_out;
+    bool launch_after_import = false;
     int port = 0;
     float auto_walk = 0.0f, camera_distance = 0.0f;
     std::string watch;

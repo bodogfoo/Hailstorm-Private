@@ -309,6 +309,7 @@ UI_METHOD("LoginScreen", "pregame", "LoginScreen", 0)
 UI_METHOD("LoginSet", "pregame", "LoginSet", 0)
 UI_METHOD("ServerSelect", "pregame", "ServerSelect", 0)
 UI_METHOD("ServerSelectDo", "pregame", "ServerSelectDo", 0)
+UI_METHOD("ServerSelectSet", "pregame", "ServerSelectSet", 0)
 
 // preview
 UI_METHOD("ItemPreviewControl", "preview", "Control", 0)

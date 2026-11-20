@@ -305,7 +305,7 @@ combat::CombatSnapshot build_combat_snapshot(const net::GameConnection& conn,
             snap.has_assist_target = true;
         } else if (bus) {
             for (const auto& peer : bus->cached_roster()) {
-                if (peer.online && peer.in_zone && peer.target_id != 0 &&
+                if (peer.online && peer.target_id != 0 &&
                     iequals_ascii(peer.character_name, assist_name) &&
                     (peer.zone_short.empty() || iequals_ascii(peer.zone_short, snap.zone_short))) {
                     snap.assist_target_id = peer.target_id;

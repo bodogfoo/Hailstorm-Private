@@ -123,6 +123,17 @@ bool contains_ci(std::string_view hay, std::string_view needle) {
     return it != hay.end();
 }
 
+std::string_view trim_sv(std::string_view value) {
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) value.remove_prefix(1);
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) value.remove_suffix(1);
+    return value;
+}
+
+bool is_favorite_world(std::string_view name, const std::vector<std::string>& favorites) {
+    return std::any_of(favorites.begin(), favorites.end(),
+                       [&](const std::string& favorite) { return iequals(favorite, name); });
+}
+
 // ---- The gamepad on the pre-game screens ----------------------------------
 
 struct ScreenPad {

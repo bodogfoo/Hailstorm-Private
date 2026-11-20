@@ -274,6 +274,7 @@ struct DesiredGemEntry {
 
 struct CombatProfile {
     std::string profile_name = "Default";
+    std::string profile_path; // effective profile file used for reload/save
     std::string class_short = "NEC";
     std::string role;
     std::string mode = "solo";

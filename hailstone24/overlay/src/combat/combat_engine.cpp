@@ -175,6 +175,11 @@ void CombatEngine::set_assist_target(std::string assist_target) {
 
 void CombatEngine::set_follow_target(std::string follow_target) {
     profile_.follow_target = std::move(follow_target);
+    if (profile_.follow_target.empty()) {
+        if (profile_.movement_mode == MovementMode::Follow) profile_.movement_mode = MovementMode::None;
+    } else {
+        profile_.movement_mode = MovementMode::Follow;
+    }
     append_action(last_tick_ms_, profile_.dry_run, "config",
                   "Follow target set to '" + profile_.follow_target + "'", nullptr);
 }

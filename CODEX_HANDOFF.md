@@ -1,21 +1,9 @@
 # Project Hailstone 24 — Ubuntu Workstation Build & Validation Handoff
 
-See `hailstone24/CODEX_HANDOFF.md` for complete architecture notes, verification results, and build/test commands.
+See `hailstone24/CODEX_HANDOFF.md` for complete sync details, container verification results, and safe branch/build instructions.
 
 ## Summary
-- **Baseline**: Clean upstream Hailstone commit `61e5135f78c6b492ad88ac029a469fee114f60cb`.
-- **Native Combat Controller**: Implemented in C++20 (`src/combat/*`, `src/app/hailstone_combat_adapter.{h,cpp}`, `src/app/lua_ui_combat.{h,cpp}`) and native Modern Lua UI (`ui/modern/combat.lua`), with zero MacroQuest/RGMercs/MQ-plugin/`/stick` dependencies.
-- **Preserved Systems**: MQ login/keyring import (`--import-mq-logins`), server/world auto-login, group profiles (`profiles/*.ini`, `.json`), per-character isolation, `ExecutionState`, `SessionBus` IPC, and Linux `GPU IPC`.
-- **Legacy Archive**: Previous RGMercs/MQ compatibility work is preserved under `hailstone24/reference/rgmercs_mq_compat/`.
-
-## Quick Build & Test on Ubuntu 24.04
-```bash
-git clone https://github.com/projecthailstone/hailstone-client.git hailstone24-src
-cd hailstone24-src
-git checkout 61e5135f78c6b492ad88ac029a469fee114f60cb
-git apply /path/to/hailstone24/hailstone24.patch
-
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DHAILSTONE_BROWSER=OFF -DHAILSTONE_BUILD_TESTS=ON
-cmake --build build -j"$(nproc)"
-ctest --test-dir build --output-on-failure -R "Combat|ExecutionController|FramePace|SessionBus|MQ AutoLogin|GroupProfile|Login auto-select|Server select|EQ menu|GPU IPC"
-```
+- **Synced from `bodogfoo/Hailstorm-Private` branch `codex/native-hailstone-sync` (`14ccd108`)**: Pulled Codex's verified native Hailstone build fixes (`Automation::run_command`, `ack.seq`, `config_.set`, `hailstone_combat_adapter.cpp`, `ServerSelectSet`, CLI `ParsedArgs`, `set_follow_target` follow-mode fix, `profile_path`, and `dev_screens.cpp` helpers) into `hailstone24/overlay/` and `hailstone24/hailstone24.patch`.
+- **Additional CI & Test Fixes Applied**: Regenerated `tests/lua_ui_api_mock.lua` (`CombatDo`/`CombatStatus`) and `docs/ui-api-reference.md` so `tools/migrate_ui_api.py --mock-adapter --check` and `tools/gen_ui_api_docs.py --check` pass cleanly, and added a `set_follow_target` unit test in `tests/hailstone24/combat_controller_test.cpp`.
+- **Test & Cache Security Fixes Applied**: Isolated `tests/scratch_dir.h` (`0700` on POSIX) against Ubuntu `umask 0002`, preserved strict cache leaf security (`0700`) and shared/world-writable ancestor rejection in `src/platform/shared_file.{h,cpp}` while permitting verified single-user UPG `0775` ancestors, added UPG vs shared-group regression tests in `tests/shared_file_test.cpp`, guarded null `game_dir()` dereferences (`--no-skip` SIGSEGV reproduced under ASan+UBSan and Release `-O3`) and added a synthetic EQG `.lay` dressing regression test in `tests/appearance_test.cpp`, and regenerated the 82-file `hailstone24/hailstone24.patch` (verified clean against `61e5135f`).
+- **Important Branch Topology Note**: `origin/main` (`3ce8b577`) in `Hailstorm-Private` currently holds the AI Studio Workbench layout (`package.json`, `server.ts`, `src/`, `hailstone24/`), whereas `codex/native-hailstone-sync` (`14ccd108`) holds the full C++ `hailstone-client` tree (`61e5135f` baseline) with no common Git ancestor. See `hailstone24/CODEX_HANDOFF.md` before merging so existing workbench files are preserved.

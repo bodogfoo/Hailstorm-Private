@@ -535,7 +535,7 @@ public:
             });
             bus_.set_on_command([this](const ipc::CommandPacket& cmd) {
                 ipc::CommandAckPacket ack;
-                ack.command_id = cmd.command_id;
+                ack.seq = cmd.seq;
                 if (cmd.command == "/estop" || cmd.command.rfind("/estop ", 0) == 0) {
                     std::string msg;
                     ack.ok = handle_combat_command("estop", {}, msg);
