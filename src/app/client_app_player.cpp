@@ -532,6 +532,13 @@ void ClientApp::update_player(float dt) {
             e.command <= game::mechanics::kCmdStrafeRight)
             player_moved = true;
     }
+    const auto& km = actions_ui_->keymap();
+    last_manual_backward_ = keys && km.held(game::KeyCommand::BACK);
+    last_player_moved_ = player_moved ||
+                         (keys && (km.held(game::KeyCommand::FORWARD) ||
+                                   km.held(game::KeyCommand::BACK) ||
+                                   km.held(game::KeyCommand::STRAFE_LEFT) ||
+                                   km.held(game::KeyCommand::STRAFE_RIGHT)));
     // The keys and clicks act once a drawn frame: the key map's own commands, placing, the item clicks, the test
     // drivers. (Before the movement, as they ran before; ahead of /follow and /nav now, since those run per step.)
     if (keys) {
@@ -690,6 +697,8 @@ void ClientApp::update_player(float dt) {
             conn_->consider();
         }
     }
+    tick_combat_controller();
+
     // The game rules run once per step of the game clock (core/step_clock.h, docs/mechanics.md "Frame rate"): none,
     // one or several per drawn frame. A step is ProcessControls, /follow and /nav steering, the physics, the collision
     // pass and the position report, as the original ran them once per frame at 60 frames a second.

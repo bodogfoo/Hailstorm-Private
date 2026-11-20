@@ -1123,11 +1123,13 @@ void VkContext::set_scene_options(const SceneOptions& options, const std::filesy
         vkDeviceWaitIdle(device_);
         create_point_shadow_map(point_size, point_slots);
     }
-    if (samples != scene_samples_ || rescaled || upscaler_changed || frame_gen_changed) {
+    if (!suspended_ && (samples != scene_samples_ || rescaled || upscaler_changed || frame_gen_changed)) {
         vkDeviceWaitIdle(device_);
         destroy_scene_targets();
         scene_samples_ = samples;
         create_scene_targets();
+    } else if (suspended_) {
+        scene_samples_ = samples;
     }
     log::info("scene: {}x MSAA, upscaler {}{}, render scale {:.2f} ({}x{}), tonemap {}, exposure {:+.2f} EV, shadows {}, "
               "light shadows {} x {}, grade {:+.2f} / {:.2f} / {:.2f}",
@@ -1705,12 +1707,27 @@ bool VkContext::request_screenshot(std::filesystem::path path, std::uint32_t max
     return true;
 }
 
+void VkContext::suspend_for_background() {
+    if (suspended_) return;
+    wait_idle();
+    destroy_scene_targets();
+    suspended_ = true;
+}
+
+void VkContext::resume_for_foreground() {
+    if (!suspended_) return;
+    wait_idle();
+    suspended_ = false;
+    resize_pending_ = true;
+    history_valid_ = false;
+}
+
 std::optional<FrameInfo> VkContext::begin_frame_commands() {
     if (gpu_shared_cache_) {
         gpu_shared_cache_->keep_alive();
         if (gpu_shared_cache_->needs_localize()) localize_shared_textures();
     }
-    if (window_.minimized()) return std::nullopt;
+    if (suspended_ || window_.minimized()) return std::nullopt;
 
     std::uint32_t w = 0, h = 0;
     window_.framebuffer_size(w, h);

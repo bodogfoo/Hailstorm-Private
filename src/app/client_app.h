@@ -65,6 +65,18 @@ struct ClientOptions {
     // and what update_at_start found (a rolled-back update), for the login screen.
     bool updates = false;
     std::string update_note;
+
+    // Hailstone 24 multibox, group profile, and auto-login controls.
+    bool headless_bg = false;       // start in BACKGROUND_HEADLESS (hidden window, suspended swapchain/scene targets)
+    bool auto_login = false;        // automatically submit saved account, select world, and enter character
+    bool auto_kick = false;         // automatically kick existing logged-in character on KickOffered
+    int bg_tick_hz = 0;             // 0 = hailstone.ini multibox.bg_tick_hz (default 25 Hz), clamped 10..60
+    std::string gpu_mode;           // "deferred" | "cached" | "shared-broker"
+    std::string session_id;         // unique session identifier for IPC bus & broker
+    std::string ipc_socket;         // AF_UNIX socket path (empty = default Hailstone24 broker path)
+    std::string profile;            // --profile: group profile id/name/path in profiles/ (resolved pre-autologin)
+    std::string slot;               // --slot: slot number, session_id, or character name within --profile
+    std::string settings_path;      // --settings-path: isolated character settings path confined to data_dir
 };
 
 // The playable client: login, server and character select, then the zone. options.auto_password is wiped once the

@@ -245,6 +245,7 @@ local descriptors = {
   {"LoginScreen", "pregame", "LoginScreen", "function", 0, false},
   {"LoginSet", "pregame", "LoginSet", "function", 0, false},
   {"ServerSelect", "pregame", "ServerSelect", "function", 0, false},
+  {"ServerSelectSet", "pregame", "ServerSelectSet", "function", 0, false},
   {"ServerSelectDo", "pregame", "ServerSelectDo", "function", 0, false},
   {"ItemPreviewControl", "preview", "Control", "function", 0, false},
   {"ItemPreview", "preview", "Draw", "function", 0, false},

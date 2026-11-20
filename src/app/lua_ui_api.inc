@@ -96,6 +96,10 @@ UI_METHOD("ChatTellWindows", "chat", "TellWindows", 0)
 UI_METHOD("ChatText", "chat", "Text", 0)
 UI_METHOD("ChatWindows", "chat", "Windows", 0)
 
+// combat
+UI_METHOD("CombatDo", "combat", "Do", kCapActions | kCapCommands | kCapMove)
+UI_METHOD("CombatStatus", "combat", "Status", 0)
+
 // compare
 UI_METHOD("CompareBagSlotItem", "compare", "BagSlotItem", 0)
 UI_METHOD("CompareItem", "compare", "Item", 0)
@@ -305,6 +309,7 @@ UI_METHOD("LoginScreen", "pregame", "LoginScreen", 0)
 UI_METHOD("LoginSet", "pregame", "LoginSet", 0)
 UI_METHOD("ServerSelect", "pregame", "ServerSelect", 0)
 UI_METHOD("ServerSelectDo", "pregame", "ServerSelectDo", 0)
+UI_METHOD("ServerSelectSet", "pregame", "ServerSelectSet", 0)
 
 // preview
 UI_METHOD("ItemPreviewControl", "preview", "Control", 0)

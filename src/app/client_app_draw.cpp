@@ -409,6 +409,18 @@ void ClientApp::update_ui_host() {
     }
     h.web = web_service_.get();
     h.scripts = automation_ ? &automation_->scripts() : nullptr;
+    if (!h.combat.status && combat_engine_) {
+        h.combat.status = [this]() -> combat::CombatStatusSnapshot {
+            return combat_engine_->status_snapshot(
+                last_combat_snapshot_.in_zone ? &last_combat_snapshot_ : nullptr);
+        };
+        h.combat.profile = [this]() -> combat::CombatProfile {
+            return combat_engine_->profile();
+        };
+        h.combat.command = [this](std::string_view action, std::string_view arg, std::string& msg) -> bool {
+            return handle_combat_command(action, arg, msg);
+        };
+    }
     h.registry = automation_ ? &automation_->registry() : nullptr;
     if (!h.tlo_context && automation_) h.tlo_context = [this]() -> const mq::Context& { return automation_->context(); };
     h.in_game = screen_ == Screen::InGame && player_ready_ && conn_;

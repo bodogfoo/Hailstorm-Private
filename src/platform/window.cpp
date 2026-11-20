@@ -736,6 +736,26 @@ void Window::set_text_input(bool on) {
 
 bool Window::focused() const { return (SDL_GetWindowFlags(window_) & SDL_WINDOW_INPUT_FOCUS) != 0; }
 
+void Window::set_visible(bool visible) {
+    if (!window_) return;
+    if (visible) {
+        SDL_ShowWindow(window_);
+    } else {
+        SDL_HideWindow(window_);
+    }
+}
+
+bool Window::visible() const {
+    return window_ && (SDL_GetWindowFlags(window_) & SDL_WINDOW_HIDDEN) == 0;
+}
+
+void Window::raise_and_focus() {
+    if (!window_) return;
+    if (SDL_GetWindowFlags(window_) & SDL_WINDOW_HIDDEN) SDL_ShowWindow(window_);
+    if (SDL_GetWindowFlags(window_) & SDL_WINDOW_MINIMIZED) SDL_RestoreWindow(window_);
+    SDL_RaiseWindow(window_);
+}
+
 WindowMode Window::mode() const {
     if (!(SDL_GetWindowFlags(window_) & SDL_WINDOW_FULLSCREEN)) return WindowMode::Windowed;
     return SDL_GetWindowFullscreenMode(window_) ? WindowMode::Fullscreen : WindowMode::Borderless;

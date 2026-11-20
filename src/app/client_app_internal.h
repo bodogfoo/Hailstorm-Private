@@ -7,7 +7,13 @@
 #include <exception>
 
 #include "app/updater.h"
+#include "app/execution_state.h"
+#include "app/hailstone_combat_adapter.h"
+#include "combat/combat_engine.h"
+#include "combat/combat_profile.h"
 #include "app/frame_pace.h"
+#include "core/group_profile.h"
+#include "ipc/session_bus.h"
 #include "platform/process.h"
 #include "core/step_clock.h"
 #include "core/worker_pool.h"
@@ -185,7 +191,10 @@ constexpr int kMaxCameraZoomSetting = 150;
 // The game window at start (app/window_desc.h), from hailstone.ini as it is now.
 inline platform::WindowDesc window_desc(const ClientOptions& o) {
     Config c;
-    return window_desc(o, c.load(default_config_path()) ? &c : nullptr);
+    platform::WindowDesc d = window_desc(o, c.load(default_config_path()) ? &c : nullptr);
+    d.hidden = o.headless_bg;
+    if (o.headless_bg) d.maximized = false;
+    return d;
 }
 
 // The UI scale: --ui-scale, else hailstone.ini ui.scale (percent; 0 or none: the display's own scale). The fonts
@@ -271,6 +280,21 @@ public:
         shader_dir_ = platform::shaders_dir();
         config_path_ = default_config_path();
         config_.load(config_path_);
+        explicit_account_arg_ = !opts_.account.empty();
+        explicit_autologin_arg_ = opts_.auto_login;
+        apply_startup_group_profile();
+        {
+            const int bg_hz = opts_.bg_tick_hz > 0
+                                  ? opts_.bg_tick_hz
+                                  : config_.get_int("multibox.bg_tick_hz", kBackgroundTickHz);
+            const std::string gpu_str = !opts_.gpu_mode.empty()
+                                            ? opts_.gpu_mode
+                                            : config_.get_string("multibox.gpu_mode", "cached");
+            execution_.configure(opts_.headless_bg, bg_hz, parse_gpu_retention_mode(gpu_str));
+            if (opts_.headless_bg) {
+                vk_.suspend_for_background();
+            }
+        }
         if (opts_.clip_plane != 15) clip_plane_arg_ = opts_.clip_plane;
         if (opts_.max_fps > 0 || opts_.max_fps == kMaxFpsAuto) max_fps_arg_ = opts_.max_fps;
         // The asset folder: --game-dir or EQ_GAME_DIR, else hailstone.ini assets.path, else the picker asks.
@@ -296,6 +320,7 @@ public:
         // The settings (hailstone.ini's until a character enters, then the character's: apply_settings), before the
         // renderers: their pipelines take the sample count.
         apply_settings();
+        if (!slot_settings_override_.empty()) use_character_settings(slot_settings_override_);
         log_memory("startup: settings and render targets");
         // The saved servers (core/server_profile.h), the last one used picked (--server another); the old
         // login.host/port/username keys become the first.
@@ -308,6 +333,11 @@ public:
         bool named_server = !opts_.server.empty() && ui::select_profile_named(login_view_, opts_.server);
         if (!opts_.server.empty() && !named_server)
             log::warn("--server {}: no saved server has this id or name", opts_.server);
+        login_view_.profiles_dir = platform::profiles_dir();
+        reload_group_profiles();
+        if (active_group_profile_) select_group_profile(active_group_profile_->id);
+        if (!startup_group_error_.empty() && login_view_.status.text.empty())
+            login_view_.status = {startup_group_error_, true};
         if (auto strings = game_.find("eqlsstr_us.txt")) net::load_login_strings(*strings);
         // Redeem short-lived launcher tickets while the expensive assets/renderers initialize. Only this worker
         // touches LoginClient until it is joined below; Session maintains the authenticated connection meanwhile.
@@ -487,10 +517,77 @@ public:
             return collision_->line_of_sight(glm::vec3(a[0], a[1], a[2]), glm::vec3(b[0], b[1], b[2]));
         };
         automation_ = std::make_unique<Automation>(aenv);
+        combat_engine_ = std::make_unique<combat::CombatEngine>();
+        {
+            const std::string bus_sock = !opts_.ipc_socket.empty()
+                                             ? opts_.ipc_socket
+                                             : config_.get_string("multibox.ipc_socket", "");
+            const std::string sid = !opts_.session_id.empty()
+                                        ? opts_.session_id
+                                        : (!opts_.account.empty()
+                                               ? opts_.account
+                                               : (!opts_.auto_character.empty()
+                                                      ? opts_.auto_character
+                                                      : std::format("session-{}", static_cast<unsigned>(platform::process_id()))));
+            session_id_ = sid;
+            bus_.set_on_state_control([this](const ipc::StateControlPacket& ctrl) {
+                apply_execution_state(ctrl.desired_state);
+            });
+            bus_.set_on_command([this](const ipc::CommandPacket& cmd) {
+                ipc::CommandAckPacket ack;
+                ack.seq = cmd.seq;
+                if (cmd.command == "/estop" || cmd.command.rfind("/estop ", 0) == 0) {
+                    std::string msg;
+                    ack.ok = handle_combat_command("estop", {}, msg);
+                    ack.message = msg;
+                    return ack;
+                }
+                if (cmd.command == "/combat" || cmd.command.rfind("/combat ", 0) == 0) {
+                    std::string rest = cmd.command.size() > 7 ? cmd.command.substr(8) : std::string();
+                    run_slash_combat(rest);
+                    ack.ok = true;
+                    ack.message = "combat dispatched";
+                    return ack;
+                }
+                if (automation_) {
+                    automation_->run_command(cmd.command);
+                    ack.ok = true;
+                    ack.message = "dispatched";
+                } else {
+                    ack.ok = false;
+                    ack.message = "client command router unavailable";
+                }
+                return ack;
+            });
+            if (!bus_sock.empty() || !opts_.session_id.empty() || opts_.headless_bg ||
+                config_.get_bool("multibox.auto_connect_bus", true)) {
+                bus_.connect(bus_sock.empty() ? ipc::default_bus_socket_path() : bus_sock, session_id_);
+            }
+        }
         ui_host_.nameplates = &automation_->nameplates();
         lua_ui_->add_ui_api([this](lua_State* L) { register_ui_api(L); });
         automation_->hooks().add_command(plugin::Hooks::kClient, "/lighting",
                                          [this](std::string_view args) { lighting_command(args); });
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/switch", [this](std::string_view args) {
+            while (!args.empty() && args.front() == ' ') args.remove_prefix(1);
+            if (args.empty()) {
+                if (conn_) conn_->ui_message("Usage: /switch <character|session_id|fg|bg>");
+                return;
+            }
+            if (args == "fg" || args == "foreground") {
+                apply_execution_state(ExecutionState::ForegroundFull);
+                return;
+            }
+            if (args == "bg" || args == "background") {
+                apply_execution_state(ExecutionState::BackgroundHeadless);
+                return;
+            }
+            if (bus_.connected()) {
+                bus_.request_switch_foreground(std::string(args));
+            } else if (conn_) {
+                conn_->ui_message("[Hailstone24] Not connected to session bus; start hailstone24_broker.");
+            }
+        });
         stats_ui_->set_open(opts_.show_stats);
         // The performance window (app/perf_ui.h): Ctrl+Shift+P, /perf, or ui.perf_window=1.
         perf_ui_.set_open(config_.get_bool("ui.perf_window", false));
@@ -573,6 +670,8 @@ public:
         // The isometric camera when it was the one in use (hailstone.ini camera.iso, /camera).
         if (config_.get_bool("camera.iso", false)) set_camera_type(game::kCameraIsometric);
         game::reset_camera_defaults(cameras_);
+        login_view_.auto_login =
+            opts_.auto_login || (!startup_group_applied_ && config_.get_bool("login.auto_login", false));
         if (opts_.login_launch.token_requested) {
             token_login_worker.finish();
             if (token_login_worker.error) std::rethrow_exception(token_login_worker.error);
@@ -601,7 +700,21 @@ public:
             core::wipe(opts_.auto_password); // the copy in the fields is the one start_login uses and lets go
             start_login();
         } else if (!opts_.account.empty()) {
-            start_account_login();
+            if (startup_group_applied_ && !opts_.auto_login && !explicit_account_arg_) {
+                ui::pick_account(login_view_, opts_.account);
+                log::info("group profile: pre-selected account {} (auto_login off for this slot)", opts_.account);
+            } else {
+                start_account_login();
+            }
+        } else if (login_view_.auto_login) {
+            if (!login_view_.host.empty() && !login_view_.username.empty() && !login_view_.password.empty()) {
+                log::info("auto-login: logging in saved account {}", login_view_.username);
+                start_login();
+            } else if (opts_.auto_login) {
+                const std::string why = "Auto-login needs a saved server, account, and keyring password.";
+                log::warn("--auto-login: {}", why);
+                login_view_.status = {why, true};
+            }
         }
     }
 
@@ -614,6 +727,17 @@ private:
     // The login screen's Log in box: saves the server, starts a Hailstone for each box account after the first
     // (--server --account --character) and logs this window in to the first (client_app_login.cpp).
     void start_box_login();
+    // MacroQuest-style group profile launcher (profiles/<name>.ini or .json; client_app_login.cpp).
+    void apply_startup_group_profile();
+    void reload_group_profiles();
+    void refresh_group_slot_statuses(bool force = false);
+    void select_group_profile(std::string_view id);
+    void launch_group();
+    void launch_group_slot(int slot_number);
+    void stop_group();
+    void relaunch_group();
+    bool launch_group_slot_process(const core::GroupProfile& gp, const core::GroupSlot& slot, bool foreground_here,
+                                   std::string& error);
     // --account: the saved account's keyring password, then start_login(); else the login screen says why.
     void start_account_login();
     // The login screen's Characters list: logs in to the picked character's account (its saved password, or the
@@ -1090,6 +1214,22 @@ private:
     // (ActorEmitters::simulate_async), or at once for a frame not drawn.
     std::function<void()> emitter_step_;
     render::VkContext vk_;
+    ExecutionController execution_;
+    ipc::SessionBusClient bus_;
+    std::string session_id_;
+    Clock::time_point last_telemetry_at_{};
+    Clock::time_point last_drawn_time_{};
+    void apply_execution_state(ExecutionState target);
+    void publish_bus_telemetry();
+    std::unique_ptr<combat::CombatEngine> combat_engine_;
+    combat::CombatSnapshot last_combat_snapshot_{};
+    std::filesystem::path combat_char_dir_;
+    bool last_player_moved_ = false;
+    bool last_manual_backward_ = false;
+    void tick_combat_controller();
+    void load_combat_profile_for_zone(const std::filesystem::path& char_dir, std::string_view class_short);
+    bool handle_combat_command(std::string_view action, std::string_view arg, std::string& out_msg);
+    void run_slash_combat(const std::string& args);
     // Declared after vk_, so it is destroyed before the Vulkan device it holds objects of: draw_nameplates makes it at its
     // first use.
     std::unique_ptr<NameplateLayer> plate_layer_; // draw_nameplates, made at its first use
@@ -1145,6 +1285,7 @@ private:
     // The server select's rows in the order it lists them (ui::server_list_order): row -> index into servers_.
     std::vector<std::size_t> server_rows_;
     bool auto_play_sent_ = false;
+    bool auto_kick_sent_ = false;
     bool token_login_active_ = false; // through world/character selection; no keyring/account persistence
     // The login view is the launcher's (ui::begin_launcher_login_view) until back_to_login restores the normal one,
     // on the saved server picked before it when the ticket's server was not a saved one.
@@ -1166,6 +1307,14 @@ private:
     std::vector<std::string> worlds_noted_; // the worlds the login server listed, as set_listed_worlds() last had them
     platform::ChildProcesses box_clients_; // the box set's other windows
     platform::ChildProcesses tools_;       // the tool add-ons the player started (left running when Hailstone quits)
+    bool explicit_account_arg_ = false;
+    bool explicit_autologin_arg_ = false;
+    bool startup_group_applied_ = false;
+    std::string startup_group_error_;
+    std::optional<core::GroupProfile> active_group_profile_;
+    std::vector<core::GroupProfile> loaded_group_profiles_;
+    std::filesystem::path slot_settings_override_;
+    Clock::time_point last_group_status_at_{};
     // The updater (app/client_app_update.cpp, docs/updater.md): null when updates are off for this run.
     std::unique_ptr<Updater> updater_;
     UpdateSettings update_settings_;

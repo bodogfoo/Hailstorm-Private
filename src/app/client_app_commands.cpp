@@ -5,6 +5,8 @@
 // [Defaults] / [Options]). GameConnection::run_slash_command hands them here (set_client_commands).
 //
 
+#include <algorithm>
+#include <cctype>
 #include <format>
 #include <sstream>
 
@@ -209,6 +211,16 @@ bool ClientApp::client_command(std::string_view h, const std::string& args) {
     }
     if (h == "Hailstone_camera") {
         camera_command(args);
+        return true;
+    }
+    if (h == "Hailstone_combat") {
+        run_slash_combat(args);
+        return true;
+    }
+    if (h == "Hailstone_estop") {
+        std::string msg;
+        handle_combat_command("estop", {}, msg);
+        c.show_chat(msg.empty() ? "Emergency stop activated." : msg, 0xd);
         return true;
     }
     if (h == "Hailstone_finditem") {
@@ -598,6 +610,298 @@ bool ClientApp::client_command(std::string_view h, const std::string& args) {
         return true;
     }
     return client_info_command(h, args);
+}
+
+void ClientApp::load_combat_profile_for_zone(const std::filesystem::path& char_dir,
+                                             std::string_view class_short) {
+    if (!combat_engine_) return;
+    combat_char_dir_ = char_dir;
+    const std::string group_id = active_group_profile_ ? active_group_profile_->id : opts_.profile;
+    combat::CombatProfile prof;
+    std::string err;
+    if (!combat::resolve_character_combat_profile(platform::data_dir(), char_dir, group_id,
+                                                class_short, prof, err)) {
+        log::warn("combat: profile load note: {}", err);
+        prof = combat::default_combat_profile_for_class(class_short);
+    }
+    if (!char_dir.empty()) {
+        combat::migrate_imported_combat_settings(platform::data_dir(), char_dir / "hailstone.ini", prof);
+        if (prof.profile_path.empty()) {
+            prof.profile_path = (char_dir / "combat_profile.ini").string();
+        }
+    }
+    combat_engine_->set_profile(std::move(prof));
+    HailstoneCombatAdapter actions(conn_.get(), nav_.get(), &ui_host_);
+    const std::string zone = conn_ ? conn_->world().zone_short_name : std::string();
+    combat_engine_->on_zone_change(&actions, zone);
+}
+
+void ClientApp::tick_combat_controller() {
+    if (!combat_engine_ || !conn_ || !player_ready_ || screen_ != Screen::InGame) return;
+    const std::uint64_t now_ms = static_cast<std::uint64_t>(net::GameConnection::now_ms());
+    const game::mechanics::Character* ch = stats_ui_ ? stats_ui_->character() : nullptr;
+    last_combat_snapshot_ = build_combat_snapshot(*conn_, nav_.get(), &bus_, ch,
+                                                  combat_engine_->profile(),
+                                                  last_player_moved_, last_manual_backward_,
+                                                  server_profile_.name, now_ms);
+    HailstoneCombatAdapter actions(conn_.get(), nav_.get(), &ui_host_);
+    combat_engine_->tick(last_combat_snapshot_, actions);
+}
+
+bool ClientApp::handle_combat_command(std::string_view action, std::string_view arg,
+                                      std::string& out_msg) {
+    if (!combat_engine_) {
+        out_msg = "Combat controller not initialized";
+        return false;
+    }
+    auto lower = [](std::string_view v) {
+        std::string out(v);
+        for (char& ch : out) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        return out;
+    };
+    auto parse_bool = [&](std::string_view v, bool cur) {
+        const std::string lv = lower(v);
+        if (lv == "toggle") return !cur;
+        if (lv == "1" || lv == "true" || lv == "on" || lv == "yes") return true;
+        if (lv == "0" || lv == "false" || lv == "off" || lv == "no") return false;
+        return !cur;
+    };
+    const std::string act = lower(action);
+    HailstoneCombatAdapter actions(conn_.get(), nav_.get(), &ui_host_);
+
+    if (act == "start" || act == "on") {
+        combat_engine_->start("Started by player");
+        out_msg = "Combat controller started";
+        return true;
+    }
+    if (act == "stop" || act == "off") {
+        combat_engine_->stop(&actions, "Stopped by player");
+        out_msg = "Combat controller stopped";
+        return true;
+    }
+    if (act == "pause") {
+        combat_engine_->pause(&actions, "Paused by player");
+        out_msg = "Combat controller paused";
+        return true;
+    }
+    if (act == "resume") {
+        combat_engine_->resume("Resumed by player");
+        out_msg = "Combat controller resumed";
+        return true;
+    }
+    if (act == "estop" || act == "emergency_stop") {
+        combat_engine_->emergency_stop(actions, arg.empty() ? std::string_view("Emergency stop activated") : arg);
+        out_msg = "EMERGENCY STOP activated - movement, casting, and attack halted";
+        return true;
+    }
+    if (act == "reset_estop" || act == "reset") {
+        const bool ok = combat_engine_->reset_emergency_stop("Emergency stop cleared by player");
+        out_msg = ok ? "Emergency stop reset (controller remains Idle)" : "Not in EmergencyStop state";
+        return ok;
+    }
+    if (act == "status") {
+        const auto st = combat_engine_->status_snapshot(last_combat_snapshot_.in_zone ? &last_combat_snapshot_ : nullptr);
+        out_msg = std::format("Combat: {} | Move: {} | Target: {} | Reason: {}{}",
+                              combat::combat_state_name(st.state),
+                              combat::movement_mode_name(st.movement_mode),
+                              st.target_name.empty() ? "none" : st.target_name,
+                              st.idle_reason.empty() ? st.transition_reason : st.idle_reason,
+                              st.dry_run ? " [DRY-RUN]" : "");
+        return true;
+    }
+    if (act == "reload") {
+        std::string cls;
+        if (conn_) {
+            if (const game::Spawn* me = conn_->world().player()) {
+                cls = std::string(game::class_short_name(me->class_id));
+            }
+        }
+        load_combat_profile_for_zone(combat_char_dir_, cls);
+        out_msg = "Combat profile reloaded";
+        return true;
+    }
+    if (act == "save") {
+        std::filesystem::path target = combat_char_dir_.empty()
+            ? std::filesystem::path(combat_engine_->profile().profile_path)
+            : (combat_char_dir_ / "combat_profile.ini");
+        if (target.empty() || !combat::is_path_within_root(platform::data_dir(), target)) {
+            out_msg = "Refused: combat profile path outside Hailstone data root";
+            return false;
+        }
+        combat_engine_->mutable_profile().profile_path = target.string();
+        const bool ok = combat::save_combat_profile(combat_engine_->profile(), target, out_msg);
+        if (ok) out_msg = std::format("Saved {}", target.filename().string());
+        return ok;
+    }
+    if (act == "dry_run") {
+        const bool next = parse_bool(arg, combat_engine_->profile().dry_run);
+        combat_engine_->set_dry_run(next);
+        out_msg = next ? "Dry-run enabled" : "Dry-run disabled";
+        return true;
+    }
+    if (act == "auto_loadout") {
+        const bool next = parse_bool(arg, combat_engine_->profile().auto_loadout);
+        combat_engine_->set_auto_loadout(next);
+        out_msg = next ? "Automatic gem loadout overwrite ENABLED" : "Automatic gem loadout disabled (manual gems protected)";
+        return true;
+    }
+    if (act == "rememorize_missing") {
+        combat_engine_->mutable_profile().rememorize_missing =
+            parse_bool(arg, combat_engine_->profile().rememorize_missing);
+        out_msg = "Updated rememorize_missing";
+        return true;
+    }
+    if (act == "rememorize_now") {
+        combat_engine_->request_rememorize();
+        out_msg = "Requested safe missing-gem memorization";
+        return true;
+    }
+    if (act == "allow_melee_attack") {
+        const bool next = parse_bool(arg, combat_engine_->profile().allow_melee_attack);
+        combat_engine_->mutable_profile().allow_melee_attack = next;
+        if (!next) actions.set_auto_attack(false);
+        out_msg = next ? "Melee auto-attack enabled" : "Melee auto-attack disabled";
+        return true;
+    }
+    if (act == "allow_pet_attack") {
+        const bool next = parse_bool(arg, combat_engine_->profile().allow_pet_attack);
+        combat_engine_->mutable_profile().allow_pet_attack = next;
+        if (!next) actions.pet_back();
+        out_msg = next ? "Pet attack enabled" : "Pet attack disabled";
+        return true;
+    }
+    if (act == "use_abilities") {
+        combat_engine_->mutable_profile().use_abilities =
+            parse_bool(arg, combat_engine_->profile().use_abilities);
+        out_msg = "Updated use_abilities";
+        return true;
+    }
+    if (act == "melee_behind") {
+        combat_engine_->mutable_profile().melee_behind =
+            parse_bool(arg, combat_engine_->profile().melee_behind);
+        out_msg = "Updated melee_behind";
+        return true;
+    }
+    if (act == "pause_on_manual_move") {
+        combat_engine_->mutable_profile().pause_on_manual_move =
+            parse_bool(arg, combat_engine_->profile().pause_on_manual_move);
+        out_msg = "Updated pause_on_manual_move";
+        return true;
+    }
+    if (act == "movement_mode") {
+        const auto m = combat::parse_movement_mode(arg, combat_engine_->profile().movement_mode);
+        combat_engine_->set_movement_mode(m);
+        out_msg = std::format("Movement mode: {}", combat::movement_mode_name(m));
+        return true;
+    }
+    if (act == "assist_target") {
+        std::string target(arg);
+        if (lower(target) == "none") target.clear();
+        combat_engine_->set_assist_target(target);
+        out_msg = target.empty() ? "Assist target cleared" : std::format("Assist target: {}", target);
+        return true;
+    }
+    if (act == "follow_target") {
+        std::string target(arg);
+        if (lower(target) == "none") target.clear();
+        combat_engine_->set_follow_target(target);
+        out_msg = target.empty() ? "Follow target cleared" : std::format("Follow target: {}", target);
+        return true;
+    }
+    if (act == "retreat_hp_pct" || act == "engage_at_hp_pct") {
+        try {
+            const int v = std::clamp(std::stoi(std::string(arg)), 0, 100);
+            if (act == "retreat_hp_pct") combat_engine_->mutable_profile().retreat_hp_pct = v;
+            else combat_engine_->mutable_profile().engage_at_hp_pct = v;
+            out_msg = std::format("{} = {}%", act, v);
+            return true;
+        } catch (...) {
+            out_msg = "Invalid percentage";
+            return false;
+        }
+    }
+    if (act == "assist_range" || act == "melee_range" || act == "ranged_min_range" ||
+        act == "ranged_max_range" || act == "disengage_distance" || act == "follow_distance") {
+        try {
+            const float v = std::clamp(std::stof(std::string(arg)), 0.0f, 500.0f);
+            auto& p = combat_engine_->mutable_profile();
+            if (act == "assist_range") p.assist_range = v;
+            else if (act == "melee_range") p.melee_range = v;
+            else if (act == "ranged_min_range") p.ranged_min_range = v;
+            else if (act == "ranged_max_range") p.ranged_max_range = v;
+            else if (act == "disengage_distance") p.disengage_distance = v;
+            else p.follow_distance = v;
+            out_msg = std::format("{} = {:.1f}", act, v);
+            return true;
+        } catch (...) {
+            out_msg = "Invalid distance";
+            return false;
+        }
+    }
+    if (act == "toggle_rule") {
+        auto& rules = combat_engine_->mutable_profile().rules;
+        try {
+            const std::size_t idx = static_cast<std::size_t>(std::stoul(std::string(arg)));
+            if (idx >= 1 && idx <= rules.size()) {
+                rules[idx - 1].enabled = !rules[idx - 1].enabled;
+                out_msg = std::format("Rule {} {}", rules[idx - 1].name,
+                                      rules[idx - 1].enabled ? "enabled" : "disabled");
+                return true;
+            }
+        } catch (...) {}
+        for (auto& r : rules) {
+            if (lower(r.name) == lower(arg)) {
+                r.enabled = !r.enabled;
+                out_msg = std::format("Rule {} {}", r.name, r.enabled ? "enabled" : "disabled");
+                return true;
+            }
+        }
+        out_msg = "Unknown rule";
+        return false;
+    }
+    if (act == "clear_logs") {
+        combat_engine_->clear_logs();
+        out_msg = "Combat logs cleared";
+        return true;
+    }
+    if (act == "ui" || act == "toggle") {
+        if (ui_api_) ui_api_->toggle("CombatWnd");
+        out_msg = "Toggled Combat window";
+        return true;
+    }
+    if (act == "show") {
+        if (ui_api_) ui_api_->show("CombatWnd", true);
+        out_msg = "Shown Combat window";
+        return true;
+    }
+    if (act == "hide") {
+        if (ui_api_) ui_api_->show("CombatWnd", false);
+        out_msg = "Hidden Combat window";
+        return true;
+    }
+
+    out_msg = std::format("Unknown combat action: {}", action);
+    return false;
+}
+
+void ClientApp::run_slash_combat(const std::string& args) {
+    std::string_view rest = args;
+    std::string word = game::next_cmd_arg(rest);
+    if (word.empty()) {
+        if (ui_api_) ui_api_->toggle("CombatWnd");
+        return;
+    }
+    std::string msg;
+    std::string rem(rest);
+    while (!rem.empty() && (rem.front() == ' ' || rem.front() == '\t')) rem.erase(rem.begin());
+    while (!rem.empty() && (rem.back() == ' ' || rem.back() == '\t')) rem.pop_back();
+    const bool ok = handle_combat_command(word, rem, msg);
+    if (conn_ && !msg.empty()) {
+        conn_->show_chat(msg, ok ? 15 : 0xd);
+    }
+    if (!ok && conn_) {
+        conn_->show_chat("Usage: /combat [start|stop|pause|resume|estop|reset|reload|save|dry_run on|off|status|ui]", 15);
+    }
 }
 
 } // namespace client_internal

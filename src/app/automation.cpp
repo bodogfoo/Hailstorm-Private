@@ -327,6 +327,11 @@ void Automation::frame() {
     m.scripts->pulse();
 }
 
+void Automation::run_command(std::string_view command) {
+    if (!impl_) return;
+    impl_->run(std::string(command));
+}
+
 void Automation::imgui(bool dev) {
     Impl& m = *impl_;
     m.scripts->imgui();

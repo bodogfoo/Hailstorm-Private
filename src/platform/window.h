@@ -148,6 +148,10 @@ public:
     void set_text_input(bool on);
     // Whether the window has the keyboard focus.
     bool focused() const;
+    // Hailstone 24 window visibility / foreground restoration.
+    void set_visible(bool visible);
+    bool visible() const;
+    void raise_and_focus();
 
     // Fullscreen: the window's mode, and switching it (Fullscreen uses the display mode closest to `size`, or the
     // desktop's when it is 0 x 0). In Windowed mode a non-zero size resizes the window (and un-maximizes it).

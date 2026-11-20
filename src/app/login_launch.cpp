@@ -1,11 +1,46 @@
 #include "app/login_launch.h"
 
+#include <cctype>
 #include <charconv>
 #include <stdexcept>
 
 #include "core/ascii_case.h"
 
 namespace hailstone::app {
+
+namespace {
+
+std::string_view trim_ws(std::string_view s) {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
+    return s;
+}
+
+bool contains_ascii_ci(std::string_view haystack, std::string_view needle) {
+    if (needle.empty()) return true;
+    if (needle.size() > haystack.size()) return false;
+    for (std::size_t i = 0; i + needle.size() <= haystack.size(); ++i) {
+        if (iequals(haystack.substr(i, needle.size()), needle)) return true;
+    }
+    return false;
+}
+
+bool matches_all_tokens_ci(std::string_view name, std::string_view query) {
+    query = trim_ws(query);
+    if (query.empty()) return false;
+    std::size_t pos = 0;
+    while (pos < query.size()) {
+        while (pos < query.size() && std::isspace(static_cast<unsigned char>(query[pos]))) ++pos;
+        if (pos >= query.size()) break;
+        std::size_t end = pos;
+        while (end < query.size() && !std::isspace(static_cast<unsigned char>(query[end]))) ++end;
+        if (!contains_ascii_ci(name, query.substr(pos, end - pos))) return false;
+        pos = end;
+    }
+    return true;
+}
+
+} // namespace
 
 bool consume_login_launch_arg(LoginLaunch& launch, std::span<const std::string_view> args, std::size_t& at,
                               const TakeEnv& env) {
@@ -72,7 +107,7 @@ bool consume_login_launch_arg(LoginLaunch& launch, std::span<const std::string_v
 }
 
 void resolve_login_launch(const LoginLaunch& launch, std::string& user, std::string& password,
-                          std::string& account, bool viewer) {
+                          std::string& account, bool viewer, bool auto_login) {
     if (launch.token_requested) {
         user.clear();
         core::wipe(password);
@@ -80,8 +115,9 @@ void resolve_login_launch(const LoginLaunch& launch, std::string& user, std::str
     }
     if (launch.token_requested && viewer)
         throw std::runtime_error("A login ticket is for the playable client, not a viewer.");
-    if (!launch.world.empty() && !launch.token_requested && user.empty() && password.empty() && account.empty())
-        throw std::runtime_error("--world needs a ticket, --user, or --account login.");
+    if (!launch.world.empty() && !launch.token_requested && !auto_login && user.empty() && password.empty() &&
+        account.empty())
+        throw std::runtime_error("--world needs a ticket, --user, --account, or --auto-login.");
 }
 
 std::vector<std::string> unknown_argument_warnings(const LoginLaunch& launch, const std::vector<std::string>& unknown) {
@@ -135,6 +171,38 @@ const net::ServerInfo* launcher_world(std::span<const net::ServerInfo> servers, 
         match = &server;
     }
     return match;
+}
+
+const net::ServerInfo* resolve_world_target(std::span<const net::ServerInfo> servers, std::string_view selector,
+                                            bool allow_keyword_match) {
+    const std::string_view trimmed = trim_ws(selector);
+    if (trimmed.empty()) return nullptr;
+    if (const net::ServerInfo* exact = launcher_world(servers, trimmed)) return exact;
+
+    std::uint32_t id = 0;
+    const auto number = std::from_chars(trimmed.data(), trimmed.data() + trimmed.size(), id);
+    if (number.ec == std::errc() && number.ptr == trimmed.data() + trimmed.size()) return nullptr;
+
+    const net::ServerInfo* key_match = nullptr;
+    bool key_ambiguous = false;
+    for (const auto& server : servers) {
+        if (!iequals(saved_character_key_part(server.name), trimmed)) continue;
+        if (key_match) {
+            key_ambiguous = true;
+            break;
+        }
+        key_match = &server;
+    }
+    if (key_match && !key_ambiguous) return key_match;
+
+    if (!allow_keyword_match) return nullptr;
+    const net::ServerInfo* kw_match = nullptr;
+    for (const auto& server : servers) {
+        if (!matches_all_tokens_ci(server.name, trimmed)) continue;
+        if (kw_match) return nullptr;
+        kw_match = &server;
+    }
+    return kw_match;
 }
 
 } // namespace hailstone::app

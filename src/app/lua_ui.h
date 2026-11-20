@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <functional>
+#include "combat/combat_types.h"
 #include <future>
 #include <filesystem>
 #include <memory>
@@ -399,6 +400,13 @@ struct UiHost {
     const SavedBugReport* crash_report = nullptr;
     std::function<void(const std::string& note)> crash_report_note;
     std::function<void()> crash_report_close;
+
+    struct CombatBridge {
+        std::function<combat::CombatStatusSnapshot()> status;
+        std::function<combat::CombatProfile()> profile;
+        std::function<bool(std::string_view action, std::string_view arg, std::string& message)> command;
+    };
+    CombatBridge combat;
 };
 
 // CQuantityWnd::Open (game/quantity_dialog.h) for a window: accepted at once calls `done`, else shows the dialog.

@@ -120,6 +120,8 @@ public:
     bool autoskill_held();
     // Once a frame after the connection's update: the server's rules, OnPulse, the scripts.
     void frame();
+    // Dispatch a command received from the local Hailstone session bus.
+    void run_command(std::string_view command);
     // Inside the ImGui frame: the scripts' and plugins' windows, the server plugins' question when no UI pack window
     // stands in for it ("PluginConsent", hs.ReplaceWindow), and with `dev` the "Plugins & Lua" window.
     void imgui(bool dev);

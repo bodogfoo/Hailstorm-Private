@@ -218,6 +218,7 @@ std::filesystem::path scripts_config_dir() { return scripts_dir() / "config"; }
 std::filesystem::path textures_dir() { return data_dir() / "textures"; }
 std::filesystem::path maps_dir() { return data_dir() / "maps"; }
 std::filesystem::path servers_dir() { return data_dir() / "servers"; }
+std::filesystem::path profiles_dir() { return data_dir() / "profiles"; }
 std::filesystem::path logs_dir() { return data_dir() / "logs"; }
 std::filesystem::path log_file() { return logs_dir() / "hailstone.log"; }
 std::filesystem::path screenshots_dir() { return data_dir() / "screenshots"; }
@@ -237,7 +238,7 @@ std::filesystem::path home_dir() {
 std::vector<std::filesystem::path> create_data_dirs() {
     // scripts/config/ and textures/default/ make scripts/ and textures/ too.
     const std::filesystem::path dirs[] = {ui_settings_dir(), plugins_dir(),  scripts_config_dir(), textures_dir() / "default",
-                                          maps_dir(),        servers_dir(),  logs_dir(),           screenshots_dir(),
+                                          maps_dir(),        servers_dir(),  profiles_dir(), logs_dir(),           screenshots_dir(),
                                           bug_reports_dir(), cache_dir()};
     std::vector<std::filesystem::path> failed;
     for (const auto& dir : dirs) {
