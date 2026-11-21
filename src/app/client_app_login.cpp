@@ -1400,6 +1400,8 @@ void ClientApp::reload_group_profiles() {
     }
 
     loaded_group_profiles_ = core::list_group_profiles(login_view_.profiles_dir);
+    log::info("group profiles: scanned {} -> {} valid profile(s)", login_view_.profiles_dir.string(),
+              loaded_group_profiles_.size());
     login_view_.group_profiles.clear();
     login_view_.group_selected = -1;
     login_view_.group_slots.clear();
@@ -1547,6 +1549,18 @@ bool ClientApp::launch_group_slot_process(const core::GroupProfile& gp, const co
 
     const std::string tag =
         slot.session_id.empty() ? std::format("slot{:02d}", slot.slot_number) : slot.session_id;
+    // box_clients_ only knows about children spawned by this launcher.  Use the
+    // shared session bus as the global guard too, so a second Hailstone window
+    // cannot start another copy of the same group slot and consume another full
+    // client-sized RAM/VRAM allocation.
+    if (bus_.connected()) {
+        for (const auto& peer : bus_.cached_roster()) {
+            if (peer.online && !peer.session_id.empty() && iequals(peer.session_id, tag)) {
+                error = std::format("Slot {} ({}) is already online in the session bus.", slot.slot_number, tag);
+                return false;
+            }
+        }
+    }
     if (box_clients_.is_tag_running(tag)) {
         error = std::format("Slot {} ({}) is already running.", slot.slot_number, tag);
         return false;
