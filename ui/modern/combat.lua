@@ -8,8 +8,8 @@ local C = T.color
 
 local WINDOW = "CombatWnd"
 local WINDOW_OPTS = {
-  size = function() return 700, 560 end,
-  resizable = { 520, 400 },
+  size = function() return 860, 680 end,
+  resizable = { 640, 480 },
 }
 
 local MOVEMENT_MODES = {
@@ -54,11 +54,13 @@ local ACK_COLORS = {
 local assistInput = ""
 local followInput = ""
 local syncedChar = ""
+local lastStatusFollow = ""
 local lastMsg = ""
 local lastOk = true
 local cmdScope = "all"
 local selectedProfile = "Main Tank"
 local scriptArgInput = "rgmercs"
+local selectedGroup = 0
 
 local function colored(c, text)
   local col = c or C.text
@@ -67,6 +69,23 @@ end
 
 local function colorByName(name)
   return C[name] or C.text
+end
+
+local function assistIndicator(peer)
+  local state = string.lower(peer.combatState or "idle")
+  local active = state == "assist" or state == "engage" or state == "combat"
+  if not peer.online then
+    return C.danger, "OFF", "Offline"
+  end
+  if active then
+    return C.good, "ON", "Assist/combat active"
+  end
+  return C.danger, "OFF", peer.combatState ~= "" and peer.combatState or "Not assisting"
+end
+
+local function peerGroup(peer)
+  local n = string.match(peer.sessionId or "", "mq%-group([1-4])%-%d+")
+  return n and tonumber(n) or 0
 end
 
 local function runCmd(action, arg)
@@ -128,7 +147,12 @@ local function drawOverviewTab(st, s)
   followInput = fTxt
   ui.SameLine()
   if ui.SmallButton("Set Follow") or fEnter then
-    runCmd("follow_target", followInput == "" and "none" or followInput)
+    local requestedFollow = followInput == "" and "none" or followInput
+    if runCmd("follow_target", requestedFollow) then
+      -- Keep the visible field in sync immediately; CombatStatus will also
+      -- refresh it after a tab/window switch.
+      followInput = requestedFollow == "none" and "" or requestedFollow
+    end
   end
 
   -- Threshold & distance sliders
@@ -264,7 +288,7 @@ local function drawLoadoutTab(st, s)
   end
 end
 
-local function drawClientsTab(s)
+local function drawClientsTab(s, h)
   if not API.commander or not API.commander.Status then
     colored(C.muted, "MQ Commander bridge unavailable.")
     return
@@ -281,6 +305,8 @@ local function drawClientsTab(s)
   ui.Spacing()
   colored(C.heading or C.accent, "Active Client Tabs")
   ui.SameLine()
+  colored(C.muted, string.format("[%d connected]", #peers))
+  ui.SameLine()
   colored(cst.busConnected and C.good or C.gold, cst.busConnected and " [Bus Connected]" or " [Local Only]")
   ui.SameLine()
   local ah, ahCh = ui.Checkbox("Auto-Headless Others##cmdAutoHeadless", cst.autoHeadlessOthers == true)
@@ -289,9 +315,27 @@ local function drawClientsTab(s)
     ui.SetTooltip("When clicking a player tab, demote previously active client to Headless/Background without reconnecting")
   end
 
+  ui.Spacing()
+  ui.Text("Groups:")
+  ui.SameLine()
+  local groupTabs = { { 0, "All" }, { 1, "Group 1" }, { 2, "Group 2" },
+    { 3, "Group 3" }, { 4, "Group 4" } }
+  for i, g in ipairs(groupTabs) do
+    if i > 1 then ui.SameLine() end
+    if ui.SmallButton(g[2] .. (selectedGroup == g[1] and " *" or "")) then
+      selectedGroup = g[1]
+    end
+  end
+
   for idx, p in ipairs(peers) do
-    if idx > 1 then ui.SameLine() end
+    if selectedGroup == 0 or peerGroup(p) == selectedGroup then
+    -- Two switcher buttons per row keeps the control bar usable on narrow windows.
+    if idx > 1 and idx % 2 == 0 then ui.SameLine() end
     ui.PushID("ptab_" .. tostring(idx))
+    local assistColor, assistText, assistTip = assistIndicator(p)
+    colored(assistColor, "●")
+    if ui.IsItemHovered() then ui.SetTooltip(assistTip) end
+    ui.SameLine()
     local label = (p.characterName ~= "" and p.characterName or p.sessionId)
       .. (p.classShort ~= "" and (" (" .. p.classShort .. ")") or "")
       .. (p.isLive and " [LIVE]" or " [BG]")
@@ -304,19 +348,22 @@ local function drawClientsTab(s)
     end
     if p.isLive then ui.PopStyleColor(2) end
     if ui.IsItemHovered() then
-      ui.SetTooltip(string.format("Click to make %s the live visible client (no reconnect)\nZone: %s  |  Combat: %s  |  Script: %s",
+      ui.SetTooltip(string.format("Click to make %s the live visible client (no reconnect)\nAssist: %s (%s)  |  Zone: %s  |  Combat: %s  |  Script: %s",
         p.characterName ~= "" and p.characterName or p.sessionId,
+        assistText, assistTip,
         p.zoneShort ~= "" and p.zoneShort or "offline",
         p.combatState or "Idle",
         p.scriptState or "stopped"))
     end
     ui.PopID()
+    end
   end
 
   -- Connected Clients Roster Table
   ui.Spacing()
   local tflags = ui.TableFlags.RowBg | ui.TableFlags.ScrollY | ui.TableFlags.SizingStretchProp | ui.TableFlags.BordersInnerV
-  if ui.BeginTable("##commanderPeers", 9, tflags, 0, 145 * s) then
+  local rosterH = math.max(110, math.min(250, (h or 680) * 0.28))
+  if ui.BeginTable("##commanderPeers", 9, tflags, 0, rosterH) then
     ui.TableSetupColumn("Character", ui.TableColumnFlags.WidthStretch, 1.0)
     ui.TableSetupColumn("Class", ui.TableColumnFlags.WidthFixed, 44 * s)
     ui.TableSetupColumn("Lvl", ui.TableColumnFlags.WidthFixed, 34 * s)
@@ -329,6 +376,7 @@ local function drawClientsTab(s)
     ui.TableHeadersRow()
 
     for idx, p in ipairs(peers) do
+      if selectedGroup == 0 or peerGroup(p) == selectedGroup then
       ui.PushID("peer_" .. tostring(idx))
       ui.TableNextRow()
       ui.TableNextColumn()
@@ -342,7 +390,9 @@ local function drawClientsTab(s)
       ui.TableNextColumn()
       colored(p.online and C.good or C.gold, p.connectionState ~= "" and p.connectionState or (p.online and "in_game" or "offline"))
       ui.TableNextColumn()
-      colored(colorByName(STATE_COLORS[p.combatState] or "muted"), p.combatState or "Idle")
+      local assistColor, assistText, assistTip = assistIndicator(p)
+      colored(assistColor, "● " .. assistText)
+      if ui.IsItemHovered() then ui.SetTooltip(assistTip) end
       ui.TableNextColumn()
       local sc = (p.scriptState == "error" and C.danger) or ((p.scriptState == "RUNNING" or p.scriptState == "running") and C.good or C.muted)
       colored(sc, (p.scriptName ~= "" and (p.scriptName .. ":") or "") .. (p.scriptState ~= "" and p.scriptState or "stopped"))
@@ -353,12 +403,16 @@ local function drawClientsTab(s)
       ui.SameLine()
       if ui.SmallButton("BG") then runCommander("make_headless", p.sessionId, "") end
       ui.SameLine()
-      if ui.SmallButton("Follow") then runCommander("follow", p.sessionId, cst.characterName or "") end
+      if ui.SmallButton("Follow") then
+        local ok = runCommander("follow", p.sessionId, cst.characterName or "")
+        if ok and p.isSelf then followInput = cst.characterName or "" end
+      end
       ui.SameLine()
       if ui.SmallButton("Stop") then runCommander("stop", p.sessionId, "") end
       ui.SameLine()
       if ui.SmallButton("Restart") then runCommander("restart_script", p.sessionId, scriptArgInput) end
       ui.PopID()
+      end
     end
     ui.EndTable()
   end
@@ -537,6 +591,15 @@ local function drawWindow(x, y, w, h, s)
     syncedChar = charTag
     assistInput = st.assistTarget or ""
     followInput = st.followTarget or ""
+    lastStatusFollow = st.followTarget or ""
+  elseif (st.followTarget or "") ~= lastStatusFollow then
+    -- A commander action may update this client while the window is hidden.
+    -- Adopt the new status only when the user has not started editing the
+    -- field, so tab/window switches do not leave a stale value displayed.
+    if followInput == lastStatusFollow then
+      followInput = st.followTarget or ""
+    end
+    lastStatusFollow = st.followTarget or ""
   end
 
   -- Prominent Emergency Stop + Control Row
@@ -643,7 +706,7 @@ local function drawWindow(x, y, w, h, s)
 
   if ui.BeginTabBar("##combatTabs") then
     if ui.BeginTabItem("Players / Clients") then
-      drawClientsTab(s)
+      drawClientsTab(s, h)
       ui.EndTabItem()
     end
     if ui.BeginTabItem("Overview & Rules") then
