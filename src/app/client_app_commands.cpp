@@ -955,6 +955,53 @@ ipc::CommandAckPacket ClientApp::handle_bus_command(const ipc::CommandPacket& cm
         return ack;
     }
 
+    if (verb == "/combatstick") {
+        if (!in_game || !conn_ || !nav_) {
+            ack.ok = false;
+            ack.message = "cannot stick while not in game";
+            return ack;
+        }
+        const std::string mode = lower_str(rest);
+        if (mode == "off" || mode == "stop") {
+            nav_->unstick("Combat stick stopped");
+            ack.ok = true;
+            ack.message = "combat stick stopped";
+            return ack;
+        }
+        const std::uint32_t target_id = conn_->world().target_id;
+        const auto it = conn_->world().spawns.find(target_id);
+        const game::Spawn* target = it != conn_->world().spawns.end() ? &it->second : nullptr;
+        if (target_id == 0 || !target || target_id == conn_->world().player_id || !target->is_npc) {
+            ack.ok = false;
+            ack.message = "target an NPC first";
+            return ack;
+        }
+        nav::StickOptions opt;
+        opt.distance = combat_engine_ ? combat_engine_->profile().melee_range : 12.0f;
+        if (!rest.empty()) {
+            try { opt.distance = std::max(1.0f, std::stof(std::string(rest))); }
+            catch (...) {
+                ack.ok = false;
+                ack.message = "usage: /combatstick [distance] | off";
+                return ack;
+            }
+        }
+        const std::string err = nav_->stick(target_id, opt);
+        if (!err.empty()) {
+            ack.ok = false;
+            ack.message = err;
+            return ack;
+        }
+        if (combat_engine_) {
+            combat_engine_->mutable_profile().movement_mode = combat::MovementMode::MeleeRange;
+            combat_engine_->mutable_profile().allow_melee_attack = true;
+            combat_engine_->start("Combat stick enabled");
+        }
+        ack.ok = true;
+        ack.message = std::format("combat stick enabled at {:.1f}", opt.distance);
+        return ack;
+    }
+
     if (verb == "/stopfollow" || (verb == "/follow" && (rest.empty() || lower_str(rest) == "off" || lower_str(rest) == "stop"))) {
         if (conn_) conn_->stop_follow(false);
         if (combat_engine_) {
@@ -1441,6 +1488,67 @@ bool ClientApp::handle_commander_command(std::string_view action, std::string_vi
                                        : (opts_.auto_character.empty() ? opts_.account : opts_.auto_character);
     const bool targets_self = target.empty() || target == session_id_ ||
                               (!local_char.empty() && iequals(target, local_char));
+
+    if (act == "summon_companion" || act == "summoncompanion") {
+        if (!targets_self) {
+            out_msg = "summon companion must run on the character using the horn";
+            return false;
+        }
+        if (!conn_ || screen_ != Screen::InGame || !player_ready_) {
+            out_msg = "cannot summon companions while not in game";
+            return false;
+        }
+        if (ui_host_.confirm) {
+            out_msg = "another confirmation is already pending";
+            return false;
+        }
+
+        net::ItemSlot horn = net::ItemSlot::invalid();
+        auto is_companion_call = [](std::string_view name) {
+            std::string low(name);
+            std::transform(low.begin(), low.end(), low.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            // EZ Server's actual reward item is "Call of the Companions".  Keep
+            // the generic form for older/custom item naming, but require the
+            // companion wording so unrelated summon items cannot be clicked.
+            return low.find("call of the companions") != std::string::npos ||
+                   low.find("summon companion") != std::string::npos;
+        };
+        for (const auto& [key, item] : conn_->inventory().items()) {
+            if (key.first != net::kInvPossessions) continue;
+            if (is_companion_call(item.name)) {
+                horn = net::ItemSlot::possessions(key.second);
+                break;
+            }
+            for (const auto& bag : item.contents) {
+                if (is_companion_call(bag.item.name)) {
+                    horn = net::ItemSlot::possessions(key.second, static_cast<std::int16_t>(bag.index));
+                    break;
+                }
+            }
+            if (horn.valid()) break;
+        }
+        if (!horn.valid()) {
+            out_msg = "Summon Companion was not found in carried inventory";
+            return false;
+        }
+
+        const std::string prompt = arg.empty()
+                                       ? "Group members are out of range or stuck. Summon them now?"
+                                       : std::format("{} is out of range or stuck. Summon them now?", std::string(arg));
+        ui_host_.confirm = UiHost::Confirm{
+            prompt,
+            3000,
+            [this, horn](bool yes) {
+                if (yes && conn_ && screen_ == Screen::InGame && player_ready_) {
+                    conn_->use_item(horn);
+                    conn_->show_chat("Summon Companion activated", 15);
+                }
+            },
+            true};
+        out_msg = "Summon Companion confirmation shown (timeout: Yes)";
+        return true;
+    }
 
     if (act == "clear_acks") {
         bus_.clear_tracked_commands();

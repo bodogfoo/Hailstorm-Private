@@ -182,7 +182,7 @@ public:
         // OnProcessFrame: the question's time runs out (answer 2: as No).
         if (deadline_ && std::chrono::steady_clock::now() > *deadline_) {
             deadline_.reset();
-            answer(host, false);
+            answer(host, q == 3 && host.confirm ? host.confirm->timeout_answer : false);
             return shown(host);
         }
         return q != 0;

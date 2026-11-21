@@ -565,6 +565,11 @@ public:
             const bool ok = handle_commander_command("porter", "", args, msg);
             if (conn_ && !msg.empty()) conn_->show_chat(msg, ok ? 15 : 0xd);
         });
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/summoncompanion", [this](std::string_view args) {
+            std::string msg;
+            const bool ok = handle_commander_command("summon_companion", "", args, msg);
+            if (conn_ && !msg.empty()) conn_->show_chat(msg, ok ? 15 : 0xd);
+        });
         automation_->hooks().add_command(plugin::Hooks::kClient, "/switch", [this](std::string_view args) {
             while (!args.empty() && args.front() == ' ') args.remove_prefix(1);
             if (args.empty()) {
@@ -732,6 +737,7 @@ private:
     void launch_group();
     void launch_group_slot(int slot_number);
     void stop_group();
+    void force_stop_group();
     void relaunch_group();
     bool launch_group_slot_process(const core::GroupProfile& gp, const core::GroupSlot& slot, bool foreground_here,
                                    std::string& error);

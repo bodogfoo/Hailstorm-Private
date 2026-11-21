@@ -260,11 +260,14 @@ struct UiHost {
     };
     std::optional<TextEntry> text_entry;
     // A window's own ConfirmationDialog question (the options window's Default Keys, ...): Yes / No, answered
-    // with the handler; `timeout_ms` (from when it shows; 0 none) answers no.
+    // with the handler; `timeout_ms` (from when it shows; 0 none) answers no unless
+    // timeout_answer is set.  The latter is intentionally per-question so only
+    // explicitly opt-in confirmations can default to Yes.
     struct Confirm {
         std::string text;
         int timeout_ms = 0;
         std::function<void(bool yes)> done;
+        bool timeout_answer = false;
     };
     std::optional<Confirm> confirm;
     // CColorPickerWnd::Open(caller, colour): the colour to start from (0xRRGGBB) and the caller's notification 0x25
