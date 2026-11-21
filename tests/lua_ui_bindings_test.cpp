@@ -107,7 +107,8 @@ TEST_CASE("EQ menu: only the rows this client runs") {
     app::CascadeMenu menu;
     menu.load_text(text, 0xffffffffu, 0, offered);
     CHECK(menu.row_texts(0) == std::vector<std::string>{"Actions >", "Alerts >", "Character >", "Quests >", "-", "Mail",
-                                                        "Mercenaries", "-", "Options", "Lua Scripts", "Web Browser",
+                                                        "Mercenaries", "-", "Options", "Combat Controller", "RGMercs",
+                                                        "Special Functions", "Lua Scripts", "Web Browser",
                                                         "Report a Bug", "Camp & Quit"});
     CHECK(menu.row_texts(1) == std::vector<std::string>{"Actions", "Alarm"});
     CHECK(menu.row_texts(2) == std::vector<std::string>{"Alert History"}); // the event calendar is a later client's
@@ -119,7 +120,8 @@ TEST_CASE("EQ menu: only the rows this client runs") {
     app::CascadeMenu pad;
     pad.load_text(text, 0xffffffffu, 0, offered);
     CHECK(pad.row_texts(0) == std::vector<std::string>{"Actions >", "Alerts >", "Quests >", "-", "Mail", "Mercenaries", "-",
-                                                       "Options", "Lua Scripts", "Web Browser", "Report a Bug",
+                                                       "Options", "Combat Controller", "RGMercs", "Special Functions",
+                                                       "Lua Scripts", "Web Browser", "Report a Bug",
                                                        "Camp & Quit"});
     // Hailstone's Lua Scripts row returns its own number (the Scripts window).
     {
@@ -129,13 +131,14 @@ TEST_CASE("EQ menu: only the rows this client runs") {
         CHECK(pad.click(0, at) == app::kMenuScripts);
     }
 
-    // The plugins' entries: a "Plugins" submenu before Hailstone's rows (Lua Scripts, Web Browser, Report a Bug), each
-    // row its entry's number; none, none.
+    // The plugins' entries: a "Plugins" submenu before Hailstone's rows (Combat Controller, RGMercs, Special
+    // Functions, Lua Scripts, Web Browser, Report a Bug), each row its entry's number; none, none.
     const int menus = pad.menu_count();
     pad.set_plugin_entries({"Ext Window", "Ext Two"});
     auto top = pad.row_texts(0);
     CHECK(top == std::vector<std::string>{"Actions >", "Alerts >", "Quests >", "-", "Mail", "Mercenaries", "-", "Options",
-                                          "Plugins >", "Lua Scripts", "Web Browser", "Report a Bug", "Camp & Quit"});
+                                          "Plugins >", "Combat Controller", "RGMercs", "Special Functions", "Lua Scripts",
+                                          "Web Browser", "Report a Bug", "Camp & Quit"});
     REQUIRE(pad.menu_count() == menus + 1);
     CHECK(pad.row_texts(menus) == std::vector<std::string>{"Ext Window", "Ext Two"});
     pad.toggle({0, 0, 50, 20}, 1920, 1080);
@@ -147,7 +150,8 @@ TEST_CASE("EQ menu: only the rows this client runs") {
     pad.set_plugin_entries({});
     CHECK(pad.menu_count() == menus);
     CHECK(pad.row_texts(0) == std::vector<std::string>{"Actions >", "Alerts >", "Quests >", "-", "Mail", "Mercenaries", "-",
-                                                       "Options", "Lua Scripts", "Web Browser", "Report a Bug",
+                                                       "Options", "Combat Controller", "RGMercs", "Special Functions",
+                                                       "Lua Scripts", "Web Browser", "Report a Bug",
                                                        "Camp & Quit"});
 
     using C = game::KeyCommand;
@@ -210,8 +214,9 @@ TEST_CASE("EQ menu: Hailstone's layout") {
     // In alphabetical order: the submenus, the other rows, then Help, Report a Bug and Camp & Quit.
     CHECK(menu.row_texts(0) == std::vector<std::string>{"Actions >", "Character >", "Hotkeys >", "Inventory >",
                                                         "Navigation >", "Players >", "Quests >", "Real Estate >", "-",
-                                                        "Claims", "Lua Scripts", "Mail", "Marketplace", "Options",
-                                                        "Web Browser", "-", "Help", "Report a Bug", "Camp & Quit"});
+                                                        "Claims", "Combat Controller", "Lua Scripts", "Mail", "Marketplace",
+                                                        "Options", "RGMercs", "Special Functions", "Web Browser", "-",
+                                                        "Help", "Report a Bug", "Camp & Quit"});
     // (the Advanced Inventory, added after Inventory, first)
     CHECK(menu.row_texts(2) == std::vector<std::string>{"Advanced Inventory", "Bandolier", "Barter Search",
                                                         "Bazaar Search", "Inventory"});
@@ -264,8 +269,8 @@ TEST_CASE("EQ menu: Hailstone's layout over the game folder's file, a server's f
     game.rescan();
     menu.reload();
     menu.load(game, 0xffffffffu, 1);
-    CHECK(menu.row_texts(0) ==
-          std::vector<std::string>{"Server Mail", "Lua Scripts", "Web Browser", "Report a Bug", "Camp & Quit"});
+    CHECK(menu.row_texts(0) == std::vector<std::string>{"Server Mail", "Combat Controller", "RGMercs", "Special Functions",
+                                                       "Lua Scripts", "Web Browser", "Report a Bug", "Camp & Quit"});
 }
 
 namespace {
