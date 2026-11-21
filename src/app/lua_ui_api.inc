@@ -96,6 +96,14 @@ UI_METHOD("ChatTellWindows", "chat", "TellWindows", 0)
 UI_METHOD("ChatText", "chat", "Text", 0)
 UI_METHOD("ChatWindows", "chat", "Windows", 0)
 
+// combat
+UI_METHOD("CombatDo", "combat", "Do", kCapActions | kCapCommands | kCapMove)
+UI_METHOD("CombatStatus", "combat", "Status", 0)
+
+// commander
+UI_METHOD("CommanderDo", "commander", "Do", kCapActions | kCapCommands | kCapMove)
+UI_METHOD("CommanderStatus", "commander", "Status", 0)
+
 // compare
 UI_METHOD("CompareBagSlotItem", "compare", "BagSlotItem", 0)
 UI_METHOD("CompareItem", "compare", "Item", 0)
@@ -305,6 +313,7 @@ UI_METHOD("LoginScreen", "pregame", "LoginScreen", 0)
 UI_METHOD("LoginSet", "pregame", "LoginSet", 0)
 UI_METHOD("ServerSelect", "pregame", "ServerSelect", 0)
 UI_METHOD("ServerSelectDo", "pregame", "ServerSelectDo", 0)
+UI_METHOD("ServerSelectSet", "pregame", "ServerSelectSet", 0)
 
 // preview
 UI_METHOD("ItemPreviewControl", "preview", "Control", 0)
@@ -318,9 +327,21 @@ UI_METHOD("RewardSelectionInspect", "rewards", "Inspect", kCapActions)
 UI_METHOD("RestorePendingRewards", "rewards", "RestorePending", kCapActions)
 UI_METHOD("RewardSelection", "rewards", "Selection", 0)
 
+// rgmercs
+UI_METHOD("RGMercsClearLogs", "rgmercs", "ClearLogs", 0)
+UI_METHOD("RGMercsCommand", "rgmercs", "Command", kCapCommands)
+UI_METHOD("RGMercsControl", "rgmercs", "Control", 0)
+UI_METHOD("RGMercsImportDb", "rgmercs", "ImportDb", 0)
+UI_METHOD("RGMercsResetDefaults", "rgmercs", "ResetDefaults", 0)
+UI_METHOD("RGMercsSaveSettings", "rgmercs", "SaveSettings", 0)
+UI_METHOD("RGMercsSetModule", "rgmercs", "SetModule", 0)
+UI_METHOD("RGMercsSetSetting", "rgmercs", "SetSetting", 0)
+UI_METHOD("RGMercsState", "rgmercs", "State", 0)
+
 // scripts
 UI_METHOD("Scripts", "scripts", "List", 0)
 UI_METHOD("ScriptPause", "scripts", "Pause", 0)
+UI_METHOD("ScriptReload", "scripts", "Reload", 0)
 UI_METHOD("ScriptRun", "scripts", "Run", 0)
 UI_METHOD("SetScriptAutorun", "scripts", "SetAutorun", 0)
 UI_METHOD("ScriptStop", "scripts", "Stop", 0)

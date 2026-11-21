@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <optional>
 #include <span>
+#include <string_view>
 
 namespace hailstone::platform {
 
@@ -90,5 +91,27 @@ struct FileStamp {
     bool operator==(const FileStamp&) const = default;
 };
 std::optional<FileStamp> file_stamp(std::FILE* file);
+
+#if !defined(_WIN32)
+namespace detail {
+
+struct PosixUserRecord {
+    std::uint32_t uid = 0;
+    std::uint32_t primary_gid = 0;
+    std::string_view name;
+};
+
+struct PosixGroupRecord {
+    std::uint32_t gid = 0;
+    std::string_view name;
+    std::span<const std::string_view> members;
+};
+
+bool is_user_private_group_record(const PosixUserRecord& user, const PosixGroupRecord& group);
+bool is_safe_ancestor_mode(std::uint32_t mode, std::uint32_t uid, std::uint32_t gid, std::uint32_t euid,
+                           bool is_private_group);
+
+} // namespace detail
+#endif
 
 } // namespace hailstone::platform

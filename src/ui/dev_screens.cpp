@@ -123,6 +123,21 @@ bool contains_ci(std::string_view hay, std::string_view needle) {
     return it != hay.end();
 }
 
+std::string_view trim_sv(std::string_view value) {
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) value.remove_prefix(1);
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) value.remove_suffix(1);
+    return value;
+}
+
+bool is_favorite_world(std::string_view name, const std::vector<std::string>& favorites) {
+    const std::string_view trimmed_name = trim_sv(name);
+    if (trimmed_name.empty()) return false;
+    return std::any_of(favorites.begin(), favorites.end(), [&](const std::string& favorite) {
+        const std::string_view trimmed_fav = trim_sv(favorite);
+        return !trimmed_fav.empty() && iequals(trimmed_fav, trimmed_name);
+    });
+}
+
 // ---- The gamepad on the pre-game screens ----------------------------------
 
 struct ScreenPad {
@@ -768,6 +783,112 @@ LoginAction login_screen(LoginView& view) {
         }
     }
     if (!view.transient) {
+        // MacroQuest-style group/box profile launcher (profiles/<name>.ini or .json).
+        {
+            label("Group");
+            const ImGuiStyle& gstyle = ImGui::GetStyle();
+            const float refresh_w = buttons_width({"Refresh"}) + gstyle.ItemSpacing.x;
+            ImGui::SetNextItemWidth(field_w - refresh_w);
+            const bool gpicked =
+                view.group_selected >= 0 && view.group_selected < static_cast<int>(view.group_profiles.size());
+            std::string gpreview =
+                gpicked ? view.group_profiles[static_cast<std::size_t>(view.group_selected)].name
+                        : (view.group_profiles.empty() ? "(no group profiles in profiles/)" : "(select group profile)");
+            if (ImGui::BeginCombo("##groupprofile", gpreview.c_str())) {
+                for (int i = 0; i < static_cast<int>(view.group_profiles.size()); ++i) {
+                    const auto& gp = view.group_profiles[static_cast<std::size_t>(i)];
+                    ImGui::PushID(i);
+                    std::string item = std::format("{}  ({} slots)", gp.name, gp.slot_count);
+                    if (ImGui::Selectable(item.c_str(), view.group_selected == i) && view.group_selected != i) {
+                        view.group_profile_choice = gp.id;
+                        action = LoginAction::SelectGroupProfile;
+                    }
+                    if (ImGui::IsItemHovered() && !gp.source_path.empty()) {
+                        ImGui::SetTooltip("%s%s%s", gp.source_path.c_str(),
+                                          gp.description.empty() ? "" : "\n", gp.description.c_str());
+                    }
+                    ImGui::PopID();
+                }
+                ImGui::EndCombo();
+            }
+            if (ImGui::IsItemHovered() && !view.profiles_dir.empty()) {
+                ImGui::SetTooltip("Group profiles folder: %s", view.profiles_dir.string().c_str());
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Refresh")) action = LoginAction::RefreshGroupProfiles;
+
+            if (!view.group_slots.empty()) {
+                label("Slots");
+                if (view.group_slot_selected >= static_cast<int>(view.group_slots.size()))
+                    view.group_slot_selected = -1;
+                constexpr ImGuiTableFlags kGTable =
+                    ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_ScrollY;
+                const float em = ImGui::GetFontSize();
+                const float grows = static_cast<float>(std::min<std::size_t>(view.group_slots.size(), 6));
+                const float gheight = (grows + 1.0f) * ImGui::GetTextLineHeightWithSpacing() + em * 0.5f;
+                ImGui::BeginGroup();
+                if (ImGui::BeginTable("group_slots", 6, kGTable, ImVec2(field_w, gheight))) {
+                    ImGui::TableSetupScrollFreeze(0, 1);
+                    ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, em * 2.2f);
+                    ImGui::TableSetupColumn("Character", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn("Role", ImGuiTableColumnFlags_WidthFixed, em * 3.5f);
+                    ImGui::TableSetupColumn("Account", ImGuiTableColumnFlags_WidthFixed, em * 5.0f);
+                    ImGui::TableSetupColumn("Auto", ImGuiTableColumnFlags_WidthFixed, em * 2.5f);
+                    ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, em * 6.5f);
+                    ImGui::TableHeadersRow();
+                    for (int i = 0; i < static_cast<int>(view.group_slots.size()); ++i) {
+                        const auto& s = view.group_slots[static_cast<std::size_t>(i)];
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::PushID(s.slot_number * 100 + i);
+                        std::string num_lbl = std::format("{}:{}", s.launch_order, s.slot_number);
+                        if (ImGui::Selectable(num_lbl.c_str(), view.group_slot_selected == i,
+                                              ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
+                            view.group_slot_selected = i;
+                            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                                view.group_slot_choice = s.slot_number;
+                                action = LoginAction::LaunchGroupSlot;
+                            }
+                        }
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("Order %d, Slot %d (%s)\nServer: %s | World: %s\nSettings: %s\nMode: %s",
+                                              s.launch_order, s.slot_number, s.session_id.c_str(),
+                                              s.server_id.c_str(), s.world.c_str(), s.settings_path.c_str(),
+                                              s.headless ? "Headless BG" : "Foreground");
+                        }
+                        ImGui::PopID();
+                        ImGui::TableNextColumn();
+                        ImGui::TextUnformatted(s.character.empty() ? "-" : s.character.c_str());
+                        ImGui::TableNextColumn();
+                        ImGui::TextUnformatted(s.class_role.empty() ? "-" : s.class_role.c_str());
+                        ImGui::TableNextColumn();
+                        ImGui::TextColored(kDimColor, "%s", s.account.c_str());
+                        ImGui::TableNextColumn();
+                        ImGui::TextUnformatted(s.auto_login ? "Yes" : "No");
+                        ImGui::TableNextColumn();
+                        ImGui::TextColored(s.online ? kGoodColor : kDimColor, "%s", s.status.c_str());
+                    }
+                    ImGui::EndTable();
+                }
+                if (ImGui::Button("Launch group")) action = LoginAction::LaunchGroup;
+                ImGui::SameLine();
+                const bool can_one = view.group_slot_selected >= 0 &&
+                                     view.group_slot_selected < static_cast<int>(view.group_slots.size());
+                ImGui::BeginDisabled(!can_one);
+                if (ImGui::Button("Launch slot")) {
+                    view.group_slot_choice =
+                        view.group_slots[static_cast<std::size_t>(view.group_slot_selected)].slot_number;
+                    action = LoginAction::LaunchGroupSlot;
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (ImGui::Button("Stop group")) action = LoginAction::StopGroup;
+                ImGui::SameLine();
+                if (ImGui::Button("Relaunch")) action = LoginAction::RelaunchGroup;
+                ImGui::EndGroup();
+            }
+            ImGui::Separator();
+        }
         // The saved servers: pick one, start a new one, or delete the picked one.
         label("Server");
         const ImGuiStyle& style = ImGui::GetStyle();
@@ -1117,6 +1238,10 @@ LoginAction login_screen(LoginView& view) {
     if (ImGui::Checkbox("Music", &view.pregame_music)) action = LoginAction::MusicChanged;
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("The music of the login, server select and character select screens (not the game's).");
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Auto-login", &view.auto_login)) action = LoginAction::AutoLoginChanged;
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Automatically log in on launch, select your saved/favorite world, and enter your character.");
 
     ImGui::Spacing();
     ImGui::PushTextWrapPos(label_w + field_w);
@@ -1449,7 +1574,7 @@ std::vector<std::size_t> server_list_order(const std::vector<std::string>& names
     std::vector<bool> fav(names.size());
     for (std::size_t i = 0; i < names.size(); ++i) {
         order[i] = i;
-        fav[i] = std::find(favorites.begin(), favorites.end(), names[i]) != favorites.end();
+        fav[i] = is_favorite_world(names[i], favorites);
     }
     std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
         if (fav[a] != fav[b]) return static_cast<bool>(fav[a]);
@@ -1463,8 +1588,10 @@ std::vector<std::string> parse_favorite_worlds(std::string_view text) {
     std::vector<std::string> out;
     while (!text.empty()) {
         const std::size_t bar = text.find('|');
-        std::string_view name = text.substr(0, bar);
-        if (!name.empty() && std::find(out.begin(), out.end(), name) == out.end()) out.emplace_back(name);
+        std::string_view name = trim_sv(text.substr(0, bar));
+        if (!name.empty() &&
+            std::none_of(out.begin(), out.end(), [&](const std::string& existing) { return iequals(existing, name); }))
+            out.emplace_back(name);
         if (bar == std::string_view::npos) break;
         text.remove_prefix(bar + 1);
     }
@@ -1474,11 +1601,27 @@ std::vector<std::string> parse_favorite_worlds(std::string_view text) {
 std::string join_favorite_worlds(const std::vector<std::string>& names) {
     std::string out;
     for (const auto& n : names) {
-        if (n.empty() || n.find('|') != std::string::npos) continue;
+        const std::string_view trimmed = trim_sv(n);
+        if (trimmed.empty() || trimmed.find('|') != std::string_view::npos) continue;
         if (!out.empty()) out += '|';
-        out += n;
+        out += trimmed;
     }
     return out;
+}
+
+bool server_matches_filter(const ServerEntry& server, std::string_view filter) {
+    const std::string_view trimmed = trim_sv(filter);
+    if (trimmed.empty()) return true;
+    std::size_t pos = 0;
+    while (pos < trimmed.size()) {
+        while (pos < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[pos]))) ++pos;
+        if (pos >= trimmed.size()) break;
+        std::size_t end = pos;
+        while (end < trimmed.size() && !std::isspace(static_cast<unsigned char>(trimmed[end]))) ++end;
+        if (!contains_ci(server.name, trimmed.substr(pos, end - pos))) return false;
+        pos = end;
+    }
+    return true;
 }
 
 ServerSelectAction server_select_screen(ServerSelectView& view) {
@@ -1489,17 +1632,39 @@ ServerSelectAction server_select_screen(ServerSelectView& view) {
     const bool pad = pad_nav();
     const bool appearing = ImGui::IsWindowAppearing();
 
+    std::vector<int> visible;
+    visible.reserve(view.servers.size());
+    bool selected_visible = false;
+    for (int i = 0; i < static_cast<int>(view.servers.size()); ++i) {
+        if (server_matches_filter(view.servers[static_cast<std::size_t>(i)], view.filter)) {
+            visible.push_back(i);
+            if (i == view.selected) selected_visible = true;
+        }
+    }
+    if (!selected_visible) view.selected = visible.empty() ? -1 : visible.front();
+
     float footer = ImGui::GetFrameHeightWithSpacing() * (pad ? 3.0f : 2.0f) + ImGui::GetStyle().ItemSpacing.y;
     constexpr ImGuiTableFlags kTable = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter |
                                        ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY;
     ImGui::BeginDisabled(view.busy);
+    const float em = ImGui::GetFontSize();
+    ImGui::SetNextItemWidth(-(em * 8.5f));
+    text_field("##server_filter", view.filter, 0, "Filter worlds", "Filter worlds by keyword...");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(view.filter.empty());
+    if (ImGui::Button("Clear##filter")) view.filter.clear();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(kDimColor, "%zu/%zu", visible.size(), view.servers.size());
+
     if (ImGui::BeginTable("servers", 3, kTable, ImVec2(0.0f, -footer))) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("Server", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 6.0f);
         ImGui::TableSetupColumn("Favourite", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 5.0f);
         ImGui::TableHeadersRow();
-        for (int i = 0; i < static_cast<int>(view.servers.size()); ++i) {
+        for (int i : visible) {
             const ServerEntry& s = view.servers[static_cast<std::size_t>(i)];
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
@@ -1532,6 +1697,7 @@ ServerSelectAction server_select_screen(ServerSelectView& view) {
         ImGui::EndTable();
     }
     if (view.servers.empty()) ImGui::TextColored(kDimColor, "No servers listed.");
+    else if (visible.empty()) ImGui::TextColored(kDimColor, "No worlds match \"%s\".", view.filter.c_str());
     ImGui::EndDisabled();
 
     status_line(view.status, view.busy);

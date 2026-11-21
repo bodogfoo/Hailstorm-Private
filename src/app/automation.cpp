@@ -15,6 +15,7 @@
 #include "game/nameplate_canvas.h"
 #include "mq/commands.h"
 #include "mq/lua_mq.h"
+#include "mq/rgmercs_bridge.h"
 #include "mq/tlo.h"
 #include "net/game_connection.h"
 #include "plugin/native_plugins.h"
@@ -49,6 +50,7 @@ struct Automation::Impl {
     fs::path enforcement_profile;
     mq::Registry registry;
     mq::Context ctx;
+    mq::RGMercsBridge rgmercs;
     std::unique_ptr<mq::Commands> commands;
     std::unique_ptr<mq::ScriptHost> scripts;
     std::unique_ptr<plugin::NativePlugins> plugins;
@@ -180,11 +182,15 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     se.run = ce.run;
     se.dirs = search_dirs(m.env.data_dir / "scripts", m.env.install_dir / "scripts");
     se.config_dir = m.env.data_dir / "scripts" / "config";
+    m.ctx.lua_dir = se.dirs.front().string();
+    m.ctx.config_dir = se.config_dir.string();
     // Scripts as plugins (mq/lua_hailstone.cpp): the same chain, UI bridge and packets as the compiled plugins.
     se.extensions = m.extensions.get();
     se.nameplates = &m.nameplates;
     se.ui = &m.plugin_ui;
     se.web = m.env.web;
+    se.ipc_bus = m.env.ipc_bus;
+    se.rgmercs = &m.rgmercs;
     se.connection = [&m] { return m.conn(); };
     se.hold_autoskill = [&m](const std::string& script, bool hold) {
         if (hold) m.autoskill_holds.insert(script);
@@ -275,6 +281,7 @@ std::shared_ptr<game::ExtensionChain> Automation::extensions() { return impl_->e
 game::NameplateCanvasRegistry& Automation::nameplates() { return impl_->nameplates; }
 plugin::UiBridge& Automation::plugin_ui() { return impl_->plugin_ui; }
 mq::ScriptHost& Automation::scripts() { return *impl_->scripts; }
+mq::RGMercsBridge& Automation::rgmercs() { return impl_->rgmercs; }
 
 std::uint32_t Automation::plugin_caps(std::string_view tag) const {
     // By the owner's tag alone (plugin::UiBridge::owner_tag): a script named after a compiled plugin never gets the
@@ -325,6 +332,11 @@ void Automation::frame() {
     }
     m.hooks.pulse();
     m.scripts->pulse();
+}
+
+void Automation::run_command(std::string_view command) {
+    if (!impl_) return;
+    impl_->run(std::string(command));
 }
 
 void Automation::imgui(bool dev) {

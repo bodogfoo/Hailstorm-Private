@@ -101,8 +101,8 @@ TEST_CASE("GPU IPC sessions: malformed local endpoints and tokens fail without e
     CHECK_THROWS(GpuIpcClient::connect(invalid, 50));
 }
 
-#if defined(_WIN32)
-TEST_CASE("GPU IPC Windows: authenticated peers, first-instance ownership and disconnect callbacks") {
+#if defined(_WIN32) || defined(__linux__)
+TEST_CASE("GPU IPC local transport: authenticated peers, first-instance ownership and disconnect callbacks") {
     std::atomic<unsigned> disconnected = 0;
     auto session = make_gpu_ipc_session();
     auto other = make_gpu_ipc_session();

@@ -107,6 +107,13 @@ int Scripts(lua_State* L) {
             it->kept = i.kept;
             if (i.caps) it->caps = plugin::caps_text(i.caps);
         }
+        for (Row& r : rows) {
+            if (!r.status.empty()) continue;
+            if (auto lo = h.scripts->last_outcome(r.name)) {
+                r.status = status_word(lo->status);
+                r.error = lo->error;
+            }
+        }
         std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.name < b.name; });
         // A plugin's code sees its own row alone (a script of its tag's name), and no folders: the others' errors,
         // permissions and where the player keeps them are not its business.
@@ -191,6 +198,40 @@ int ScriptPause(lua_State* L) {
     return 1;
 }
 
+int ScriptReload(lua_State* L) {
+    UiHost& h = host_of(L);
+    const char* name_arg = luaL_checkstring(L, 1);
+    const char* a = luaL_optstring(L, 2, nullptr);
+    if (plugin_code()) {
+        lua_pushboolean(L, 0);
+        lua_pushliteral(L, "scripts are the player's to reload");
+        return 2;
+    }
+    if (!h.scripts) {
+        lua_pushboolean(L, 0);
+        lua_pushliteral(L, "scripts are off");
+        return 2;
+    }
+    std::string& why = plugin::lua_keep<std::string>(L);
+    bool ok = false;
+    plugin::cxx_guard(L, [&] {
+        std::vector<std::string> args;
+        if (a) {
+            std::string_view rest = a;
+            while (true) {
+                while (!rest.empty() && rest.front() == ' ') rest.remove_prefix(1);
+                if (rest.empty()) break;
+                args.push_back(game::next_cmd_arg(rest));
+            }
+        }
+        ok = h.scripts->reload(name_arg, args, &why);
+    });
+    lua_pushboolean(L, ok);
+    if (ok) return 1;
+    lua_pushlstring(L, why.data(), why.size());
+    return 2;
+}
+
 int SetScriptAutorun(lua_State* L) {
     UiHost& h = host_of(L);
     std::string name = luaL_checkstring(L, 1);
@@ -215,6 +256,7 @@ void register_scripts_api(lua_State* L, UiHost& host) {
              {"ScriptRun", ScriptRun},
              {"ScriptStop", ScriptStop},
              {"ScriptPause", ScriptPause},
+             {"ScriptReload", ScriptReload},
              {"SetScriptAutorun", SetScriptAutorun}}) {
         lua_pushlightuserdata(L, &host);
         lua_pushvalue(L, cache);

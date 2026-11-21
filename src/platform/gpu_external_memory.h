@@ -2,8 +2,7 @@
 
 // The OS-specific part of sharing a GPU texture's memory between processes (render/gpu_shared_cache.h): which
 // Vulkan handle type and device extension carry it here, and the import and export calls whose structs name OS
-// handle types. Windows only for now (opaque NT handles); elsewhere nothing is supported and callers keep private
-// textures.
+// handle types. Supports Win32 (opaque NT handles) and Linux (VK_KHR_external_memory_fd opaque file descriptors).
 
 #include <cstdint>
 
@@ -17,8 +16,8 @@ const char* gpu_external_memory_extension() noexcept;
 VkExternalMemoryHandleTypeFlagBits gpu_external_memory_handle_type() noexcept;
 
 // Allocates `size` bytes of memory type `memory_type`, dedicated to `image`, importing `handle`'s payload. The
-// handle stays the caller's (a Win32 import does not take it over); the new memory keeps its own reference to the
-// payload, so it stays valid when the exporting process lets go or exits.
+// handle stays the caller's (on Linux the fd is dup'd with F_DUPFD_CLOEXEC before Vulkan takes ownership on success);
+// the new memory keeps its own reference to the payload, so it stays valid when the exporting process lets go or exits.
 VkResult gpu_import_memory(VkDevice device, PFN_vkAllocateMemory allocate, VkImage image, VkDeviceSize size,
                            std::uint32_t memory_type, void* handle, VkDeviceMemory* out) noexcept;
 

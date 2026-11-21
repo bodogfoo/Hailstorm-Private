@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <ctime>
+#include <filesystem>
 #include <format>
 #include <functional>
 #include <optional>
@@ -32,7 +33,7 @@ using net::GameConnection;
 
 struct Types {
     const Type *spawn, *character, *cls, *race, *heading, *spell, *buff, *timestamp, *item, *zone, *group, *member,
-        *everquest, *window, *plugin, *time, *gametime, *navigation, *stick;
+        *everquest, *macroquest, *window, *plugin, *time, *gametime, *navigation, *stick;
 };
 
 Types g; // set once by register_game_tlos (the types live in the registry that registered them)
@@ -1152,6 +1153,44 @@ void register_misc_types() {
     add(g.everquest, "Server", [](const Context& c, const Value&, std::string_view) { return V::string(c.server_name); });
     add(g.everquest, "UIScale", [](const Context&, const Value&, std::string_view) { return V::number(1.0); });
 
+    Type& mq_type = const_cast<Type&>(*g.macroquest);
+    mq_type.to_value = [](const Context&, const Value&) { return V::string("MacroQuest"); };
+    add(g.macroquest, "GameState", [](const Context& c, const Value&, std::string_view) -> V {
+        if (!c.conn) return V::string("PRECHARSELECT");
+        switch (c.conn->state()) {
+        case net::ConnectionState::InZone:
+        case net::ConnectionState::Camping:
+        case net::ConnectionState::Zoning:
+        case net::ConnectionState::ZoneConnecting:
+        case net::ConnectionState::ZoneEntering: return V::string("INGAME");
+        case net::ConnectionState::CharacterSelect:
+        case net::ConnectionState::EnteringWorld:
+        case net::ConnectionState::Creating: return V::string("CHARSELECT");
+        default: return V::string("PRECHARSELECT");
+        }
+    });
+    add(g.macroquest, "Server", [](const Context& c, const Value&, std::string_view) { return V::string(c.server_name); });
+    add(g.macroquest, "Foreground", [](const Context& c, const Value&, std::string_view) { return V::boolean(c.foreground); });
+    add(g.macroquest, "BuildName", [](const Context&, const Value&, std::string_view) { return V::string("Hailstone"); });
+    add(g.macroquest, "BuildDate", [](const Context&, const Value&, std::string_view) { return V::string(__DATE__); });
+    add(g.macroquest, "Build", [](const Context&, const Value&, std::string_view) { return V::integer(4); });
+    add(g.macroquest, "Error", [](const Context&, const Value&, std::string_view) { return V::string(""); });
+    add(g.macroquest, "Path", [](const Context& c, const Value&, std::string_view index) -> V {
+        const std::string key = lower(index);
+        if (key == "config") {
+            if (!c.config_dir.empty()) return V::string(c.config_dir);
+            if (!c.lua_dir.empty()) return V::string((std::filesystem::path(c.lua_dir) / "config").string());
+            return V::string("config");
+        }
+        if (key == "lua" || key == "scripts" || key.empty()) {
+            return V::string(c.lua_dir);
+        }
+        if (!c.lua_dir.empty()) {
+            return V::string((std::filesystem::path(c.lua_dir) / std::string(index)).string());
+        }
+        return V::string(c.lua_dir);
+    });
+
     Type& win = const_cast<Type&>(*g.window);
     win.to_value = [](const Context& c, const Value& v) {
         return V::string(c.window_open && c.window_open(v.s) ? "TRUE" : "FALSE");
@@ -1528,6 +1567,7 @@ void register_game_tlos(Registry& r) {
     g.group = &r.type("group");
     g.member = &r.type("groupmember");
     g.everquest = &r.type("everquest");
+    g.macroquest = &r.type("macroquest");
     g.window = &r.type("window");
     g.plugin = &r.type("plugin");
     g.time = &r.type("time");
@@ -1651,6 +1691,7 @@ void register_game_tlos(Registry& r) {
         return c.conn && c.conn->time_of_day() ? V::object(g.gametime, 0) : V::nil();
     });
     r.add_tlo("EverQuest", [](const Context&, std::string_view) { return V::object(g.everquest, 0); });
+    r.add_tlo("MacroQuest", [](const Context&, std::string_view) { return V::object(g.macroquest, 0); });
     r.add_tlo("Heading", [](const Context&, std::string_view index) -> V {
         double d = 0;
         return parse_float(index, d) && std::isfinite(d) ? heading_value(std::fmod(std::fmod(d, 360.0) + 360.0, 360.0)) : V::nil();

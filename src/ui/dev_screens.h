@@ -186,6 +186,9 @@ struct LoginView {
     // The music of the login, server and character select screens (hailstone.ini audio.pregame_music); toggled:
     // MusicChanged.
     bool pregame_music = true;
+    // Log in automatically with the remembered server and account (hailstone.ini login.auto_login); toggled:
+    // AutoLoginChanged.
+    bool auto_login = false;
     // The Characters list's picked row (quick_characters()), -1 none; Play returns PlayCharacter.
     int quick_selected = -1;
     // The user interface used on this server (ServerProfile::ui): one of ui_packs, by id. A server without its own
@@ -213,6 +216,39 @@ struct LoginView {
     // page, which OpenProject opens.
     std::vector<std::string> release_notes;
     std::string project_page;
+
+    // MacroQuest-style group/box profile launcher (profiles/<name>.ini or .json, never holding passwords).
+    struct GroupSlotView {
+        int slot_number = 1;
+        int launch_order = 1;
+        bool enabled = true;
+        std::string session_id;
+        std::string character;
+        std::string account;
+        std::string server_id;
+        std::string world;
+        std::string class_role;
+        std::string settings_path;
+        bool auto_login = true;
+        bool headless = true;
+        std::string status = "Offline";
+        std::string zone;
+        bool online = false;
+    };
+    struct GroupProfileSummaryView {
+        std::string id;
+        std::string name;
+        std::string description;
+        std::string source_path;
+        std::size_t slot_count = 0;
+    };
+    std::filesystem::path profiles_dir;
+    std::vector<GroupProfileSummaryView> group_profiles;
+    int group_selected = -1;
+    std::vector<GroupSlotView> group_slots;
+    int group_slot_selected = -1;
+    std::string group_profile_choice;
+    int group_slot_choice = 0;
 };
 
 // Save, Delete (asked again first) and OpenAssets are for the picked server; picking another and New are done
@@ -232,11 +268,12 @@ struct LoginView {
 // installed tool addons.choice. ResumeToken asks the app to consume its returned ticket for this endpoint.
 enum class LoginAction {
     None, Submit, Quit, Save, Delete, OpenAssets, UseGameFolder, BrowseGameFolder, LoginBox, AccountsChanged,
-    ForgetAccount, PlayCharacter, MusicChanged,
+    ForgetAccount, PlayCharacter, MusicChanged, AutoLoginChanged,
     UpdateDownload, UpdateRestart, UpdateSkip, UpdateNotes, OpenProject,
     AddonInspect, AddonInstall, AddonCancel, AddonUpdate, AddonRemove, AddonAuto, AddonFolder, AddonPage, AddonCheck,
     AddonRevoke, AddonAskAgain, AddonSuggestLook, AddonSuggestLater, AddonSuggestNever, AddonBrowse, AddonStoreLook,
-    AddonStart, ResumeToken, AddonEnabled
+    AddonStart, ResumeToken, AddonEnabled,
+    SelectGroupProfile, LaunchGroup, LaunchGroupSlot, StopGroup, RelaunchGroup, RefreshGroupProfiles
 };
 
 // A row of the login screen's Characters list: a character one of the server's accounts was seen to have.
@@ -325,6 +362,7 @@ struct ServerEntry {
 struct ServerSelectView {
     std::vector<ServerEntry> servers;
     int selected = -1;
+    std::string filter;
     StatusLine status;
     bool busy = false;
     int favorite_row = -1; // the row whose favourite mark Favorite turns over
@@ -343,6 +381,8 @@ std::vector<std::size_t> server_list_order(const std::vector<std::string>& names
 // The favourite worlds as hailstone.ini keeps them: the names joined by '|' (no world name holds one).
 std::vector<std::string> parse_favorite_worlds(std::string_view text);
 std::string join_favorite_worlds(const std::vector<std::string>& names);
+// Case-insensitive whitespace-tokenized substring match against server.name.
+bool server_matches_filter(const ServerEntry& server, std::string_view filter);
 
 // Play (button, double-click or Enter) is returned for view.selected.
 ServerSelectAction server_select_screen(ServerSelectView& view);

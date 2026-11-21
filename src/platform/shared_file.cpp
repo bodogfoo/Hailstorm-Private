@@ -21,7 +21,10 @@
 #include <io.h>
 #else
 #include <cerrno>
+#include <cstring>
 #include <fcntl.h>
+#include <grp.h>
+#include <pwd.h>
 #include <sys/file.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -133,13 +136,68 @@ bool directory_at(const std::filesystem::path& path, bool private_leaf, UserSecu
     return ok;
 }
 #else
+bool is_user_private_group(uid_t uid, gid_t gid) {
+    constexpr std::size_t kMaxLookupBuffer = 1u << 20;
+
+    long pw_hint = ::sysconf(_SC_GETPW_R_SIZE_MAX);
+    std::size_t pw_size = pw_hint > 0 ? static_cast<std::size_t>(pw_hint) : 16384u;
+    struct passwd pwd{};
+    struct passwd* pw_result = nullptr;
+    std::vector<char> pw_buf;
+    while (true) {
+        pw_buf.resize(pw_size);
+        const int rc = ::getpwuid_r(uid, &pwd, pw_buf.data(), pw_buf.size(), &pw_result);
+        if (rc == 0) break;
+        if (rc != ERANGE || pw_size >= kMaxLookupBuffer) return false;
+        pw_size = std::min(pw_size * 2, kMaxLookupBuffer);
+    }
+    if (!pw_result || !pw_result->pw_name || pw_result->pw_gid != gid) return false;
+
+    long gr_hint = ::sysconf(_SC_GETGR_R_SIZE_MAX);
+    std::size_t gr_size = gr_hint > 0 ? static_cast<std::size_t>(gr_hint) : 16384u;
+    struct group grp{};
+    struct group* gr_result = nullptr;
+    std::vector<char> gr_buf;
+    while (true) {
+        gr_buf.resize(gr_size);
+        const int rc = ::getgrgid_r(gid, &grp, gr_buf.data(), gr_buf.size(), &gr_result);
+        if (rc == 0) break;
+        if (rc != ERANGE || gr_size >= kMaxLookupBuffer) return false;
+        gr_size = std::min(gr_size * 2, kMaxLookupBuffer);
+    }
+    if (!gr_result || !gr_result->gr_name) return false;
+
+    std::vector<std::string_view> members;
+    if (gr_result->gr_mem) {
+        for (char** m = gr_result->gr_mem; *m; ++m) members.emplace_back(*m);
+    }
+    const detail::PosixUserRecord user{
+        static_cast<std::uint32_t>(uid),
+        static_cast<std::uint32_t>(pw_result->pw_gid),
+        pw_result->pw_name,
+    };
+    const detail::PosixGroupRecord group{
+        static_cast<std::uint32_t>(gr_result->gr_gid),
+        gr_result->gr_name,
+        members,
+    };
+    return detail::is_user_private_group_record(user, group);
+}
+
 bool directory_at(const std::filesystem::path& path, bool private_leaf) {
     struct stat info{};
     if (::lstat(path.c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) return false;
-    if (private_leaf) return info.st_uid == ::geteuid() && (info.st_mode & 0077) == 0;
-    // Root-owned ancestors and sticky temp directories are normal. An arbitrary writable ancestor is not.
-    if (info.st_uid != ::geteuid() && info.st_uid != 0) return false;
-    return (info.st_mode & 0022) == 0 || (info.st_mode & S_ISVTX) != 0;
+    const uid_t euid = ::geteuid();
+    if (private_leaf) return info.st_uid == euid && (info.st_mode & 0077) == 0;
+    // Fast path avoids NSS lookups when permissions are already non-group/world-writable or sticky.
+    const bool group_writable_only =
+        info.st_uid == euid && (info.st_mode & S_ISVTX) == 0 && (info.st_mode & S_IWOTH) == 0 &&
+        (info.st_mode & S_IWGRP) != 0;
+    const bool private_group = group_writable_only && is_user_private_group(info.st_uid, info.st_gid);
+    return detail::is_safe_ancestor_mode(static_cast<std::uint32_t>(info.st_mode),
+                                         static_cast<std::uint32_t>(info.st_uid),
+                                         static_cast<std::uint32_t>(info.st_gid),
+                                         static_cast<std::uint32_t>(euid), private_group);
 }
 #endif
 
@@ -179,6 +237,34 @@ bool same_directory(const std::filesystem::path& a, const std::filesystem::path&
 }
 
 } // namespace
+
+#if !defined(_WIN32)
+namespace detail {
+
+bool is_user_private_group_record(const PosixUserRecord& user, const PosixGroupRecord& group) {
+    if (user.name.empty() || group.name.empty()) return false;
+    if (group.gid != user.primary_gid || group.name != user.name) return false;
+    for (std::string_view member : group.members) {
+        if (member != user.name) return false;
+    }
+    return true;
+}
+
+bool is_safe_ancestor_mode(std::uint32_t mode, std::uint32_t uid, std::uint32_t /*gid*/, std::uint32_t euid,
+                           bool is_private_group) {
+    // Root-owned ancestors and sticky temp directories are normal. Foreign-owned ancestors are never trusted.
+    if (uid != euid && uid != 0) return false;
+    if ((mode & S_ISVTX) != 0) return true;
+    if ((mode & 0022u) == 0) return true;
+    // World-writable non-sticky ancestors are always rejected.
+    if ((mode & S_IWOTH) != 0) return false;
+    // Group-writable non-world-writable ancestors (e.g. 0775 under Ubuntu umask 0002) are only accepted when
+    // owned by the current user and belonging to their verified single-user User Private Group.
+    return uid == euid && is_private_group;
+}
+
+} // namespace detail
+#endif
 
 ReadOnlyMapping::~ReadOnlyMapping() { reset(); }
 ReadOnlyMapping::ReadOnlyMapping(ReadOnlyMapping&& other) noexcept

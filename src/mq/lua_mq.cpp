@@ -27,6 +27,7 @@
 #include "game/item_links.h"
 #include "game/slash_commands.h"
 #include "game/world_state.h"
+#include "mq/lua_compat_modules.h"
 #include "mq/parse.h"
 #include "plugin/lua_keep.h"
 #include "net/game_connection.h"
@@ -385,7 +386,12 @@ int l_print(lua_State* L) {
         luaL_addvalue(&b);
     }
     luaL_pushresult(&b);
-    Script::of(L).host->say(lua_tostring(L, -1));
+    const char* msg = lua_tostring(L, -1);
+    Script& sc = Script::of(L);
+    sc.host->say(msg);
+    if (sc.name == "rgmercs" && sc.host && sc.host->env.rgmercs && msg) {
+        sc.host->env.rgmercs->append_log("info", msg);
+    }
     return 0;
 }
 
@@ -951,13 +957,46 @@ void ScriptHost::Impl::migrate_config_dir(const Script& s) const {
 
 namespace {
 
+std::string normalize_path_separators(std::string_view given) {
+    std::string out(given);
+#if !defined(_WIN32)
+    std::replace(out.begin(), out.end(), '\\', '/');
+#endif
+    return out;
+}
+
+bool is_under_dir(const fs::path& dir, const fs::path& file, bool allow_equal) {
+    if (dir.empty()) return false;
+    std::error_code ec;
+    fs::path d = fs::weakly_canonical(dir, ec);
+    if (ec || d.empty()) d = dir.lexically_normal();
+    fs::path f = fs::weakly_canonical(file, ec);
+    if (ec || f.empty()) f = file.lexically_normal();
+    std::string dk = windows_file_key(d.generic_string()), fk = windows_file_key(f.generic_string());
+    while (dk.size() > 1 && dk.back() == '/') dk.pop_back();
+    while (fk.size() > 1 && fk.back() == '/') fk.pop_back();
+    if (fk == dk) return allow_equal;
+    if (dk == "/") return fk.size() > 1 && fk.front() == '/';
+    return fk.size() > dk.size() + 1 && fk.compare(0, dk.size(), dk) == 0 && fk[dk.size()] == '/';
+}
+
+bool is_config_target(const Script& s, const fs::path& file) {
+    if (is_under_dir(s.host->env.config_dir, file, true)) return true;
+    if (!s.root.empty() && in_config_dir(s.root, file)) return true;
+    for (const auto& d : s.host->dirs()) {
+        if (in_config_dir(d, file)) return true;
+    }
+    return false;
+}
+
 // A path inside the script's config directory (relative paths are relative to it); nullopt outside it.
 std::optional<fs::path> config_path(lua_State* L, const char* given) {
+    if (!given || !*given) return std::nullopt;
     const fs::path base = script_config_dir(Script::of(L));
     if (base.empty()) return std::nullopt;
     std::error_code ec;
     fs::path root = fs::weakly_canonical(base, ec);
-    fs::path p = fs::path(given);
+    fs::path p(normalize_path_separators(given));
     if (p.is_relative()) p = root / p;
     p = fs::weakly_canonical(p, ec);
     auto rel = p.lexically_relative(root);
@@ -1075,6 +1114,7 @@ int l_load_config(lua_State* L) {
 // What search_module found on disk: the module's text and chunk name, or why there is none.
 struct ModuleFile {
     bool found = false;
+    bool refused = false;
     std::string text, chunk, msg;
 };
 
@@ -1089,37 +1129,221 @@ std::string script_identity(const ScriptHost::Impl& host, const fs::path& entry,
     return lower(std::string(fallback));
 }
 
+// What trusted_script_path found on disk: text, chunk name, whether the path targeted an approved script root.
+struct TrustedScriptFile {
+    bool found = false;
+    bool handled = false;
+    std::string text, chunk, msg;
+};
+
+bool starts_with_icase_mq(std::string_view s, std::string_view prefix) {
+    if (s.size() < prefix.size()) return false;
+    for (std::size_t i = 0; i < prefix.size(); ++i) {
+        const auto a = static_cast<unsigned char>(std::tolower(static_cast<unsigned char>(s[i])));
+        const auto b = static_cast<unsigned char>(std::tolower(static_cast<unsigned char>(prefix[i])));
+        if (a != b) return false;
+    }
+    return true;
+}
+
+// Resolves an approved script-root file for executable loading (never config files under mq.configDir or config/).
+void resolve_trusted_script_file(lua_State* L, Script& s, std::string_view given, TrustedScriptFile& out) {
+    if (given.empty() || given.find('\0') != std::string_view::npos) return;
+    const std::string norm = normalize_path_separators(given);
+    const fs::path gp(norm);
+    std::error_code ec;
+
+    // 1. Paths explicitly targeting mq.configDir / scripts/config/ ALWAYS stay exclusively on the restricted
+    // data-only config loader (never executable as trusted scripts).
+    if (gp.is_absolute() && !s.host->env.config_dir.empty()) {
+        const fs::path cand_abs = fs::weakly_canonical(gp, ec);
+        if (!ec && is_under_dir(s.host->env.config_dir, cand_abs, true)) {
+            return;
+        }
+    }
+    if (gp.is_relative() &&
+        (starts_with_icase_mq(norm, "config/") || starts_with_icase_mq(norm, "scripts/config/"))) {
+        return;
+    }
+
+    const bool prefer_trusted_root = gp.is_relative() &&
+                                     (starts_with_icase_mq(norm, "class_configs/") ||
+                                      starts_with_icase_mq(norm, "rgmercs/") ||
+                                      starts_with_icase_mq(norm, "scripts/rgmercs/"));
+    if (!prefer_trusted_root) {
+        if (auto cp = config_path(L, norm.c_str()); cp && fs::exists(*cp, ec)) {
+            return;
+        }
+    }
+
+    std::vector<fs::path> roots;
+    if (!s.root.empty()) roots.push_back(s.root);
+    for (const auto& d : s.host->dirs()) {
+        if (!d.empty()) roots.push_back(d);
+    }
+
+    for (const auto& r : roots) {
+        fs::path canon_r = fs::weakly_canonical(r, ec);
+        if (ec || canon_r.empty()) continue;
+
+        auto try_candidate = [&](const fs::path& rel_or_abs) -> std::optional<fs::path> {
+            fs::path cand = rel_or_abs.is_relative() ? (canon_r / rel_or_abs) : rel_or_abs;
+            fs::path canon_cand = fs::weakly_canonical(cand, ec);
+            if (ec || canon_cand.empty()) return std::nullopt;
+            fs::path rel = canon_cand.lexically_relative(canon_r);
+            if (rel.empty() || rel == "." || rel.is_absolute() || *rel.begin() == "..") return std::nullopt;
+            if (is_config_target(s, canon_cand)) return std::nullopt;
+            if (!fs::is_regular_file(canon_cand, ec)) return std::nullopt;
+            return canon_cand;
+        };
+
+        std::optional<fs::path> matched = try_candidate(gp);
+        if (!matched && gp.is_relative() && starts_with_icase_mq(norm, "scripts/") &&
+            starts_with_icase_mq(canon_r.filename().string(), "scripts") &&
+            canon_r.filename().string().size() == 7) {
+            matched = try_candidate(fs::path(norm.substr(8)));
+        }
+        if (!matched) continue;
+        const fs::path canon_cand = *matched;
+
+        // From here on, this path targets a real file inside an approved script root.
+        out.handled = true;
+        for (const auto& addon : s.host->managed) {
+            std::error_code entry_error;
+            if (fs::equivalent(canon_cand, addon.entry, entry_error)) {
+                out.msg = "managed add-on '" + addon.name + "'s entry cannot be loaded as another script's file";
+                return;
+            }
+        }
+        auto text = read_file(canon_cand);
+        if (!text) {
+            out.msg = "cannot open " + canon_cand.string();
+            return;
+        }
+        const Sha256Digest h = sha256(*text);
+        const std::string owner = script_identity(*s.host, canon_cand, s.name);
+        const std::uint32_t file_caps =
+            s.host->env.policy ? s.host->env.policy->caps(plugin::FileKind::Script, h, owner) : 0;
+        if (file_caps == 0) {
+            out.msg = std::format("script file '{}' ({}) may not run: {}", given, canon_cand.string(),
+                                  s.host->env.policy ? s.host->env.policy->refusal(plugin::FileKind::Script)
+                                                     : std::string("no rules"));
+            return;
+        }
+        if ((file_caps & s.caps) != s.caps) {
+            out.msg = std::format(
+                "script file '{}' ({}) may not run in {}: the file may do only '{}', the script '{}'", given,
+                canon_cand.string(), s.name, plugin::caps_text(file_caps), plugin::caps_text(s.caps));
+            return;
+        }
+        if (std::none_of(s.modules.begin(), s.modules.end(), [&](const auto& m) { return m.second == h && m.first == owner; }))
+            s.modules.emplace_back(owner, h);
+        out.found = true;
+        out.text = std::move(*text);
+        out.chunk = "@" + canon_cand.string();
+        return;
+    }
+}
+
+// load_trusted(path [, mode [, env]]): loads an approved executable Lua file from sc.root or script dirs
+// in the active environment (with mq, require, ImGui, and compat modules available), unless explicit `env` is given.
+// Returns (chunk, nil, true) on success, (nil, err, handled) on failure.
+int l_load_trusted_script(lua_State* L) {
+    std::size_t given_len = 0;
+    const char* given_c = luaL_checklstring(L, 1, &given_len);
+    const char* mode = lua_isnoneornil(L, 2) ? "t" : luaL_checkstring(L, 2);
+    if (std::strchr(mode, 't') == nullptr) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "attempt to load a binary chunk (Hailstone accepts text Lua only)");
+        lua_pushboolean(L, 1);
+        return 3;
+    }
+
+    Script& s = Script::of(L);
+    TrustedScriptFile& f = plugin::lua_keep<TrustedScriptFile>(L);
+    plugin::cxx_guard(L, [&] { resolve_trusted_script_file(L, s, std::string_view(given_c, given_len), f); });
+    if (!f.found) {
+        lua_pushnil(L);
+        lua_pushlstring(L, f.msg.data(), f.msg.size());
+        lua_pushboolean(L, f.handled ? 1 : 0);
+        f = TrustedScriptFile{};
+        lua_remove(L, -4); // the box
+        return 3;
+    }
+
+    const bool loaded = luaL_loadbufferx(L, f.text.data(), f.text.size(), f.chunk.c_str(), "t") == LUA_OK;
+    f = TrustedScriptFile{};
+    lua_remove(L, -2); // the box
+    if (!loaded) {
+        lua_pushnil(L);
+        lua_insert(L, -2);
+        lua_pushboolean(L, 1);
+        return 3;
+    }
+    if (!lua_isnoneornil(L, 3)) {
+        lua_pushvalue(L, 3);
+        lua_setupvalue(L, -2, 1);
+    }
+    lua_pushnil(L);
+    lua_pushboolean(L, 1);
+    return 3;
+}
+
 // The module file `given` names, next to the script or in the script directories, allowed by the server's rules like
 // the script. Calls no Lua.
 void search_module(Script& s, std::string_view given, ModuleFile& out) {
     const std::string name(given);
-    std::string rel = name;
+    std::string norm = normalize_path_separators(name);
+    bool had_lua_ext = false;
+    if (norm.size() > 4 && iequals(std::string_view(norm).substr(norm.size() - 4), ".lua")) {
+        norm.resize(norm.size() - 4);
+        had_lua_ext = true;
+    }
+    std::string rel = norm;
     std::replace(rel.begin(), rel.end(), '.', '/');
+
+    std::vector<std::string> rel_variants{rel};
+    if ((had_lua_ext || norm.find('/') != std::string::npos) && norm != rel) {
+        rel_variants.insert(rel_variants.begin(), norm);
+    }
+
     // Inside the folders only: no "..", nothing absolute or rooted (operator/ would take it in place of the folder).
-    if (const fs::path rel_path(rel); rel.find("..") == std::string::npos && !rel.empty() && rel.front() != '/' &&
-                                   rel.front() != '\\' && !rel_path.has_root_name() && !rel_path.is_absolute()) {
+    for (const std::string& rpath : rel_variants) {
+        const fs::path rel_path(rpath);
+        if (rpath.find("..") != std::string::npos || rpath.empty() || rpath.front() == '/' ||
+            rpath.front() == '\\' || rel_path.has_root_name() || rel_path.is_absolute()) {
+            continue;
+        }
         std::vector<fs::path> roots{s.root};
         for (const auto& d : s.host->dirs()) roots.push_back(d);
         for (const auto& r : roots) {
-            for (const fs::path& cand : {r / (rel + ".lua"), r / rel / "init.lua"}) {
-                const auto& dirs = s.host->dirs();
-                if (std::any_of(dirs.begin(), dirs.end(), [&](const fs::path& d) { return in_config_dir(d, cand); }))
-                    continue;
-                auto text = read_file(cand);
+            if (r.empty()) continue;
+            std::error_code ec;
+            const fs::path canon_r = fs::weakly_canonical(r, ec);
+            if (ec || canon_r.empty()) continue;
+            for (const fs::path& cand : {canon_r / (rpath + ".lua"), canon_r / rpath / "init.lua"}) {
+                const fs::path canon_cand = fs::weakly_canonical(cand, ec);
+                if (ec || canon_cand.empty()) continue;
+                const fs::path crel = canon_cand.lexically_relative(canon_r);
+                if (crel.empty() || crel == "." || crel.is_absolute() || *crel.begin() == "..") continue;
+                if (is_config_target(s, canon_cand)) continue;
+                auto text = read_file(canon_cand);
                 if (!text) continue;
                 for (const auto& addon : s.host->managed) {
                     std::error_code entry_error;
-                    if (fs::equivalent(cand, addon.entry, entry_error)) {
+                    if (fs::equivalent(canon_cand, addon.entry, entry_error)) {
+                        out.refused = true;
                         out.msg = "managed add-on '" + addon.name + "'s entry cannot be loaded as another script's module";
                         return;
                     }
                 }
                 Sha256Digest h = sha256(*text);
-                const std::string owner = script_identity(*s.host, cand, s.name);
+                const std::string owner = script_identity(*s.host, canon_cand, s.name);
                 const std::uint32_t module_caps =
                     s.host->env.policy ? s.host->env.policy->caps(plugin::FileKind::Script, h, owner) : 0;
                 if (module_caps == 0) {
-                    out.msg = std::format("module '{}' ({}) may not run: {}", name, cand.string(),
+                    out.refused = true;
+                    out.msg = std::format("module '{}' ({}) may not run: {}", name, canon_cand.string(),
                                           s.host->env.policy ? s.host->env.policy->refusal(plugin::FileKind::Script)
                                                              : std::string("no rules"));
                     return;
@@ -1128,16 +1352,17 @@ void search_module(Script& s, std::string_view given, ModuleFile& out) {
                 // allowed every one of them. Otherwise an add-on with fewer (an add-on named "mq" shipping
                 // mq/Icons.lua) would have its code run with the capabilities of any script that requires it.
                 if ((module_caps & s.caps) != s.caps) {
+                    out.refused = true;
                     out.msg = std::format(
                         "module '{}' ({}) may not run in {}: the module may do only '{}', the script '{}'", name,
-                        cand.string(), s.name, plugin::caps_text(module_caps), plugin::caps_text(s.caps));
+                        canon_cand.string(), s.name, plugin::caps_text(module_caps), plugin::caps_text(s.caps));
                     return;
                 }
                 if (std::none_of(s.modules.begin(), s.modules.end(), [&](const auto& m) { return m.second == h && m.first == owner; }))
                     s.modules.emplace_back(owner, h);
                 out.found = true;
                 out.text = std::move(*text);
-                out.chunk = "@" + cand.string();
+                out.chunk = "@" + canon_cand.string();
                 return;
             }
         }
@@ -1167,12 +1392,65 @@ int find_module(lua_State* L, const char* given) {
     Script& s = Script::of(L);
     ModuleFile& m = plugin::lua_keep<ModuleFile>(L);
     plugin::cxx_guard(L, [&] { search_module(s, given, m); });
-    int found = 0;
-    if (m.found) found = luaL_loadbufferx(L, m.text.data(), m.text.size(), m.chunk.c_str(), "t") == LUA_OK ? 1 : 0;
-    else lua_pushlstring(L, m.msg.data(), m.msg.size());
-    m = ModuleFile{}; // (its text now, not when the collector comes)
+    if (m.found) {
+        const int found = luaL_loadbufferx(L, m.text.data(), m.text.size(), m.chunk.c_str(), "t") == LUA_OK ? 1 : 0;
+        m = ModuleFile{}; // (its text now, not when the collector comes)
+        lua_remove(L, -2);
+        return found;
+    }
+    const bool refused = m.refused;
+    if (!refused) {
+        lua_getfield(L, LUA_REGISTRYINDEX, "hailstone.preloaded");
+        if (lua_istable(L, -1)) {
+            lua_getfield(L, -1, given);
+            lua_remove(L, -2);
+            if (!lua_isnil(L, -1)) {
+                const int kind = lua_isfunction(L, -1) ? 1 : 2;
+                m = ModuleFile{};
+                lua_remove(L, -2); // drop keep box under result
+                return kind;
+            }
+        }
+        lua_pop(L, 1);
+        lua_getglobal(L, "package");
+        if (lua_istable(L, -1)) {
+            lua_getfield(L, -1, "preload");
+            lua_remove(L, -2);
+            if (lua_istable(L, -1)) {
+                lua_getfield(L, -1, given);
+                lua_remove(L, -2);
+                if (!lua_isnil(L, -1)) {
+                    const int kind = lua_isfunction(L, -1) ? 1 : 2;
+                    m = ModuleFile{};
+                    lua_remove(L, -2); // drop keep box under result
+                    return kind;
+                }
+            }
+        }
+        lua_pop(L, 1);
+    }
+    lua_pushlstring(L, m.msg.data(), m.msg.size());
+    m = ModuleFile{};
     lua_remove(L, -2);
-    return found;
+    return 0;
+}
+
+int l_package_searcher(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    lua_settop(L, 1);
+    const int found = find_module(L, name);
+    if (found == 1) return 1;
+    if (found == 2) {
+        lua_pushcclosure(
+            L,
+            [](lua_State* S) -> int {
+                lua_pushvalue(S, lua_upvalueindex(1));
+                return 1;
+            },
+            1);
+        return 1;
+    }
+    return 1; // error string
 }
 
 int l_require(lua_State* L) {
@@ -1196,12 +1474,13 @@ int l_require(lua_State* L) {
 
 // The Lua half of the mq module and MQ's ImGui table over the client's `ui` (ui/lua/lua_imgui.cpp).
 constexpr const char* kPrelude = R"lua(
-local mq, load_config = ...
+local mq, load_config, load_trusted = ...
 
--- loadfile(path) / dofile(path): mq.pickle's data back, from under mq.configDir. The file is run with an empty
--- environment, and loadfile hands out only what it returned, as data: a value that is or holds a function (a
--- closure the file made, a string method it took) refuses the file. A script writes these files as it likes
--- (mq.pickle), so a function from one would be code no server's rules looked at (docs/plugins.md).
+-- loadfile(path [, mode [, env]]) / dofile(path):
+--   * Approved script-root files (e.g. RG Mercs class_configs/*.lua) are loaded via the separate trusted-script
+--     loader in the active environment (with mq, require, ImGui, and compatibility modules).
+--   * Config files under mq.configDir use the restricted data-only loader (empty environment; only pure data
+--     without functions/closures/userdata is returned).
 do
     local type, next, pcall, error, tostring = type, next, pcall, error, tostring
     local pack, unpack = table.pack, table.unpack
@@ -1215,7 +1494,13 @@ do
         end
         return true
     end
-    function loadfile(path)
+    function loadfile(path, mode, env)
+        if type(path) ~= 'string' then
+            return nil, 'loadfile: string path expected'
+        end
+        local tchunk, terr, handled = load_trusted(path, mode, env)
+        if tchunk then return tchunk end
+        if handled then return nil, terr end
         local chunk, err = load_config(path)
         if not chunk then return nil, err end
         local r = pack(pcall(chunk))
@@ -1223,6 +1508,9 @@ do
         local seen = {}
         for i = 2, r.n do
             if not only_data(r[i], seen) then return nil, tostring(path) .. ': not data (it holds a function)' end
+        end
+        if r.n <= 1 or (r.n == 2 and r[2] == nil) then
+            return function() return {} end
         end
         return function() return unpack(r, 2, r.n) end
     end
@@ -1293,7 +1581,10 @@ local function pickle_value(v, indent)
     end
     return '{\n' .. table.concat(parts, ',\n') .. '\n' .. string.rep('    ', indent) .. '}'
 end
-function mq.pickle(path, tbl) mq._write_config(path, 'return ' .. pickle_value(tbl, 0) .. '\n') end
+function mq.pickle(path, tbl)
+    if tbl == nil then tbl = {} end
+    mq._write_config(path, 'return ' .. pickle_value(tbl, 0) .. '\n')
+end
 
 function printf(fmt, ...) print(string.format(fmt, ...)) end
 
@@ -1334,8 +1625,97 @@ function ImGui.SetNextWindowPos(x, y, cond)
     if type(x) == 'table' then return ui.SetNextWindowPos(x.x or x[1], x.y or x[2], y) end
     return ui.SetNextWindowPos(x, y, cond)
 end
+function ImGui.Dummy(w, h)
+    if type(w) == 'table' then return ui.Dummy(w.x or w[1] or 0, w.y or w[2] or 0) end
+    return ui.Dummy(w or 0, h or 0)
+end
+local ImVec4_methods = {}
+function ImVec4_methods:ToImU32()
+    local function ch(v, d)
+        local n = tonumber(v) or d
+        if n < 0 then n = 0 elseif n > 1 then n = 1 end
+        return math.floor(n * 255 + 0.5)
+    end
+    local r = ch(self.x or self[1], 0)
+    local g = ch(self.y or self[2], 0)
+    local b = ch(self.z or self[3], 0)
+    local a = ch(self.w or self[4], 1)
+    return (a << 24) | (b << 16) | (g << 8) | r
+end
+local ImVec4_mt = { __index = ImVec4_methods }
 function ImVec2(x, y) return {x = x or 0, y = y or 0} end
-function ImVec4(x, y, z, w) return {x = x or 0, y = y or 0, z = z or 0, w = w or 0} end
+function ImVec4(x, y, z, w)
+    return setmetatable({x = x or 0, y = y or 0, z = z or 0, w = w or 0}, ImVec4_mt)
+end
+if ImGui.TextUnformatted == nil and ui.Text ~= nil then
+    ImGui.TextUnformatted = ui.Text
+end
+do
+    local ConsoleWidget = {}
+    ConsoleWidget.__index = ConsoleWidget
+    function ConsoleWidget.new(id)
+        return setmetatable({
+            _id = tostring(id or 'Console'),
+            _lines = {},
+            autoScroll = true,
+            maxBufferLines = 1000,
+        }, ConsoleWidget)
+    end
+    function ConsoleWidget:AppendText(fmt, ...)
+        local text = (select('#', ...) > 0) and string.format(tostring(fmt), ...) or tostring(fmt or '')
+        for line in string.gmatch(text .. '\n', '([^\n]*)\n') do
+            if line ~= '' or #self._lines == 0 then
+                self._lines[#self._lines + 1] = line
+            end
+        end
+        local cap = math.min(math.max(tonumber(self.maxBufferLines) or 1000, 1), 2000)
+        while #self._lines > cap do
+            table.remove(self._lines, 1)
+        end
+    end
+    function ConsoleWidget:AppendTextUnformatted(text)
+        if text ~= nil then self:AppendText('%s', tostring(text)) end
+    end
+    function ConsoleWidget:Clear()
+        self._lines = {}
+    end
+    function ConsoleWidget:IsCursorAtEnd()
+        return self.autoScroll == true
+    end
+    function ConsoleWidget:ScrollToBottom()
+        self._scrollToBottom = true
+    end
+    function ConsoleWidget:GetBuffer()
+        return self
+    end
+    function ConsoleWidget:PushStyleColor() end
+    function ConsoleWidget:PopStyleColor() end
+    function ConsoleWidget:Render(size)
+        local w, h = 0, 0
+        if type(size) == 'table' then
+            w = size.x or size[1] or 0
+            h = size.y or size[2] or 0
+        elseif type(size) == 'number' then
+            w = size
+        end
+        local visible = ui.BeginChild('##console_' .. self._id, w, h, false, 0)
+        if visible then
+            local total = #self._lines
+            local start = math.max(1, total - 400)
+            for i = start, total do
+                ui.Text(self._lines[i])
+            end
+            if (self.autoScroll or self._scrollToBottom) and ui.SetScrollHereY then
+                ui.SetScrollHereY(1.0)
+                self._scrollToBottom = false
+            end
+        end
+        ui.EndChild()
+    end
+    ImGui.ConsoleWidget = setmetatable(ConsoleWidget, {
+        __call = function(_, id) return ConsoleWidget.new(id) end,
+    })
+end
 ImGuiWindowFlags = ui.WindowFlags
 ImGuiCond = ui.Cond
 ImGuiCol = ui.Col
@@ -1347,6 +1727,114 @@ ImGuiComboFlags = ui.ComboFlags
 ImGuiSelectableFlags = ui.SelectableFlags
 ImGuiMouseButton = ui.Mouse
 ImGuiHoveredFlags = ui.HoveredFlags
+
+-- Hailstone 24 MacroQuest / RG Mercs extensions: DataType, AddTopLevelObject, CreateTexture, FindTextureAnimation
+do
+    local custom_tlos = {}
+    local function wrap_custom_val(dtype, obj)
+        if obj == nil then
+            return setmetatable({}, {
+                __call = function() return nil end,
+                __index = function() return wrap_custom_val(nil, nil) end,
+                __tostring = function() return 'NULL' end,
+            })
+        end
+        if type(dtype) ~= 'table' then
+            return setmetatable({}, {
+                __call = function() return obj end,
+                __index = function() return wrap_custom_val(nil, nil) end,
+                __tostring = function() return tostring(obj) end,
+            })
+        end
+        return setmetatable({}, {
+            __call = function()
+                if dtype.ToString then return dtype.ToString(obj) end
+                return tostring(obj)
+            end,
+            __index = function(_, key)
+                local mem = dtype.Members and dtype.Members[key]
+                if mem then
+                    return setmetatable({}, {
+                        __call = function(_, param)
+                            local rt, rv = mem(param or '', obj)
+                            return rv
+                        end,
+                        __tostring = function()
+                            local rt, rv = mem('', obj)
+                            return tostring(rv)
+                        end,
+                    })
+                end
+                local meth = dtype.Methods and dtype.Methods[key]
+                if meth then
+                    return function(_, ...) return meth(obj, ...) end
+                end
+                return wrap_custom_val(nil, nil)
+            end,
+            __tostring = function()
+                if dtype.ToString then return tostring(dtype.ToString(obj)) end
+                return tostring(obj)
+            end,
+        })
+    end
+
+    mq.DataType = {
+        new = function(name, def)
+            def = def or {}
+            def._name = name
+            def.Members = def.Members or {}
+            def.Methods = def.Methods or {}
+            return def
+        end,
+    }
+
+    function mq.AddTopLevelObject(name, handler)
+        custom_tlos[name] = handler
+    end
+
+    local orig_tlo = mq.TLO
+    local orig_mt = getmetatable(orig_tlo)
+    local orig_index = orig_mt and orig_mt.__index
+    setmetatable(orig_tlo, {
+        __index = function(t, key)
+            local h = custom_tlos[key]
+            if h then
+                return setmetatable({}, {
+                    __call = function(_, param)
+                        local dt, val = h(param or '')
+                        return wrap_custom_val(dt, val)
+                    end,
+                    __index = function(_, member)
+                        local dt, val = h('')
+                        return wrap_custom_val(dt, val)[member]
+                    end,
+                    __tostring = function()
+                        local dt, val = h('')
+                        return tostring(wrap_custom_val(dt, val))
+                    end,
+                })
+            end
+            if type(orig_index) == 'function' then return orig_index(t, key) end
+            return nil
+        end,
+    })
+
+    function mq.CreateTexture(path)
+        return {
+            path = path,
+            GetTextureID = function() return nil end,
+            size = { x = 60, y = 60 },
+        }
+    end
+
+    function mq.FindTextureAnimation(name)
+        return {
+            name = name,
+            SetCell = function() end,
+            GetTextureSize = function() return { x = 40, y = 40 } end,
+        }
+    end
+end
 )lua";
 
 } // namespace
@@ -1409,9 +1897,16 @@ ScriptHost::ScriptHost(ScriptEnv env) : impl_(std::make_unique<Impl>()) {
     m->owner = m->env.hooks->new_owner("lua");
     m->env.hooks->add_command(m->owner, "/lua", [m](std::string_view args) { m->lua_command(args); },
                               plugin::kCapCommands);
+    if (m->env.ipc_bus) {
+        m->env.ipc_bus->set_on_actor([m](const ipc::ActorPacket& pkt) {
+            if (m->actor_inbox.size() >= ipc::kMaxPendingInbound) m->actor_inbox.pop_front();
+            m->actor_inbox.push_back(pkt);
+        });
+    }
 }
 
 ScriptHost::~ScriptHost() {
+    if (impl_->env.ipc_bus) impl_->env.ipc_bus->set_on_actor({});
     for (auto& s : impl_->scripts) s->close();
     for (auto& [social, s] : impl_->buttons) s->close();
     if (impl_->env.hooks) impl_->env.hooks->remove(impl_->owner);
@@ -1550,6 +2045,37 @@ bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
     lua_setfield(L, LUA_REGISTRYINDEX, "hailstone.mq");
     lua_pushvalue(L, -1);
     lua_setglobal(L, "mq");
+    CompatEnv cenv;
+    cenv.ipc_bus = env.ipc_bus;
+    cenv.character_name = [this]() -> std::string {
+        const Context c = env.context ? env.context() : Context{};
+        return c.conn ? c.conn->character_name() : std::string();
+    };
+    cenv.server_name = [this]() -> std::string {
+        const Context c = env.context ? env.context() : Context{};
+        return c.server_name;
+    };
+    cenv.loopback_push = [this](const ipc::ActorPacket& pkt) {
+        if (actor_inbox.size() >= ipc::kMaxPendingInbound) actor_inbox.pop_front();
+        actor_inbox.push_back(pkt);
+    };
+    cenv.say = [this](const std::string& text) { say(text); };
+    cenv.write_blocked = [&sc]() { return sc.dry || sc.closing; };
+    cenv.script_name = sc.name;
+    cenv.config_dir = script_config_dir(sc);
+    cenv.script_root = sc.root;
+    cenv.read_dirs = dirs();
+    register_compat_modules(L, cenv);
+    lua_getglobal(L, "package");
+    if (lua_istable(L, -1)) {
+        lua_getfield(L, -1, "searchers");
+        if (lua_istable(L, -1)) {
+            lua_pushcfunction(L, l_package_searcher);
+            lua_rawseti(L, -2, 1);
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
     register_hailstone(L);
     if (luaL_loadbufferx(L, kPrelude, std::strlen(kPrelude), "=mq", "t") != LUA_OK) {
         std::string err = lua_tostring(L, -1);
@@ -1558,8 +2084,9 @@ bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
         return false;
     }
     lua_insert(L, -2);
-    lua_pushcfunction(L, l_load_config); // (the prelude's alone: loadfile and dofile check what it loads)
-    if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+    lua_pushcfunction(L, l_load_config);         // restricted data-only loader for mq.configDir
+    lua_pushcfunction(L, l_load_trusted_script); // separate trusted-script loader for approved script roots
+    if (lua_pcall(L, 3, 0, 0) != LUA_OK) {
         std::string err = lua_tostring(L, -1);
         sc.close();
         why = "internal error: " + err;
@@ -1570,13 +2097,15 @@ bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
 
 bool ScriptHost::run(const std::string& name, const std::vector<std::string>& args, std::string* why) {
     Impl& m = *impl_;
+    const std::string key = lower(name);
     auto refuse = [&](std::string text) {
         if (why) *why = text;
+        m.last_outcomes[key] = LastOutcome{key, "ERROR", text};
+        if (key == "rgmercs" && m.env.rgmercs) m.env.rgmercs->set_script_error(text);
         m.say("[Lua] " + text);
         return false;
     };
     m.reap();
-    std::string key = lower(name);
     // The Lua socials' names (button_name): a script of such a name would share a social's config folder and
     // browser owner.
     if (key.starts_with(kSocialPrefix)) return refuse(std::format("{}: a script's name cannot start with \"{}\"", key, kSocialPrefix));
@@ -1584,6 +2113,9 @@ bool ScriptHost::run(const std::string& name, const std::vector<std::string>& ar
     // reap() closed every stopped one nothing is in. One still running code (it stops itself and runs itself again)
     // would close later, and its close takes the name's UI registrations away: the new one's too.
     if (Script* old = m.find(key); old && !old->closing) return refuse(key + " is still stopping: run it again");
+    if (key == "rgmercs" && m.env.rgmercs) {
+        m.env.rgmercs->set_script_status("starting", "Starting rgmercs script");
+    }
     auto entry = m.resolve(key);
     if (!entry) return refuse("no script named " + name);
     auto text = read_file(*entry);
@@ -1637,6 +2169,12 @@ bool ScriptHost::run(const std::string& name, const std::vector<std::string>& ar
     lua_xmove(L, sc.co, 1); // the chunk onto the coroutine
     sc.co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
     watch(sc.co);
+    m.last_outcomes[key] = LastOutcome{key, "RUNNING", {}};
+    if (key == "rgmercs" && m.env.rgmercs) {
+        m.env.rgmercs->clear_error();
+        m.env.rgmercs->set_script_status("running", "Script started");
+        m.env.rgmercs->append_log("info", "Starting rgmercs script...");
+    }
     m.say(std::format("[Lua] running {} ({})", key, plugin::caps_text(caps)));
     log::info("lua: running {} from {}, sha256 {}, caps {}", key, entry->string(), to_hex(hash), plugin::caps_text(caps));
     m.scripts.push_back(std::move(s));
@@ -1651,7 +2189,16 @@ bool ScriptHost::Impl::kept(const Script& s) const {
 
 void ScriptHost::Impl::end(Script& s, const std::string& why) {
     s.stop_requested = true;
+    const bool already_failed = (s.status == Script::Status::Failed);
     if (s.status == Script::Status::Running || s.status == Script::Status::Paused) s.status = Script::Status::Exited;
+    if (!already_failed) {
+        last_outcomes[s.name] = ScriptHost::LastOutcome{s.name, why == "stopped" ? "STOPPED" : "EXITED", {}};
+        if (s.name == "rgmercs" && env.rgmercs && why != "reloading") {
+            env.rgmercs->set_script_status("stopping", "rgmercs " + why);
+            env.rgmercs->set_script_status("stopped", "rgmercs " + why);
+            env.rgmercs->append_log("info", "rgmercs " + why);
+        }
+    }
     say("[Lua] " + s.name + " " + why);
 }
 
@@ -1679,6 +2226,41 @@ bool ScriptHost::stop(std::string_view name) {
     return true;
 }
 
+bool ScriptHost::reload(const std::string& name, const std::vector<std::string>& args, std::string* why) {
+    Impl& m = *impl_;
+    const std::string key = lower(name);
+    if (key == "rgmercs" && m.env.rgmercs) {
+        m.env.rgmercs->set_script_status("reloading", "Reload requested");
+        m.env.rgmercs->append_log("info", "Reloading rgmercs script...");
+    }
+    if (Script* s = m.find(key); s && !s->stop_requested) {
+        if (m.kept(*s)) {
+            const std::string msg = s->name + " is required by this server: it keeps running";
+            if (why) *why = msg;
+            m.say("[Lua] " + msg);
+            return false;
+        }
+        if (m.refuse_control(*s)) {
+            if (why) *why = "not permitted to control " + s->name;
+            return false;
+        }
+        m.end(*s, "reloading");
+        m.reap();
+    }
+    if (key == "rgmercs" && m.env.rgmercs) {
+        m.env.rgmercs->clear_error();
+    }
+    return run(name, args, why);
+}
+
+std::optional<ScriptHost::LastOutcome> ScriptHost::last_outcome(std::string_view name) const {
+    const std::string key = lower(name);
+    if (const auto it = impl_->last_outcomes.find(key); it != impl_->last_outcomes.end()) {
+        return it->second;
+    }
+    return std::nullopt;
+}
+
 void ScriptHost::stop_all() {
     for (auto& s : impl_->scripts)
         if (!s->stop_requested) impl_->end(*s, "stopped");
@@ -1699,6 +2281,12 @@ bool ScriptHost::pause(std::string_view name, std::optional<bool> paused) {
     if (impl_->refuse_control(*s)) return true;
     bool now_paused = paused ? *paused : s->status != Script::Status::Paused;
     s->status = now_paused ? Script::Status::Paused : Script::Status::Running;
+    impl_->last_outcomes[s->name] = LastOutcome{s->name, now_paused ? "PAUSED" : "RUNNING", {}};
+    if (s->name == "rgmercs" && impl_->env.rgmercs) {
+        impl_->env.rgmercs->set_script_status(now_paused ? "paused" : "running",
+                                              now_paused ? "Paused by user" : "Resumed by user");
+        impl_->env.rgmercs->append_log("info", now_paused ? "rgmercs paused." : "rgmercs resumed.");
+    }
     impl_->say(std::format("[Lua] {} {}", s->name, now_paused ? "paused" : "resumed"));
     return true;
 }
@@ -1773,12 +2361,29 @@ void ScriptHost::Impl::reap() {
 void ScriptHost::pulse() {
     Impl& m = *impl_;
     Impl::Walk walk(m);
+    std::deque<ipc::ActorPacket> pending_actors;
+    if (!m.actor_inbox.empty()) {
+        pending_actors = std::move(m.actor_inbox);
+        m.actor_inbox.clear();
+    }
     // A script started in this walk (mq.cmd('/lua run x')) first runs next frame: two scripts that restart each other
     // cannot keep one walk going.
     const std::size_t count = m.scripts.size();
     for (std::size_t i = 0; i < count; ++i) {
         Script& s = *m.scripts[i];
         if (s.stop_requested || s.status != Script::Status::Running || !s.co) continue;
+        if (!pending_actors.empty() && s.L) {
+            ++s.busy;
+            plugin::CallerScope scope(s.caps, s.name);
+            s.new_slice();
+            ScriptRun run(s);
+            for (const auto& pkt : pending_actors) {
+                deliver_compat_actor(s.L, pkt, [&](const std::string& err) {
+                    m.say(std::format("[Lua] {} actor handler error: {}", s.name, err));
+                });
+            }
+            --s.busy;
+        }
         if (s.main_done) { // a plugin whose main chunk returned: only its binds' threads
             ++s.busy;
             plugin::CallerScope scope(s.caps, s.name);
@@ -1812,11 +2417,23 @@ void ScriptHost::pulse() {
             s.main_done = true; // a plugin: it stays for what it gave the client (hooks, packets, windows)
         } else if (st == LUA_OK) {
             s.stop_requested = true; // the script's main chunk returned
-            s.status = Script::Status::Exited;
+            if (s.status != Script::Status::Failed) {
+                s.status = Script::Status::Exited;
+                m.last_outcomes[s.name] = LastOutcome{s.name, "EXITED", {}};
+                if (s.name == "rgmercs" && m.env.rgmercs) {
+                    m.env.rgmercs->set_script_status("stopped", "Script exited cleanly");
+                }
+            }
             m.say("[Lua] " + s.name + " ended");
         } else if (lua_touserdata(s.co, -1) == &kExitKey) {
             s.stop_requested = true;
-            s.status = Script::Status::Exited;
+            if (s.status != Script::Status::Failed) {
+                s.status = Script::Status::Exited;
+                m.last_outcomes[s.name] = LastOutcome{s.name, "EXITED", {}};
+                if (s.name == "rgmercs" && m.env.rgmercs) {
+                    m.env.rgmercs->set_script_status("stopped", "Script requested exit");
+                }
+            }
             m.say("[Lua] " + s.name + " ended");
         } else {
             const char* err = lua_tostring(s.co, -1);
@@ -1884,6 +2501,7 @@ void ScriptHost::imgui() {
 
 void ScriptHost::Impl::draw_windows(Script& s) {
     if (s.stop_requested || s.windows.empty() || (s.caps & plugin::kCapUi) == 0) return;
+    if (s.name == "rgmercs" && env.rgmercs && env.rgmercs->suppress_script_ui()) return;
     ++s.busy;
     plugin::CallerScope scope(s.caps, s.name);
     // A draw function may destroy or make windows (its own too): this frame draws the ones there were, those still
@@ -2230,6 +2848,12 @@ void ScriptHost::Impl::lua_command(std::string_view args) {
         }
         return;
     }
+    if (verb == "reload" && !words.empty()) {
+        std::string name = words.front();
+        words.erase(words.begin());
+        self->reload(name, words);
+        return;
+    }
     if (verb == "list" || verb == "ps" || verb == "info") {
         reap();
         if (std::all_of(scripts.begin(), scripts.end(), [](const auto& s) { return s->stop_requested; }))
@@ -2241,7 +2865,7 @@ void ScriptHost::Impl::lua_command(std::string_view args) {
         }
         return;
     }
-    say("[Lua] usage: /lua run <script> [args] | stop [script] | pause [script] | list");
+    say("[Lua] usage: /lua run <script> [args] | reload <script> [args] | stop [script] | pause [script] | list");
 }
 
 } // namespace hailstone::mq

@@ -70,6 +70,7 @@ std::filesystem::path scripts_config_dir();              // scripts/config/, the
 std::filesystem::path textures_dir();                    // textures/, one folder per texture pack
 std::filesystem::path maps_dir();                        // maps/, the player's in-game maps for every server
 std::filesystem::path servers_dir();                     // servers/, one folder per saved server (core/server_profile.h)
+std::filesystem::path profiles_dir();                    // profiles/, box/group launcher rosters (.ini/.json, no passwords)
 std::filesystem::path logs_dir();                        // logs/, the logs and the crash reports
 std::filesystem::path log_file();                        // logs/hailstone.log
 std::filesystem::path screenshots_dir();                 // screenshots/

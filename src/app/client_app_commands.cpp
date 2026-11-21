@@ -5,6 +5,8 @@
 // [Defaults] / [Options]). GameConnection::run_slash_command hands them here (set_client_commands).
 //
 
+#include <algorithm>
+#include <cctype>
 #include <format>
 #include <sstream>
 
@@ -14,12 +16,14 @@
 #include "app/client_app_internal.h"
 #include "app/lua_ui.h"
 #include "app/lua_ui_windows.h"
+#include "core/group_profile.h"
 #include "core/msvc_atoi.h"
 #include "game/chat_windows.h"
 #include "game/hotbuttons.h"
 #include "game/option_commands.h"
 #include "game/slash_commands.h"
 #include "game/xtarget.h"
+#include "mq/rgmercs_bridge.h"
 
 namespace hailstone::app {
 
@@ -209,6 +213,16 @@ bool ClientApp::client_command(std::string_view h, const std::string& args) {
     }
     if (h == "Hailstone_camera") {
         camera_command(args);
+        return true;
+    }
+    if (h == "Hailstone_combat") {
+        run_slash_combat(args);
+        return true;
+    }
+    if (h == "Hailstone_estop") {
+        std::string msg;
+        handle_combat_command("estop", {}, msg);
+        c.show_chat(msg.empty() ? "Emergency stop activated." : msg, 0xd);
         return true;
     }
     if (h == "Hailstone_finditem") {
@@ -598,6 +612,843 @@ bool ClientApp::client_command(std::string_view h, const std::string& args) {
         return true;
     }
     return client_info_command(h, args);
+}
+
+void ClientApp::load_combat_profile_for_zone(const std::filesystem::path& char_dir,
+                                             std::string_view class_short) {
+    if (!combat_engine_) return;
+    combat_char_dir_ = char_dir;
+    const std::string group_id = active_group_profile_ ? active_group_profile_->id : opts_.profile;
+    combat::CombatProfile prof;
+    std::string err;
+    if (!combat::resolve_character_combat_profile(platform::data_dir(), char_dir, group_id,
+                                                class_short, prof, err)) {
+        log::warn("combat: profile load note: {}", err);
+        prof = combat::default_combat_profile_for_class(class_short);
+    }
+    if (!char_dir.empty()) {
+        combat::migrate_imported_combat_settings(platform::data_dir(), char_dir / "hailstone.ini", prof);
+        if (prof.profile_path.empty()) {
+            prof.profile_path = (char_dir / "combat_profile.ini").string();
+        }
+    }
+    combat_engine_->set_profile(std::move(prof));
+    HailstoneCombatAdapter actions(conn_.get(), nav_.get(), &ui_host_);
+    const std::string zone = conn_ ? conn_->world().zone_short_name : std::string();
+    combat_engine_->on_zone_change(&actions, zone);
+}
+
+void ClientApp::tick_combat_controller() {
+    if (!combat_engine_ || !conn_ || !player_ready_ || screen_ != Screen::InGame) return;
+    const std::uint64_t now_ms = static_cast<std::uint64_t>(net::GameConnection::now_ms());
+    const game::mechanics::Character* ch = stats_ui_ ? stats_ui_->character() : nullptr;
+    last_combat_snapshot_ = build_combat_snapshot(*conn_, nav_.get(), &bus_, ch,
+                                                  combat_engine_->profile(),
+                                                  last_player_moved_, last_manual_backward_,
+                                                  server_profile_.name, now_ms);
+    HailstoneCombatAdapter actions(conn_.get(), nav_.get(), &ui_host_);
+    combat_engine_->tick(last_combat_snapshot_, actions);
+}
+
+bool ClientApp::handle_combat_command(std::string_view action, std::string_view arg,
+                                      std::string& out_msg) {
+    if (!combat_engine_) {
+        out_msg = "Combat controller not initialized";
+        return false;
+    }
+    auto lower = [](std::string_view v) {
+        std::string out(v);
+        for (char& ch : out) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        return out;
+    };
+    auto parse_bool = [&](std::string_view v, bool cur) {
+        const std::string lv = lower(v);
+        if (lv == "toggle") return !cur;
+        if (lv == "1" || lv == "true" || lv == "on" || lv == "yes") return true;
+        if (lv == "0" || lv == "false" || lv == "off" || lv == "no") return false;
+        return !cur;
+    };
+    const std::string act = lower(action);
+    HailstoneCombatAdapter actions(conn_.get(), nav_.get(), &ui_host_);
+
+    if (act == "start" || act == "on") {
+        combat_engine_->start("Started by player");
+        out_msg = "Combat controller started";
+        return true;
+    }
+    if (act == "stop" || act == "off") {
+        combat_engine_->stop(&actions, "Stopped by player");
+        out_msg = "Combat controller stopped";
+        return true;
+    }
+    if (act == "pause") {
+        combat_engine_->pause(&actions, "Paused by player");
+        out_msg = "Combat controller paused";
+        return true;
+    }
+    if (act == "resume") {
+        combat_engine_->resume("Resumed by player");
+        out_msg = "Combat controller resumed";
+        return true;
+    }
+    if (act == "estop" || act == "emergency_stop") {
+        combat_engine_->emergency_stop(actions, arg.empty() ? std::string_view("Emergency stop activated") : arg);
+        out_msg = "EMERGENCY STOP activated - movement, casting, and attack halted";
+        return true;
+    }
+    if (act == "reset_estop" || act == "reset") {
+        const bool ok = combat_engine_->reset_emergency_stop("Emergency stop cleared by player");
+        out_msg = ok ? "Emergency stop reset (controller remains Idle)" : "Not in EmergencyStop state";
+        return ok;
+    }
+    if (act == "status") {
+        const auto st = combat_engine_->status_snapshot(last_combat_snapshot_.in_zone ? &last_combat_snapshot_ : nullptr);
+        out_msg = std::format("Combat: {} | Move: {} | Target: {} | Reason: {}{}",
+                              combat::combat_state_name(st.state),
+                              combat::movement_mode_name(st.movement_mode),
+                              st.target_name.empty() ? "none" : st.target_name,
+                              st.idle_reason.empty() ? st.transition_reason : st.idle_reason,
+                              st.dry_run ? " [DRY-RUN]" : "");
+        return true;
+    }
+    if (act == "reload") {
+        std::string cls;
+        if (conn_) {
+            if (const game::Spawn* me = conn_->world().player()) {
+                cls = std::string(game::class_short_name(me->class_id));
+            }
+        }
+        load_combat_profile_for_zone(combat_char_dir_, cls);
+        out_msg = "Combat profile reloaded";
+        return true;
+    }
+    if (act == "save") {
+        std::filesystem::path target = combat_char_dir_.empty()
+            ? std::filesystem::path(combat_engine_->profile().profile_path)
+            : (combat_char_dir_ / "combat_profile.ini");
+        if (target.empty() || !combat::is_path_within_root(platform::data_dir(), target)) {
+            out_msg = "Refused: combat profile path outside Hailstone data root";
+            return false;
+        }
+        combat_engine_->mutable_profile().profile_path = target.string();
+        const bool ok = combat::save_combat_profile(combat_engine_->profile(), target, out_msg);
+        if (ok) out_msg = std::format("Saved {}", target.filename().string());
+        return ok;
+    }
+    if (act == "dry_run") {
+        const bool next = parse_bool(arg, combat_engine_->profile().dry_run);
+        combat_engine_->set_dry_run(next);
+        out_msg = next ? "Dry-run enabled" : "Dry-run disabled";
+        return true;
+    }
+    if (act == "auto_loadout") {
+        const bool next = parse_bool(arg, combat_engine_->profile().auto_loadout);
+        combat_engine_->set_auto_loadout(next);
+        out_msg = next ? "Automatic gem loadout overwrite ENABLED" : "Automatic gem loadout disabled (manual gems protected)";
+        return true;
+    }
+    if (act == "rememorize_missing") {
+        combat_engine_->mutable_profile().rememorize_missing =
+            parse_bool(arg, combat_engine_->profile().rememorize_missing);
+        out_msg = "Updated rememorize_missing";
+        return true;
+    }
+    if (act == "rememorize_now") {
+        combat_engine_->request_rememorize();
+        out_msg = "Requested safe missing-gem memorization";
+        return true;
+    }
+    if (act == "allow_melee_attack") {
+        const bool next = parse_bool(arg, combat_engine_->profile().allow_melee_attack);
+        combat_engine_->mutable_profile().allow_melee_attack = next;
+        if (!next) actions.set_auto_attack(false);
+        out_msg = next ? "Melee auto-attack enabled" : "Melee auto-attack disabled";
+        return true;
+    }
+    if (act == "allow_pet_attack") {
+        const bool next = parse_bool(arg, combat_engine_->profile().allow_pet_attack);
+        combat_engine_->mutable_profile().allow_pet_attack = next;
+        if (!next) actions.pet_back();
+        out_msg = next ? "Pet attack enabled" : "Pet attack disabled";
+        return true;
+    }
+    if (act == "use_abilities") {
+        combat_engine_->mutable_profile().use_abilities =
+            parse_bool(arg, combat_engine_->profile().use_abilities);
+        out_msg = "Updated use_abilities";
+        return true;
+    }
+    if (act == "melee_behind") {
+        combat_engine_->mutable_profile().melee_behind =
+            parse_bool(arg, combat_engine_->profile().melee_behind);
+        out_msg = "Updated melee_behind";
+        return true;
+    }
+    if (act == "pause_on_manual_move") {
+        combat_engine_->mutable_profile().pause_on_manual_move =
+            parse_bool(arg, combat_engine_->profile().pause_on_manual_move);
+        out_msg = "Updated pause_on_manual_move";
+        return true;
+    }
+    if (act == "movement_mode") {
+        const auto m = combat::parse_movement_mode(arg, combat_engine_->profile().movement_mode);
+        combat_engine_->set_movement_mode(m);
+        out_msg = std::format("Movement mode: {}", combat::movement_mode_name(m));
+        return true;
+    }
+    if (act == "assist_target") {
+        std::string target(arg);
+        if (lower(target) == "none") target.clear();
+        combat_engine_->set_assist_target(target);
+        out_msg = target.empty() ? "Assist target cleared" : std::format("Assist target: {}", target);
+        return true;
+    }
+    if (act == "follow_target") {
+        std::string target(arg);
+        if (lower(target) == "none") target.clear();
+        combat_engine_->set_follow_target(target);
+        out_msg = target.empty() ? "Follow target cleared" : std::format("Follow target: {}", target);
+        return true;
+    }
+    if (act == "retreat_hp_pct" || act == "engage_at_hp_pct") {
+        try {
+            const int v = std::clamp(std::stoi(std::string(arg)), 0, 100);
+            if (act == "retreat_hp_pct") combat_engine_->mutable_profile().retreat_hp_pct = v;
+            else combat_engine_->mutable_profile().engage_at_hp_pct = v;
+            out_msg = std::format("{} = {}%", act, v);
+            return true;
+        } catch (...) {
+            out_msg = "Invalid percentage";
+            return false;
+        }
+    }
+    if (act == "assist_range" || act == "melee_range" || act == "ranged_min_range" ||
+        act == "ranged_max_range" || act == "disengage_distance" || act == "follow_distance") {
+        try {
+            const float v = std::clamp(std::stof(std::string(arg)), 0.0f, 500.0f);
+            auto& p = combat_engine_->mutable_profile();
+            if (act == "assist_range") p.assist_range = v;
+            else if (act == "melee_range") p.melee_range = v;
+            else if (act == "ranged_min_range") p.ranged_min_range = v;
+            else if (act == "ranged_max_range") p.ranged_max_range = v;
+            else if (act == "disengage_distance") p.disengage_distance = v;
+            else p.follow_distance = v;
+            out_msg = std::format("{} = {:.1f}", act, v);
+            return true;
+        } catch (...) {
+            out_msg = "Invalid distance";
+            return false;
+        }
+    }
+    if (act == "toggle_rule") {
+        auto& rules = combat_engine_->mutable_profile().rules;
+        try {
+            const std::size_t idx = static_cast<std::size_t>(std::stoul(std::string(arg)));
+            if (idx >= 1 && idx <= rules.size()) {
+                rules[idx - 1].enabled = !rules[idx - 1].enabled;
+                out_msg = std::format("Rule {} {}", rules[idx - 1].name,
+                                      rules[idx - 1].enabled ? "enabled" : "disabled");
+                return true;
+            }
+        } catch (...) {}
+        for (auto& r : rules) {
+            if (lower(r.name) == lower(arg)) {
+                r.enabled = !r.enabled;
+                out_msg = std::format("Rule {} {}", r.name, r.enabled ? "enabled" : "disabled");
+                return true;
+            }
+        }
+        out_msg = "Unknown rule";
+        return false;
+    }
+    if (act == "clear_logs") {
+        combat_engine_->clear_logs();
+        out_msg = "Combat logs cleared";
+        return true;
+    }
+    if (act == "ui" || act == "toggle") {
+        if (ui_api_) ui_api_->toggle("CombatWnd");
+        out_msg = "Toggled Combat window";
+        return true;
+    }
+    if (act == "show") {
+        if (ui_api_) ui_api_->show("CombatWnd", true);
+        out_msg = "Shown Combat window";
+        return true;
+    }
+    if (act == "hide") {
+        if (ui_api_) ui_api_->show("CombatWnd", false);
+        out_msg = "Hidden Combat window";
+        return true;
+    }
+
+    out_msg = std::format("Unknown combat action: {}", action);
+    return false;
+}
+
+void ClientApp::run_slash_combat(const std::string& args) {
+    std::string_view rest = args;
+    std::string word = game::next_cmd_arg(rest);
+    if (word.empty()) {
+        if (ui_api_) ui_api_->toggle("CombatWnd");
+        return;
+    }
+    std::string msg;
+    std::string rem(rest);
+    while (!rem.empty() && (rem.front() == ' ' || rem.front() == '\t')) rem.erase(rem.begin());
+    while (!rem.empty() && (rem.back() == ' ' || rem.back() == '\t')) rem.pop_back();
+    const bool ok = handle_combat_command(word, rem, msg);
+    if (conn_ && !msg.empty()) {
+        conn_->show_chat(msg, ok ? 15 : 0xd);
+    }
+    if (!ok && conn_) {
+        conn_->show_chat("Usage: /combat [start|stop|pause|resume|estop|reset|reload|save|dry_run on|off|status|ui]", 15);
+    }
+}
+
+ipc::CommandAckPacket ClientApp::handle_bus_command(const ipc::CommandPacket& cmd) {
+    ipc::CommandAckPacket ack;
+    ack.seq = cmd.seq;
+
+    auto trim = [](std::string_view sv) {
+        while (!sv.empty() && (sv.front() == ' ' || sv.front() == '\t' || sv.front() == '\r' || sv.front() == '\n'))
+            sv.remove_prefix(1);
+        while (!sv.empty() && (sv.back() == ' ' || sv.back() == '\t' || sv.back() == '\r' || sv.back() == '\n'))
+            sv.remove_suffix(1);
+        return sv;
+    };
+    auto lower_str = [](std::string_view sv) {
+        std::string out(sv);
+        std::transform(out.begin(), out.end(), out.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return out;
+    };
+
+    const std::string_view full = trim(cmd.command);
+    if (full.empty()) {
+        ack.ok = false;
+        ack.message = "empty command";
+        return ack;
+    }
+
+    std::string_view rest = full;
+    const std::string verb = lower_str(game::next_cmd_arg(rest));
+    rest = trim(rest);
+    const bool in_game = conn_ && screen_ == Screen::InGame && player_ready_;
+
+    if (verb == "/estop") {
+        std::string msg;
+        ack.ok = handle_combat_command("estop", rest, msg);
+        if (conn_) conn_->stop_follow(false);
+        ack.message = msg.empty() ? "emergency stop activated" : msg;
+        return ack;
+    }
+
+    if (verb == "/combat") {
+        run_slash_combat(std::string(rest));
+        ack.ok = true;
+        ack.message = "combat command dispatched";
+        return ack;
+    }
+
+    if (verb == "/stopfollow" || (verb == "/follow" && (rest.empty() || lower_str(rest) == "off" || lower_str(rest) == "stop"))) {
+        if (conn_) conn_->stop_follow(false);
+        if (combat_engine_) {
+            combat_engine_->set_follow_target("");
+            if (combat_engine_->profile().movement_mode == combat::MovementMode::Follow)
+                combat_engine_->set_movement_mode(combat::MovementMode::None);
+        }
+        ack.ok = true;
+        ack.message = "stopped following";
+        return ack;
+    }
+
+    if (verb == "/follow") {
+        if (!in_game) {
+            ack.ok = false;
+            ack.message = "cannot follow while not in game";
+            return ack;
+        }
+        const std::string target_name(rest);
+        std::uint32_t match_id = 0;
+        for (const auto& [sid, sp] : conn_->world().spawns) {
+            if (iequals(game::display_name(sp.name), target_name) || iequals(sp.name, target_name)) {
+                match_id = sid;
+                break;
+            }
+        }
+        if (match_id == 0) {
+            ack.ok = false;
+            ack.message = std::format("follow target '{}' not found in zone", target_name);
+            return ack;
+        }
+        conn_->set_target(match_id);
+        conn_->send_command("/follow");
+        if (combat_engine_) {
+            combat_engine_->set_follow_target(target_name);
+            combat_engine_->set_movement_mode(combat::MovementMode::Follow);
+        }
+        ack.ok = true;
+        ack.message = std::format("following {}", target_name);
+        return ack;
+    }
+
+    if (verb == "/assist") {
+        if (!in_game) {
+            ack.ok = false;
+            ack.message = "cannot assist while not in game";
+            return ack;
+        }
+        if (rest.empty()) {
+            ack.ok = false;
+            ack.message = "assist target is required";
+            return ack;
+        }
+        const std::string target_name(rest);
+        if (combat_engine_) combat_engine_->set_assist_target(target_name);
+        conn_->send_command("/assist " + target_name);
+        ack.ok = true;
+        ack.message = std::format("assisting {}", target_name);
+        return ack;
+    }
+
+    if (verb == "/attack") {
+        if (!in_game) {
+            ack.ok = false;
+            ack.message = "cannot toggle attack while not in game";
+            return ack;
+        }
+        const std::string mode = lower_str(rest);
+        const bool turn_on = (mode.empty() || mode == "on" || mode == "1" || mode == "true");
+        conn_->set_auto_attack(turn_on);
+        std::string msg;
+        if (combat_engine_) {
+            if (turn_on) handle_combat_command("start", {}, msg);
+            else handle_combat_command("stop", {}, msg);
+        }
+        ack.ok = true;
+        ack.message = turn_on ? "attack enabled" : "attack stopped";
+        return ack;
+    }
+
+    if (verb == "/script") {
+        if (!automation_) {
+            ack.ok = false;
+            ack.message = "script host unavailable";
+            return ack;
+        }
+        std::string_view srest = rest;
+        const std::string sub = lower_str(game::next_cmd_arg(srest));
+        srest = trim(srest);
+        std::string script_name = std::string(srest);
+        if (script_name.empty()) {
+            const auto running = automation_->scripts().list();
+            script_name = running.empty() ? std::string("rgmercs") : running.front().name;
+        }
+        std::string why;
+        if (sub == "pause") {
+            bool is_running = false;
+            for (const auto& s : automation_->scripts().list()) {
+                if (s.name == script_name && s.status == "RUNNING") is_running = true;
+            }
+            if (!is_running) {
+                ack.ok = false;
+                ack.message = std::format("script '{}' is not running", script_name);
+                return ack;
+            }
+            ack.ok = automation_->scripts().pause(script_name);
+            ack.message = ack.ok ? std::format("paused {}", script_name) : std::format("failed to pause {}", script_name);
+            return ack;
+        }
+        if (sub == "resume") {
+            bool is_paused = false;
+            for (const auto& s : automation_->scripts().list()) {
+                if (s.name == script_name && s.status == "PAUSED") is_paused = true;
+            }
+            if (!is_paused) {
+                ack.ok = false;
+                ack.message = std::format("script '{}' is not paused", script_name);
+                return ack;
+            }
+            ack.ok = automation_->scripts().pause(script_name);
+            ack.message = ack.ok ? std::format("resumed {}", script_name) : std::format("failed to resume {}", script_name);
+            return ack;
+        }
+        if (sub == "restart" || sub == "reload") {
+            ack.ok = automation_->scripts().reload(script_name, {}, &why);
+            ack.message = ack.ok ? std::format("reloaded {}", script_name)
+                                 : (why.empty() ? std::format("failed to reload {}", script_name) : why);
+            return ack;
+        }
+        if (sub == "start" || sub == "run") {
+            ack.ok = automation_->scripts().run(script_name, {}, &why);
+            ack.message = ack.ok ? std::format("started {}", script_name)
+                                 : (why.empty() ? std::format("failed to start {}", script_name) : why);
+            return ack;
+        }
+        if (sub == "stop") {
+            ack.ok = automation_->scripts().stop(script_name);
+            ack.message = ack.ok ? std::format("stopped {}", script_name) : std::format("script '{}' is not running", script_name);
+            return ack;
+        }
+        ack.ok = false;
+        ack.message = std::format("unknown /script action '{}'", sub);
+        return ack;
+    }
+
+    if (verb == "/reloadprofile") {
+        std::string msg;
+        if (!rest.empty()) {
+            const std::string pname(rest);
+            active_commander_profile_ = pname;
+            const auto gp = core::make_named_group_profile_preset(pname, server_profile_.name);
+            if (combat_engine_ && !gp.slots.empty()) {
+                const std::string my_name = in_game ? conn_->character_name() : opts_.auto_character;
+                for (const auto& slot : gp.slots) {
+                    if (iequals(slot.character, my_name) || gp.slots.size() == 1) {
+                        if (!slot.follow_target.empty()) combat_engine_->set_follow_target(slot.follow_target);
+                        if (!slot.class_role.empty()) combat_engine_->mutable_profile().role = slot.class_role;
+                        if (!slot.combat_profile.empty()) combat_engine_->mutable_profile().profile_name = slot.combat_profile;
+                        break;
+                    }
+                }
+            }
+            ack.ok = true;
+            ack.message = std::format("profile '{}' applied", pname);
+            return ack;
+        }
+        ack.ok = handle_combat_command("reload", {}, msg);
+        ack.message = msg;
+        return ack;
+    }
+
+    if (verb == "/reloadspells") {
+        if (!in_game) {
+            ack.ok = false;
+            ack.message = "cannot reload spells while not in game";
+            return ack;
+        }
+        if (conn_->in_combat() || (combat_engine_ && combat_engine_->state() == combat::CombatState::Combat)) {
+            ack.ok = false;
+            ack.message = "cannot memorize spells during combat";
+            return ack;
+        }
+        if (!combat_engine_) {
+            ack.ok = false;
+            ack.message = "combat engine unavailable";
+            return ack;
+        }
+        combat_engine_->request_rememorize();
+        const auto st = combat_engine_->status_snapshot(last_combat_snapshot_.in_zone ? &last_combat_snapshot_ : nullptr);
+        if (!st.loadout_audit.level_restricted_spells.empty() || !st.loadout_audit.missing_spell_data.empty() ||
+            !st.loadout_audit.unknown_spells.empty()) {
+            ack.ok = false;
+            ack.message = std::format("spell loadout issues: {} unavailable, {} level-restricted, {} missing spell data",
+                                      st.loadout_audit.unknown_spells.size(),
+                                      st.loadout_audit.level_restricted_spells.size(),
+                                      st.loadout_audit.missing_spell_data.size());
+            return ack;
+        }
+        ack.ok = true;
+        ack.message = "safe spell loadout reload requested";
+        return ack;
+    }
+
+    if (verb == "/camp") {
+        if (!in_game) {
+            ack.ok = false;
+            ack.message = "not in game to camp";
+            return ack;
+        }
+        conn_->send_command("/camp");
+        ack.ok = true;
+        ack.message = "camp initiated";
+        return ack;
+    }
+
+    if (verb == "/bind" || verb == "/returntobind") {
+        if (!in_game) {
+            ack.ok = false;
+            ack.message = "cannot return to bind while not in game";
+            return ack;
+        }
+        const std::string safe_bind_cmd = config_.get_string("commander.safe_bind_cmd", "");
+        if (!safe_bind_cmd.empty() && safe_bind_cmd.front() == '/') {
+            conn_->send_command(safe_bind_cmd);
+            ack.ok = true;
+            ack.message = std::format("dispatched server-authorized bind command '{}'", safe_bind_cmd);
+            return ack;
+        }
+        // Check if character has a memorized Gate spell (safe standard game cast).
+        if (last_combat_snapshot_.in_zone) {
+            for (const auto& g : last_combat_snapshot_.gems) {
+                if (g.spell_id != 0 && iequals(g.spell_name, "Gate")) {
+                    conn_->send_command(std::format("/cast {}", g.gem_index + 1));
+                    ack.ok = true;
+                    ack.message = "casting memorized Gate";
+                    return ack;
+                }
+            }
+        }
+        ack.ok = false;
+        ack.message = "no server-authorized return-to-bind command or memorized Gate spell available";
+        return ack;
+    }
+
+    if (verb == "/tptome" || verb == "/tphere") {
+        if (!in_game) {
+            ack.ok = false;
+            ack.message = "cannot teleport while not in game";
+            return ack;
+        }
+        const std::string safe_tp_cmd = config_.get_string("commander.safe_teleport_cmd", "");
+        if (safe_tp_cmd.empty() || safe_tp_cmd.front() != '/') {
+            ack.ok = false;
+            ack.message = "teleport refused: no server-authorized safe teleport command configured (commander.safe_teleport_cmd)";
+            return ack;
+        }
+        const std::string full_tp = rest.empty() ? safe_tp_cmd : (safe_tp_cmd + " " + std::string(rest));
+        conn_->send_command(full_tp);
+        ack.ok = true;
+        ack.message = std::format("dispatched server-authorized '{}'", full_tp);
+        return ack;
+    }
+
+    if (automation_) {
+        automation_->run_command(cmd.command);
+        ack.ok = true;
+        ack.message = "dispatched";
+    } else {
+        ack.ok = false;
+        ack.message = "client command router unavailable";
+    }
+    return ack;
+}
+
+UiHost::CommanderStatusSnapshot ClientApp::commander_status() {
+    UiHost::CommanderStatusSnapshot out;
+    out.session_id = session_id_;
+    out.character_name = (conn_ && screen_ == Screen::InGame && player_ready_)
+                             ? conn_->character_name()
+                             : (opts_.auto_character.empty() ? opts_.account : opts_.auto_character);
+    out.execution_state = execution_state_name(execution_.state());
+    out.bus_connected = bus_.connected();
+    out.auto_headless_others = auto_headless_others_;
+    out.active_profile_id = active_commander_profile_.empty() && combat_engine_
+                                ? combat_engine_->profile().profile_name
+                                : active_commander_profile_;
+    out.available_profiles = core::default_group_profile_preset_names();
+    for (const auto& p : core::list_group_profiles(platform::data_dir() / "profiles")) {
+        if (std::find(out.available_profiles.begin(), out.available_profiles.end(), p.name) ==
+            out.available_profiles.end()) {
+            out.available_profiles.push_back(p.name);
+        }
+    }
+
+    if (bus_.connected()) {
+        out.peers = bus_.cached_roster();
+        out.tracked_commands = bus_.tracked_commands();
+    }
+    const bool has_self = std::any_of(out.peers.begin(), out.peers.end(), [&](const ipc::SessionSnapshot& p) {
+        return p.session_id == session_id_;
+    });
+    if (!has_self) {
+        ipc::SessionSnapshot self;
+        self.session_id = session_id_;
+        self.pid = static_cast<std::uint32_t>(platform::process_id());
+        self.character_name = out.character_name;
+        self.server_name = server_profile_.name.empty() ? char_view_.server_name : server_profile_.name;
+        self.exec_state = execution_.state();
+        self.online = conn_ && screen_ == Screen::InGame && player_ready_;
+        self.connection_state = self.online ? "in_game" : "login";
+        if (self.online) {
+            self.zone_short = conn_->world().zone_short_name;
+            if (const game::Spawn* me = conn_->world().player()) {
+                self.class_short = game::class_short_name(me->class_id);
+                self.level = me->level;
+            }
+        }
+        self.combat_state = combat_engine_
+                                ? std::string(combat::combat_state_name(combat_engine_->state()))
+                                : "Idle";
+        if (automation_) {
+            const auto running = automation_->scripts().list();
+            if (!running.empty()) {
+                self.script_name = running.front().name;
+                self.script_state = running.front().status;
+            } else {
+                const auto rg = automation_->rgmercs().snapshot();
+                self.script_state = rg.script_status == "error" ? "error" : "stopped";
+            }
+        }
+        self.active_profile = out.active_profile_id;
+        if (combat_engine_) self.follow_target = combat_engine_->profile().follow_target;
+        out.peers.insert(out.peers.begin(), std::move(self));
+    }
+    return out;
+}
+
+bool ClientApp::handle_commander_command(std::string_view action, std::string_view target,
+                                         std::string_view arg, std::string& out_msg) {
+    auto lower_str = [](std::string_view sv) {
+        std::string out(sv);
+        std::transform(out.begin(), out.end(), out.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return out;
+    };
+    const std::string act = lower_str(action);
+    const std::string local_char = (conn_ && screen_ == Screen::InGame && player_ready_)
+                                       ? conn_->character_name()
+                                       : (opts_.auto_character.empty() ? opts_.account : opts_.auto_character);
+    const bool targets_self = target.empty() || target == session_id_ ||
+                              (!local_char.empty() && iequals(target, local_char));
+
+    if (act == "clear_acks") {
+        bus_.clear_tracked_commands();
+        out_msg = "Cleared command acknowledgements";
+        return true;
+    }
+
+    if (act == "set_auto_headless") {
+        const std::string v = lower_str(arg);
+        auto_headless_others_ = (v == "1" || v == "true" || v == "on" || v == "yes");
+        config_.set_bool("multibox.auto_headless_others", auto_headless_others_);
+        out_msg = auto_headless_others_
+                      ? "Auto-headless background clients on tab switch: ON"
+                      : "Auto-headless background clients on tab switch: OFF";
+        return true;
+    }
+
+    if (act == "switch_tab") {
+        if (targets_self) {
+            apply_execution_state(ExecutionState::ForegroundFull);
+            if (auto_headless_others_ && bus_.connected()) {
+                bus_.request_state_control(session_id_, ExecutionState::ForegroundFull, true);
+            }
+            out_msg = std::format("Switched live view to {}", local_char.empty() ? session_id_ : local_char);
+            return true;
+        }
+        if (!bus_.connected()) {
+            out_msg = "Session bus disconnected; cannot switch remote client tab";
+            return false;
+        }
+        bus_.request_state_control(std::string(target), ExecutionState::ForegroundFull, auto_headless_others_);
+        out_msg = std::format("Activated client tab '{}'", target);
+        return true;
+    }
+
+    if (act == "make_live") {
+        if (targets_self) {
+            apply_execution_state(ExecutionState::ForegroundFull);
+            out_msg = "Client set to Live (Foreground)";
+            return true;
+        }
+        if (!bus_.connected()) {
+            out_msg = "Session bus disconnected";
+            return false;
+        }
+        bus_.request_state_control(std::string(target), ExecutionState::ForegroundFull, false);
+        out_msg = std::format("Requested Live mode for '{}'", target);
+        return true;
+    }
+
+    if (act == "make_headless") {
+        if (targets_self) {
+            apply_execution_state(ExecutionState::BackgroundHeadless);
+            out_msg = "Client set to Headless (Background)";
+            return true;
+        }
+        if (!bus_.connected()) {
+            out_msg = "Session bus disconnected";
+            return false;
+        }
+        bus_.request_state_control(std::string(target), ExecutionState::BackgroundHeadless, false);
+        out_msg = std::format("Requested Headless mode for '{}'", target);
+        return true;
+    }
+
+    // Build canonical slash command for local/bus dispatch
+    std::string slash_cmd;
+    if (act == "follow") {
+        const std::string who = arg.empty() ? local_char : std::string(arg);
+        slash_cmd = who.empty() ? "/follow" : ("/follow " + who);
+    } else if (act == "stop_follow") {
+        slash_cmd = "/follow off";
+    } else if (act == "stop") {
+        slash_cmd = "/estop";
+    } else if (act == "assist") {
+        const std::string who = arg.empty() ? local_char : std::string(arg);
+        slash_cmd = who.empty() ? "/assist" : ("/assist " + who);
+    } else if (act == "attack_on") {
+        slash_cmd = "/attack on";
+    } else if (act == "attack_off") {
+        slash_cmd = "/attack off";
+    } else if (act == "pause_script") {
+        slash_cmd = arg.empty() ? "/script pause" : ("/script pause " + std::string(arg));
+    } else if (act == "resume_script") {
+        slash_cmd = arg.empty() ? "/script resume" : ("/script resume " + std::string(arg));
+    } else if (act == "restart_script") {
+        slash_cmd = arg.empty() ? "/script restart" : ("/script restart " + std::string(arg));
+    } else if (act == "reload_profile" || act == "apply_profile") {
+        slash_cmd = arg.empty() ? "/reloadprofile" : ("/reloadprofile " + std::string(arg));
+    } else if (act == "reload_spells") {
+        slash_cmd = "/reloadspells";
+    } else if (act == "camp") {
+        slash_cmd = "/camp";
+    } else if (act == "return_to_bind") {
+        slash_cmd = "/returntobind";
+    } else if (act == "tp_to_me") {
+        const std::string who = arg.empty() ? local_char : std::string(arg);
+        slash_cmd = who.empty() ? "/tptome" : ("/tptome " + who);
+    } else if (act == "tp_here") {
+        slash_cmd = arg.empty() ? "/tphere" : ("/tphere " + std::string(arg));
+    } else {
+        out_msg = std::format("Unknown commander action '{}'", action);
+        return false;
+    }
+
+    const std::string scope = target.empty() ? std::string("all") : std::string(target);
+    bool local_ok = true;
+    std::string local_msg;
+
+    if (scope == "all" || targets_self) {
+        ipc::CommandPacket local_pkt;
+        local_pkt.target = session_id_;
+        local_pkt.command = slash_cmd;
+        const auto ack = handle_bus_command(local_pkt);
+        local_ok = ack.ok;
+        local_msg = ack.message;
+    }
+
+    if (scope == "all") {
+        if (bus_.connected()) {
+            ipc::CommandPacket pkt;
+            pkt.scope = ipc::CommandScope::AllExceptSelf;
+            pkt.command = slash_cmd;
+            const auto seq = bus_.send_command(std::move(pkt));
+            out_msg = std::format("Sent '{}' to group (local: {}; bus seq #{})", slash_cmd, local_msg, seq);
+            return local_ok;
+        }
+        out_msg = local_msg.empty() ? std::format("Executed '{}' locally", slash_cmd) : local_msg;
+        return local_ok;
+    }
+
+    if (targets_self) {
+        out_msg = local_msg;
+        return local_ok;
+    }
+
+    if (!bus_.connected()) {
+        out_msg = "Session bus disconnected; remote command not sent";
+        return false;
+    }
+    ipc::CommandPacket pkt;
+    pkt.scope = ipc::CommandScope::TargetPeer;
+    pkt.target = scope;
+    pkt.command = slash_cmd;
+    const auto seq = bus_.send_command(std::move(pkt));
+    out_msg = std::format("Dispatched '{}' to '{}' (seq #{})", slash_cmd, scope, seq);
+    return seq != 0;
 }
 
 } // namespace client_internal

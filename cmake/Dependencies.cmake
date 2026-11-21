@@ -82,6 +82,22 @@ if(NOT ZLIB_FOUND)
   add_library(ZLIB::ZLIB ALIAS zlib)
 endif()
 
+find_package(SQLite3 QUIET)
+if(NOT SQLite3_FOUND)
+  find_package(PkgConfig QUIET)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(HAILSTONE_SQLITE3 QUIET IMPORTED_TARGET sqlite3)
+    if(HAILSTONE_SQLITE3_FOUND)
+      add_library(SQLite::SQLite3 ALIAS PkgConfig::HAILSTONE_SQLITE3)
+      set(SQLite3_FOUND TRUE)
+    endif()
+  endif()
+endif()
+if(NOT SQLite3_FOUND)
+  message(FATAL_ERROR "SQLite3 development library not found. Install libsqlite3-dev on Ubuntu/Debian "
+    "(sudo apt install libsqlite3-dev) and reconfigure.")
+endif()
+
 # Dear ImGui: the temporary developer UI until the SIDL UI engine (M5).
 # Built with the SDL3 platform backend and the Vulkan backend on our volk loader.
 FetchContent_Declare(imgui

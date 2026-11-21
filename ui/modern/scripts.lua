@@ -61,7 +61,7 @@ local function drawWindow(x, y, w, h, s)
     ui.TableSetupColumn("Script", ui.TableColumnFlags.WidthStretch, 1.0)
     ui.TableSetupColumn("State", ui.TableColumnFlags.WidthFixed, 70 * s)
     ui.TableSetupColumn("Autorun", ui.TableColumnFlags.WidthFixed, 60 * s)
-    ui.TableSetupColumn("##do", ui.TableColumnFlags.WidthFixed, 130 * s)
+    ui.TableSetupColumn("##do", ui.TableColumnFlags.WidthFixed, 190 * s)
     ui.TableHeadersRow()
     local f = filter:lower()
     for _, r in ipairs(list) do
@@ -97,11 +97,17 @@ local function drawWindow(x, y, w, h, s)
           if ui.SmallButton("Stop") then API.scripts.Stop(r.name) end
           ui.SameLine()
           if ui.SmallButton(r.status == "paused" and "Resume" or "Pause") then API.scripts.Pause(r.name) end
+          ui.SameLine()
+          if ui.SmallButton("Reload") then API.scripts.Reload(r.name, args) end
           ui.EndDisabled()
         else
           ui.BeginDisabled(not r.allowed or not r.found)
           if ui.SmallButton("Run") then API.scripts.Run(r.name, args) end
           ui.EndDisabled()
+        end
+        if r.name == "rgmercs" then
+          ui.SameLine()
+          if ui.SmallButton("UI") then API.windows.Show("RGMercsWnd", true) end
         end
         ui.PopID()
       end

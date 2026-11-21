@@ -1,6 +1,7 @@
 // ClientApp: Zone load and unload, scene fog, listener and music, entering the zone.
 
 #include "app/client_app_internal.h"
+#include "mq/rgmercs_bridge.h"
 #include "app/terrain_cache.h"
 
 #include <array>
@@ -331,6 +332,10 @@ void ClientApp::update_zone_settle() {
 }
 
 void ClientApp::unload_zone() {
+    if (combat_engine_) {
+        HailstoneCombatAdapter actions(conn_.get(), nav_.get(), &ui_host_);
+        combat_engine_->on_zone_change(&actions, "");
+    }
     retire_world_geometry();
     zone_settle_.cancel();
     if (pre_game_loaded_) {
@@ -590,10 +595,33 @@ void ClientApp::enter_zone() {
     // The character's own files: servers/<profile>/characters/<world>/<name>/ (core/character_files.h).
     std::string profile = files_profile();
     CharacterFiles files = character_files(profile, char_view_.server_name, game::display_name(me->name));
-    use_character_settings(files.dir); // (taken over at the entry into the world: the same, unless the name differs)
+    const bool use_slot_override =
+        !slot_settings_override_.empty() &&
+        (opts_.auto_character.empty() || iequals(game::display_name(me->name), opts_.auto_character));
+    if (use_slot_override) {
+        std::filesystem::path isolated_dir = slot_settings_override_.extension() == ".ini"
+                                                 ? slot_settings_override_.parent_path()
+                                                 : slot_settings_override_;
+        if (!isolated_dir.empty()) {
+            std::error_code ec;
+            std::filesystem::create_directories(isolated_dir, ec);
+            files.dir = isolated_dir;
+        }
+        use_character_settings(slot_settings_override_);
+    } else {
+        use_character_settings(files.dir); // (taken over at the entry into the world: the same, unless the name differs)
+    }
     actions_ui_->enter_zone(files.hot_buttons());
+    load_combat_profile_for_zone(files.dir, game::class_short_name(me->class_id));
     // The character's autorun scripts (the Scripts window; the same file at each zone-in starts nothing again).
-    if (automation_) automation_->scripts().set_autorun_file(files.scripts_ini());
+    if (automation_) {
+        automation_->scripts().set_autorun_file(files.scripts_ini());
+        const std::string server_label =
+            server_profile_.name.empty() ? char_view_.server_name : server_profile_.name;
+        automation_->rgmercs().attach_character(platform::data_dir(), files.dir,
+                                                game::display_name(me->name), server_label,
+                                                game::class_short_name(me->class_id));
+    }
     // The UI's window layout is the character's (ui-<pack>.txt), its other settings shared.
     ui_character_dir_ = files.dir;
     if (lua_ui_) lua_ui_->set_character_settings(files.ui_settings(ui_name_));

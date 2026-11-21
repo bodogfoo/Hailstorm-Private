@@ -130,6 +130,9 @@ struct Context {
     std::function<std::optional<bool>(std::uint32_t spawn)> can_see;
     std::string server_name;
     std::string ui_skin = "default";
+    std::string lua_dir;
+    std::string config_dir;
+    bool foreground = true;
 };
 
 class Registry {

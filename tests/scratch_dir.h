@@ -27,6 +27,11 @@ class ScratchDir {
 public:
     explicit ScratchDir(const std::string& tag) : path_(unique_temp_path(tag)) {
         std::filesystem::create_directories(path_);
+#if !defined(_WIN32)
+        // Explicitly isolate the test root from permissive process umasks (such as Ubuntu's default 0002),
+        // without altering pre-existing system directories such as /tmp.
+        std::filesystem::permissions(path_, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
+#endif
     }
     ~ScratchDir() {
         std::error_code ec;

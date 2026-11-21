@@ -65,7 +65,7 @@ bool consume_login_launch_arg(LoginLaunch& launch, std::span<const std::string_v
 // As in RoF2, a ticket overrides legacy account/password arguments. Clear them before constructing the client,
 // so a launcher can keep its existing argument template without loading a keyring credential or sending it.
 void resolve_login_launch(const LoginLaunch& launch, std::string& user, std::string& password,
-                          std::string& account, bool viewer);
+                          std::string& account, bool viewer, bool auto_login = false);
 
 // Whether the asset folder's eqhost.txt may name a ticket's login server: a folder named for this run (--game-dir or
 // EQ_GAME_DIR), or the EverQuest folder Hailstone is installed in (<EQ>/hailstone/, as a server's patcher puts it;
@@ -94,5 +94,12 @@ std::vector<std::string> unknown_argument_warnings(const LoginLaunch& launch, co
 // A launcher world is an exact name (ignoring ASCII case), or a decimal login-server world id. Missing or
 // ambiguous matches stay at server select; they never fall back to another world.
 const net::ServerInfo* launcher_world(std::span<const net::ServerInfo> servers, std::string_view selector);
+
+// Extended world lookup for interactive auto-login, MQ imports, and Hailstone 24 rosters:
+// 1) exact id or case-insensitive full name (launcher_world)
+// 2) exact case-insensitive saved_character_key_part(name) match (unique)
+// 3) if allow_keyword_match, unique match where all whitespace-separated keywords appear case-insensitively in name.
+const net::ServerInfo* resolve_world_target(std::span<const net::ServerInfo> servers, std::string_view selector,
+                                            bool allow_keyword_match = true);
 
 } // namespace hailstone::app

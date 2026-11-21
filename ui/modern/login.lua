@@ -22,6 +22,7 @@ local forgetName = nil  -- the account the Forget question is about
 local more = false      -- More options unfolded
 local packAtStart = nil -- the texture pack as the screen first showed it (a change is read at the next start)
 local boxOpen = false   -- the box set card open
+local groupOpen = false -- the group profiles card open
 local removeName = nil   -- the add-on the Remove question is about
 local removeAsk = false  -- a row's Remove was pressed: the question opens at the window's level
 local addonTab = nil    -- the add-ons card's tab to select next frame ("store" or "mine"), nil: as it is
@@ -390,6 +391,109 @@ local function boxSetCard(view, s, bh)
       "Its saved password leaves the system keyring.", "Forget", s) and forgetName then
     API.pregame.LoginDo("forget", forgetName)
   end
+end
+
+-- ---------------------------------------------------------------- group profiles
+-- MacroQuest-style roster/group profiles (profiles/<name>.ini or .json). Passwords stay in keyring.
+
+local function groupProfilesCard(view, s, bh)
+  local gp = (view.groupSelected or 0) > 0 and view.groupProfiles[view.groupSelected] or nil
+  local subtitle = gp and gp.description ~= "" and gp.description
+    or "Launch a whole box/group profile or a single character with isolated settings"
+  P.Title("Group profiles", subtitle, s)
+  ui.BeginDisabled(view.busy)
+
+  local refreshW = P.ButtonsWidth({ "Refresh" }, s)
+  ui.SetNextItemWidth(ui.GetContentRegionAvail() - refreshW - 8 * s)
+  local preview = gp and string.format("%s (%d slots)", gp.name, gp.slotCount)
+    or (#(view.groupProfiles or {}) == 0 and "No profiles in profiles/" or "Select group profile")
+  if ui.BeginCombo("##groupprofiles", preview, ui.ComboFlags.HeightLarge) then
+    for i, item in ipairs(view.groupProfiles or {}) do
+      ui.PushID(item.id)
+      local lbl = string.format("%s (%d slots)", item.name, item.slotCount)
+      if ui.Selectable(lbl, i == view.groupSelected) and i ~= view.groupSelected then
+        API.pregame.LoginDo("selectGroupProfile", item.id)
+      end
+      if item.sourcePath ~= "" then
+        P.Tip(item.sourcePath .. (item.description ~= "" and ("\n" .. item.description) or ""))
+      end
+      ui.PopID()
+    end
+    ui.EndCombo()
+  end
+  if view.profilesDir and view.profilesDir ~= "" then P.Tip("Profiles folder: " .. view.profilesDir) end
+  ui.SameLine()
+  if ui.Button("Refresh") then API.pregame.LoginDo("refreshGroupProfiles") end
+  P.Tip("Rescan profiles/*.ini and profiles/*.json")
+
+  local slots = view.groupSlots or {}
+  if #slots > 0 then
+    ui.Dummy(0, 3 * s)
+    local flags = ui.TableFlags.RowBg | ui.TableFlags.BordersOuter | ui.TableFlags.ScrollY
+    local _, lh = ui.CalcTextSize("Ag")
+    local h = math.min(#slots + 1.2, 8) * (lh + 8 * s)
+    if ui.BeginTable("##groupslots", 6, flags, 0, h) then
+      ui.TableSetupScrollFreeze(0, 1)
+      ui.TableSetupColumn("Ord:Slot", ui.TableColumnFlags.WidthFixed, 54 * s)
+      ui.TableSetupColumn("Character", ui.TableColumnFlags.WidthStretch, 0)
+      ui.TableSetupColumn("Role", ui.TableColumnFlags.WidthFixed, 56 * s)
+      ui.TableSetupColumn("Account", ui.TableColumnFlags.WidthFixed, 86 * s)
+      ui.TableSetupColumn("Auto", ui.TableColumnFlags.WidthFixed, 38 * s)
+      ui.TableSetupColumn("Status", ui.TableColumnFlags.WidthFixed, 128 * s)
+      ui.TableHeadersRow()
+      for i, sl in ipairs(slots) do
+        ui.PushID(sl.slotNumber .. ":" .. i)
+        ui.TableNextRow()
+        ui.TableNextColumn()
+        local sel = (view.groupSlotSelected == i)
+        local rowLbl = string.format("%d:%d", sl.launchOrder, sl.slotNumber)
+        if ui.Selectable(rowLbl, sel, ui.SelectableFlags.SpanAllColumns | ui.SelectableFlags.AllowDoubleClick) then
+          API.pregame.LoginSet("groupSlot", i)
+          if ui.IsMouseDoubleClicked(0) then API.pregame.LoginDo("launchGroupSlot", i) end
+        end
+        P.Tip(string.format(
+          "Launch order %d - Slot %d (%s)\nServer: %s - World: %s\nSettings: %s\nMode: %s",
+          sl.launchOrder, sl.slotNumber, sl.sessionId, sl.serverId, sl.world, sl.settingsPath,
+          sl.headless and "Headless BG" or "Foreground"))
+        ui.TableNextColumn()
+        local chName = sl.character ~= "" and sl.character or "-"
+        if not sl.enabled then P.Muted(chName) else ui.TextUnformatted(chName) end
+        ui.TableNextColumn()
+        P.Muted(sl.classRole ~= "" and sl.classRole or "-")
+        ui.TableNextColumn()
+        P.Faint(sl.account)
+        ui.TableNextColumn()
+        P.Muted(sl.autoLogin and "Yes" or "No")
+        ui.TableNextColumn()
+        local col = sl.online and C.good or (sl.enabled and C.muted or C.faint)
+        ui.TextColored(col[1], col[2], col[3], 1, sl.status)
+        ui.PopID()
+      end
+      ui.EndTable()
+    end
+
+    ui.Dummy(0, 4 * s)
+    local selSlot = slots[view.groupSlotSelected or 0]
+    if P.Primary("Launch group", 0, bh, gp ~= nil) then API.pregame.LoginDo("launchGroup") end
+    P.Tip("Launch enabled slots in profile launch order using saved keyring credentials")
+    ui.SameLine()
+    if ui.Button(selSlot and ("Launch " .. (selSlot.character ~= "" and selSlot.character or selSlot.account))
+        or "Launch character", 0, bh) then
+      if selSlot then API.pregame.LoginDo("launchGroupSlot", view.groupSlotSelected) end
+    end
+    ui.SameLine()
+    if P.Danger("Stop group", 0, bh, true) then API.pregame.LoginDo("stopGroup") end
+    ui.SameLine()
+    if ui.Button("Relaunch group", 0, bh) then API.pregame.LoginDo("relaunchGroup") end
+  else
+    ui.Dummy(0, 4 * s)
+    P.Faint("Place .ini or .json group profile files in profiles/ or import via MQ2AutoLogin.")
+  end
+
+  ui.EndDisabled()
+  ui.Dummy(0, 2 * s)
+  P.AlignRight(P.ButtonsWidth(CLOSE, s))
+  if ui.Button("Close") then groupOpen = false end
 end
 
 -- ---------------------------------------------------------------- the characters
@@ -921,6 +1025,12 @@ local function loginCard(view, s, bh)
     if ui.Selectable((boxOpen and "-  " or "+  ") .. label, boxOpen) then boxOpen = not boxOpen end
     P.Tip(boxOpen and "Close the box set" or "Log in several accounts at once, each in its own window")
   end
+  if not view.transient then
+    local gCount = #(view.groupProfiles or {})
+    local glabel = gCount > 0 and string.format("Group profiles (%d)", gCount) or "Group profiles"
+    if ui.Selectable((groupOpen and "-  " or "+  ") .. glabel, groupOpen) then groupOpen = not groupOpen end
+    P.Tip(groupOpen and "Close group profiles" or "Launch or monitor group/box profiles")
+  end
   ui.EndDisabled()
 
   ui.Dummy(0, 2 * s)
@@ -930,10 +1040,14 @@ local function loginCard(view, s, bh)
   ui.BeginDisabled(view.busy)
   local v, changed = ui.Checkbox("Music", view.music)
   if changed then API.pregame.LoginSet("music", v) end
-  ui.EndDisabled()
   P.Tip("The music of the login, server select and character select screens (not the game's).")
+  ui.SameLine(0, 10 * s)
+  local autoV, autoChanged = ui.Checkbox("Auto-login", view.autoLogin)
+  if autoChanged then API.pregame.LoginSet("autoLogin", autoV) end
+  P.Tip("Automatically log in on launch, select your saved/favorite world, and enter your character.")
+  ui.EndDisabled()
   if not view.transient then
-    ui.SameLine(0, 16 * s)
+    ui.SameLine(0, 12 * s)
     interfacePicker(view, s)
   end
   ui.SameLine()
@@ -951,6 +1065,7 @@ end
 
 local tested = false
 -- the cards, kept from frame to frame (their sizes and places are set each frame)
+local GROUP_CARD = { key = "login.groups", draw = groupProfilesCard }
 local BOX_CARD = { key = "login.boxset", draw = boxSetCard }
 local LOGIN_CARD = { key = "login", draw = loginCard }
 local ADDONS_CARD = { key = "login.addons", draw = addonsCard }
@@ -973,26 +1088,30 @@ ui.window("Login", function()
     local test = ui.GetSetting("test.login")
     if test == "addons" then API.pregame.LoginSet("addonsOpen", true) end
     if test == "boxset" then boxOpen = true end
+    if test == "groups" then groupOpen = true end
     if test == "more" then more = true end
   end
   local s = P.Scale()
   local io = ui.GetIO()
   local _, lh = ui.CalcTextSize("Ag")
   local bh = lh + 14 * s
-  local cardW, quickW, addonsW, boxW, aboutW = 430 * s, 330 * s, 480 * s, 500 * s, 270 * s
+  local cardW, quickW, addonsW, boxW, groupW, aboutW = 430 * s, 330 * s, 480 * s, 500 * s, 580 * s, 270 * s
   local gap, margin = 18 * s, 16 * s
   local addonsOpen = view.addons.open
   local quick = #view.characters > 0
   local box = boxOpen and canBox(view)
+  local groups = groupOpen and not view.transient
   local _, ch = P.Size("login", cardW, 520 * s)
   local _, qh = P.Size("login.quick", quickW, 300 * s)
   local _, ah = P.Size("login.addons", addonsW, 420 * s)
   local _, bxh = P.Size("login.boxset", boxW, 260 * s)
+  local _, grh = P.Size("login.groups", groupW, 320 * s)
   local _, abh = P.Size("login.about", aboutW, 90 * s)
   -- the cards in a row (box set, login, characters, add-ons), the row centred and their tops level; on a screen too
   -- narrow for that, one above the other, each the login card's width. The add-ons card is beside the characters,
   -- not in their place, so Play stays in reach while it is open.
   for i = #cards, 1, -1 do cards[i] = nil end
+  if groups then addCard(GROUP_CARD, groupW, grh) end
   if box then addCard(BOX_CARD, boxW, bxh) end
   addCard(LOGIN_CARD, cardW, ch)
   if quick then addCard(QUICK_CARD, quickW, qh) end

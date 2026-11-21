@@ -1509,6 +1509,199 @@ int l_set_max_camera_distance(lua_State* L) {
     return 0;
 }
 
+// Hailstone 24: Native RG Mercs adapter boundary (settings, modules, status, logs).
+RGMercsBridge* rgmercs_bridge(lua_State* L) {
+    Script& s = Script::of(L);
+    return s.host ? s.host->env.rgmercs : nullptr;
+}
+
+void push_rgmercs_setting_value(lua_State* L, const RGMercsBridge::SettingEntry& e) {
+    if (e.type == "bool") {
+        lua_pushboolean(L, e.value == "true" || e.value == "1" ? 1 : 0);
+    } else if (e.type == "int") {
+        char* end = nullptr;
+        const long long parsed = std::strtoll(e.value.c_str(), &end, 10);
+        if (end != e.value.c_str()) {
+            lua_pushinteger(L, static_cast<lua_Integer>(parsed));
+        } else {
+            char* fend = nullptr;
+            const double df = std::strtod(e.value.c_str(), &fend);
+            lua_pushinteger(L, (fend != e.value.c_str() && std::isfinite(df)) ? static_cast<lua_Integer>(df) : 0);
+        }
+    } else if (e.type == "float") {
+        char* end = nullptr;
+        const double parsed = std::strtod(e.value.c_str(), &end);
+        lua_pushnumber(L, (end != e.value.c_str() && std::isfinite(parsed)) ? parsed : 0.0);
+    } else {
+        lua_pushlstring(L, e.value.data(), e.value.size());
+    }
+}
+
+int l_rgmercs_using_native_ui(lua_State* L) {
+    RGMercsBridge* b = rgmercs_bridge(L);
+    lua_pushboolean(L, (b && b->suppress_script_ui()) ? 1 : 0);
+    return 1;
+}
+
+int l_rgmercs_get_setting(lua_State* L) {
+    const char* key = luaL_checkstring(L, 1);
+    RGMercsBridge* b = rgmercs_bridge(L);
+    if (!b) {
+        lua_pushnil(L);
+        return 1;
+    }
+    auto& got = plugin::lua_keep<std::optional<RGMercsBridge::SettingEntry>>(L);
+    got = b->get_setting(key);
+    if (!got) {
+        lua_pop(L, 1);
+        lua_pushnil(L);
+        return 1;
+    }
+    push_rgmercs_setting_value(L, *got);
+    lua_remove(L, -2);
+    return 1;
+}
+
+int l_rgmercs_get_settings(lua_State* L) {
+    RGMercsBridge* b = rgmercs_bridge(L);
+    if (!b) {
+        lua_newtable(L);
+        return 1;
+    }
+    auto& all = plugin::lua_keep<std::vector<RGMercsBridge::SettingEntry>>(L);
+    all = b->settings();
+    lua_newtable(L);
+    for (const auto& e : all) {
+        lua_pushlstring(L, e.key.data(), e.key.size());
+        push_rgmercs_setting_value(L, e);
+        lua_rawset(L, -3);
+    }
+    lua_remove(L, -2);
+    return 1;
+}
+
+int l_rgmercs_get_state(lua_State* L) {
+    RGMercsBridge* b = rgmercs_bridge(L);
+    if (!b) {
+        lua_newtable(L);
+        lua_newtable(L);
+        lua_setfield(L, -2, "modules");
+        return 1;
+    }
+    auto& snap = plugin::lua_keep<RGMercsBridge::Snapshot>(L);
+    snap = b->snapshot();
+    lua_newtable(L);
+    set_str(L, "status", snap.script_status);
+    set_str(L, "runtime_state", snap.runtime_state);
+    set_str(L, "last_error", snap.last_error);
+    set_int(L, "error_count", snap.error_count);
+    set_str(L, "character", snap.character);
+    set_str(L, "server", snap.server);
+    set_str(L, "class_name", snap.class_name);
+    set_bool(L, "suppress_script_ui", snap.suppress_script_ui);
+    lua_createtable(L, static_cast<int>(snap.modules.size()), 0);
+    for (std::size_t i = 0; i < snap.modules.size(); ++i) {
+        const auto& m = snap.modules[i];
+        lua_createtable(L, 0, 4);
+        set_str(L, "name", m.name);
+        set_bool(L, "enabled", m.enabled);
+        set_str(L, "status", m.status);
+        set_str(L, "detail", m.detail);
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "modules");
+    lua_remove(L, -2);
+    return 1;
+}
+
+int l_rgmercs_set_setting(lua_State* L) {
+    // Accept both hailstone.rgmercs.set_setting(category, key, value) and set_setting(key, value [, category]).
+    auto is_known_cat = [](std::string_view s) {
+        return s == "Combat" || s == "Targeting" || s == "Healing" || s == "Buffs" || s == "Debuffs" ||
+               s == "Movement" || s == "Loot" || s == "Class" || s == "Debug" || s == "General";
+    };
+    const int top = lua_gettop(L);
+    const char* key = nullptr;
+    const char* cat = "";
+    int val_idx = 2;
+    if (top >= 3 && lua_type(L, 1) == LUA_TSTRING && lua_type(L, 2) == LUA_TSTRING &&
+        (lua_type(L, 3) != LUA_TSTRING || is_known_cat(lua_tostring(L, 1)))) {
+        cat = luaL_checkstring(L, 1);
+        key = luaL_checkstring(L, 2);
+        val_idx = 3;
+    } else {
+        key = luaL_checkstring(L, 1);
+        val_idx = 2;
+        cat = luaL_optstring(L, 3, "");
+    }
+    const char* raw = nullptr;
+    bool bool_val = false;
+    bool is_bool = false;
+    if (lua_type(L, val_idx) == LUA_TBOOLEAN) {
+        is_bool = true;
+        bool_val = lua_toboolean(L, val_idx) != 0;
+    } else {
+        raw = luaL_tolstring(L, val_idx, nullptr);
+    }
+    RGMercsBridge* b = rgmercs_bridge(L);
+    const bool ok = b && b->set_setting(key, is_bool ? (bool_val ? "true" : "false") : (raw ? raw : ""), cat, false);
+    lua_pushboolean(L, ok ? 1 : 0);
+    return 1;
+}
+
+int l_rgmercs_set_module(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    const bool enabled = lua_toboolean(L, 2) != 0;
+    const char* status = luaL_optstring(L, 3, "");
+    const char* detail = luaL_optstring(L, 4, "");
+    if (RGMercsBridge* b = rgmercs_bridge(L)) {
+        b->set_module(name, enabled, status, detail, false);
+    }
+    return 0;
+}
+
+int l_rgmercs_log(lua_State* L) {
+    const char* level = luaL_optstring(L, 1, "info");
+    const char* msg = luaL_checkstring(L, 2);
+    if (RGMercsBridge* b = rgmercs_bridge(L)) {
+        b->append_log(level, msg);
+    }
+    return 0;
+}
+
+int l_rgmercs_set_status(lua_State* L) {
+    const char* state = luaL_optstring(L, 1, "");
+    const char* err = luaL_optstring(L, 2, "");
+    if (RGMercsBridge* b = rgmercs_bridge(L)) {
+        b->set_runtime_state(state);
+        if (err[0] != '\0') b->set_script_error(err);
+    }
+    return 0;
+}
+
+int l_rgmercs_clear_error(lua_State* L) {
+    if (RGMercsBridge* b = rgmercs_bridge(L)) b->clear_error();
+    return 0;
+}
+
+int l_rgmercs_take_pending_changes(lua_State* L) {
+    RGMercsBridge* b = rgmercs_bridge(L);
+    if (!b) {
+        lua_newtable(L);
+        return 1;
+    }
+    auto& list = plugin::lua_keep<std::vector<std::pair<std::string, std::string>>>(L);
+    list = b->take_pending_changes();
+    lua_newtable(L);
+    for (const auto& [k, v] : list) {
+        lua_pushlstring(L, k.data(), k.size());
+        lua_pushlstring(L, v.data(), v.size());
+        lua_rawset(L, -3);
+    }
+    lua_remove(L, -2);
+    return 1;
+}
+
 } // namespace
 
 void register_hailstone(lua_State* L) {
@@ -1597,6 +1790,22 @@ void register_hailstone(lua_State* L) {
     set_int(L, "RAID_LOOTER", HS_BULK_RAID_LOOTER);
     set_int(L, "RAID_PRESENT", HS_BULK_RAID_PRESENT);
     set_int(L, "RAID_ME", HS_BULK_RAID_ME);
+    lua_newtable(L); // hailstone.rgmercs
+    for (auto [n, fn] : std::initializer_list<std::pair<const char*, lua_CFunction>>{
+             {"using_native_ui", l_rgmercs_using_native_ui},
+             {"get_state", l_rgmercs_get_state},
+             {"get_setting", l_rgmercs_get_setting},
+             {"get_settings", l_rgmercs_get_settings},
+             {"set_setting", l_rgmercs_set_setting},
+             {"set_module", l_rgmercs_set_module},
+             {"log", l_rgmercs_log},
+             {"set_status", l_rgmercs_set_status},
+             {"clear_error", l_rgmercs_clear_error},
+             {"take_pending_changes", l_rgmercs_take_pending_changes}}) {
+        lua_pushcfunction(L, fn);
+        lua_setfield(L, -2, n);
+    }
+    lua_setfield(L, -2, "rgmercs");
     lua_setglobal(L, "hailstone");
     // A plugin script in its own folder (lua/<name>/init.lua) with a ui/ there: its windows for each UI pack.
     Script& s = Script::of(L);

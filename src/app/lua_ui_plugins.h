@@ -41,5 +41,6 @@ void register_plugins_api(lua_State* L, UiHost& host);
 // plugin::CallerScope), not the player's: whoever chose it, the command is the plugin's. False: no such entry.
 bool run_plugin_menu(UiHost& host, std::size_t i);
 void register_scripts_api(lua_State* L, UiHost& host);
+void register_rgmercs_api(lua_State* L, UiHost& host);
 
 } // namespace hailstone::app

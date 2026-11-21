@@ -145,6 +145,9 @@ add_library(hailstone_engine STATIC
   src/mq/lua_mq.cpp
   src/mq/lua_mq_web.cpp
   src/mq/lua_hailstone.cpp
+  src/mq/lua_compat_modules.cpp
+  src/mq/rgmercs_bridge.cpp
+  src/ipc/session_bus.cpp
   src/plugin/native_plugins.cpp
   src/plugin/world_geometry.cpp
   src/render/world_geometry_renderer.cpp
@@ -301,6 +304,8 @@ add_library(hailstone_engine STATIC
   src/core/atomic_file.cpp
   src/core/config.cpp
   src/core/ini_file.cpp
+  src/core/group_profile.cpp
+  src/core/mq_login_import.cpp
   src/core/old_ui_settings.cpp
   src/web/browser_host.cpp
   src/platform/paths.cpp
@@ -576,6 +581,13 @@ add_library(hailstone_engine STATIC
   src/app/lua_ui_extensions.cpp
   src/app/lua_ui_plugins.cpp
   src/app/lua_ui_scripts.cpp
+  src/app/lua_ui_combat.cpp
+  src/app/lua_ui_rgmercs.cpp
+  src/app/hailstone_combat_adapter.cpp
+  src/combat/combat_profile.cpp
+  src/combat/spell_manager.cpp
+  src/combat/movement_controller.cpp
+  src/combat/combat_engine.cpp
   src/app/lua_ui_items.cpp
   src/app/lua_ui_itemdisplay.cpp
   src/app/lua_ui_adventure.cpp
@@ -752,7 +764,7 @@ set(HAILSTONE_UPDATE_KEY "${HAILSTONE_UPDATE_KEY_DEFAULT}" CACHE STRING "The rel
 set_property(SOURCE src/app/updater.cpp APPEND PROPERTY COMPILE_DEFINITIONS
              HAILSTONE_UPDATE_FEED="${HAILSTONE_UPDATE_FEED}" HAILSTONE_UPDATE_KEY="${HAILSTONE_UPDATE_KEY}"
              HAILSTONE_ADDON_INDEX="${HAILSTONE_ADDON_INDEX}" HAILSTONE_PROJECT_PAGE="${HAILSTONE_PROJECT_PAGE}")
-target_link_libraries(hailstone_engine PUBLIC SDL3::SDL3 Vulkan::Headers volk::volk_headers GPUOpen::VulkanMemoryAllocator glm::glm ZLIB::ZLIB)
+target_link_libraries(hailstone_engine PUBLIC SDL3::SDL3 Vulkan::Headers volk::volk_headers GPUOpen::VulkanMemoryAllocator glm::glm ZLIB::ZLIB SQLite::SQLite3)
 if(WIN32)
   target_link_libraries(hailstone_engine PUBLIC ws2_32 advapi32 dbghelp winhttp ole32 shell32)
 elseif(APPLE)
@@ -985,6 +997,26 @@ foreach(tool ${HAILSTONE_TOOLS})
   endif()
   target_link_libraries(${tool} PRIVATE hailstone_engine)
 endforeach()
+# Hailstone 24 session broker and multibox manager/controller.
+add_executable(hailstone24_broker tools/hailstone24_manager/broker_main.cpp ${HAILSTONE_WIN_MANIFEST})
+target_compile_options(hailstone24_broker PRIVATE ${HAILSTONE_WARNINGS})
+target_link_libraries(hailstone24_broker PRIVATE hailstone_engine)
+set_target_properties(hailstone24_broker PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${HAILSTONE_TREE_DIR}$<0:>)
+if(UNIX AND NOT APPLE)
+  set_target_properties(hailstone24_broker PROPERTIES INSTALL_RPATH "$ORIGIN")
+endif()
+install(TARGETS hailstone24_broker RUNTIME DESTINATION .)
+
+add_executable(hailstone24_manager tools/hailstone24_manager/manager_ui.cpp ${HAILSTONE_WIN_MANIFEST})
+target_compile_options(hailstone24_manager PRIVATE ${HAILSTONE_WARNINGS})
+target_link_libraries(hailstone24_manager PRIVATE hailstone_engine)
+set_target_properties(hailstone24_manager PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${HAILSTONE_TREE_DIR}$<0:>)
+if(UNIX AND NOT APPLE)
+  set_target_properties(hailstone24_manager PROPERTIES INSTALL_RPATH "$ORIGIN")
+endif()
+install(TARGETS hailstone24_manager RUNTIME DESTINATION .)
+list(APPEND HAILSTONE_TOOLS hailstone24_broker hailstone24_manager)
+
 # Local package preparation uses the same validation and transaction installer as Add-ons.
 add_executable(hailstone_addon_install_local EXCLUDE_FROM_ALL tools/addon_install_local.cpp ${HAILSTONE_WIN_MANIFEST})
 target_compile_options(hailstone_addon_install_local PRIVATE ${HAILSTONE_WARNINGS})
@@ -1128,6 +1160,11 @@ if(HAILSTONE_BUILD_TESTS)
     tests/automation_test.cpp
     tests/mq_lua_test.cpp
     tests/mq_script_path_test.cpp
+    tests/hailstone24/execution_state_test.cpp
+    tests/hailstone24/session_bus_test.cpp
+    tests/hailstone24/mq_login_import_test.cpp
+    tests/hailstone24/group_profile_test.cpp
+    tests/hailstone24/login_autoselect_test.cpp
     tests/mq_event_pattern_test.cpp
     tests/lua_social_test.cpp
     tests/code_syntax_test.cpp
@@ -1320,6 +1357,9 @@ if(HAILSTONE_BUILD_TESTS)
     tests/equipment_illusions_test.cpp
     tests/appearance_vectors_test.cpp
     tests/combat_test.cpp
+    tests/hailstone24/combat_controller_test.cpp
+    tests/hailstone24/rgmercs_trusted_loader_test.cpp
+    tests/hailstone24/rgmercs_native_ui_test.cpp
     tests/pet_combat_chat_test.cpp
     tests/plate_test_test.cpp
     tests/nameplate_overlap_test.cpp

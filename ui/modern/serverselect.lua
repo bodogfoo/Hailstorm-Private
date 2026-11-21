@@ -42,14 +42,62 @@ local function card(view, s, bh)
     P.Tip(last.canJoin and "The world you played last on this server" or (last.name .. ": " .. last.status))
     ui.Dummy(0, 4 * s)
   end
+  local filter = view.filter or ""
+  ui.SetNextItemWidth(ui.GetContentRegionAvail() - 108 * s)
+  local newFilter, enterInFilter = ui.InputTextWithHint("##worldfilter", "Filter worlds by keyword...", filter, 128,
+    ui.InputTextFlags.EnterReturnsTrue)
+  if newFilter ~= filter then
+    API.pregame.ServerSelectSet("filter", newFilter)
+    view.filter = newFilter
+    held = nil
+    filter = newFilter
+  end
+  ui.SameLine()
+  ui.BeginDisabled(filter == "")
+  if ui.Button("Clear", 52 * s, 0) then
+    API.pregame.ServerSelectSet("filter", "")
+    view.filter = ""
+    held = nil
+    filter = ""
+  end
+  ui.EndDisabled()
+  local tokens = {}
+  for w in string.gmatch(string.lower(filter), "%S+") do tokens[#tokens + 1] = w end
+  local visible = {}
+  local selectedVisible = false
+  for i, sv in ipairs(view.servers) do
+    local lower = string.lower(sv.name)
+    local ok = true
+    for _, tok in ipairs(tokens) do
+      if not string.find(lower, tok, 1, true) then
+        ok = false
+        break
+      end
+    end
+    if ok then
+      visible[#visible + 1] = { index = i, sv = sv }
+      if i == view.selected then selectedVisible = true end
+    end
+  end
+  if not selectedVisible and #visible > 0 and view.selected ~= visible[1].index then
+    API.pregame.ServerSelectDo("select", visible[1].index)
+  end
+  ui.SameLine()
+  P.Muted(string.format("%d/%d", #visible, #view.servers))
+  ui.Dummy(0, 2 * s)
   P.Heading("Worlds")
   local _, lh = ui.CalcTextSize("Ag")
   local rowH = lh + 16 * s
-  local shown = math.max(1, math.min(#view.servers, 8))
+  local shown = math.max(1, math.min(#visible, 8))
   ui.PushStyleVar(ui.StyleVar.ItemSpacing, 8 * s, 3 * s)
   ui.BeginChild("##worlds", 0, shown * (rowH + 3 * s), false)
-  if #view.servers == 0 then P.Faint("No worlds listed.") end
-  for i, sv in ipairs(view.servers) do
+  if #view.servers == 0 then
+    P.Faint("No worlds listed.")
+  elseif #visible == 0 then
+    P.Faint("No worlds match '" .. filter .. "'.")
+  end
+  for _, row in ipairs(visible) do
+    local i, sv = row.index, row.sv
     ui.PushID(i)
     local clicked, double, x0, y0, x1, y1 = P.Row("##world", view.selected == i, rowH, s)
     -- the star at the left takes its own clicks: it marks or unmarks the world as a favourite
@@ -90,7 +138,7 @@ local function card(view, s, bh)
     ui.TextWrapped(view.addonHint)
     ui.PopStyleColor()
   end
-  local picked = view.servers[view.selected]
+  local picked = selectedVisible and view.servers[view.selected] or nil
   local canPlay = not view.busy and picked ~= nil and picked.canJoin
   if ui.Button("Back", 0, bh) then API.pregame.ServerSelectDo("back") end
   P.Tip("Back to the login screen")
@@ -98,8 +146,10 @@ local function card(view, s, bh)
   local playW = P.ButtonsWidth(PLAY, s) + 40 * s
   P.AlignRight(playW)
   if P.Primary("Play", playW, bh, canPlay) then API.pregame.ServerSelectDo("play") end
-  -- Enter plays the picked world (the client binds no key on this screen; not while a field elsewhere is typed in)
-  if canPlay and ui.IsKeyPressed(ui.Key.Enter) and not ui.GetIO().typing then API.pregame.ServerSelectDo("play") end
+  -- Enter plays the picked world (from filter input or anywhere on screen when not typing elsewhere)
+  if canPlay and (enterInFilter or (ui.IsKeyPressed(ui.Key.Enter) and not ui.GetIO().typing)) then
+    API.pregame.ServerSelectDo("play")
+  end
 end
 
 local held = nil -- the view drawn last frame: hs.ServerSelect gives true while it still holds (its revision)

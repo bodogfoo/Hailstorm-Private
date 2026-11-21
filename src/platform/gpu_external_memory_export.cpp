@@ -10,6 +10,8 @@
 #endif
 #include <windows.h>
 #include <vulkan/vulkan_win32.h>
+#elif defined(__linux__)
+#include <cstdint>
 #endif
 
 namespace hailstone::platform {
@@ -25,6 +27,19 @@ VkResult gpu_export_memory(VkDevice device, VkDeviceMemory memory, void** handle
     HANDLE out = nullptr;
     const VkResult result = get(device, &info, &out);
     *handle = result == VK_SUCCESS ? out : nullptr;
+    return result;
+#elif defined(__linux__)
+    if (!handle) return VK_ERROR_INITIALIZATION_FAILED;
+    auto get = reinterpret_cast<PFN_vkGetMemoryFdKHR>(vkGetDeviceProcAddr(device, "vkGetMemoryFdKHR"));
+    if (!get) return VK_ERROR_EXTENSION_NOT_PRESENT;
+    VkMemoryGetFdInfoKHR info{VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR};
+    info.memory = memory;
+    info.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+    int fd = -1;
+    const VkResult result = get(device, &info, &fd);
+    *handle = (result == VK_SUCCESS && fd >= 0)
+        ? reinterpret_cast<void*>(static_cast<std::uintptr_t>(fd) + 1)
+        : nullptr;
     return result;
 #else
     (void)device; (void)memory; (void)handle;

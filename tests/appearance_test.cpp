@@ -11,7 +11,10 @@
 #include "game/appearance.h"
 #include "game/appearance_data.h"
 #include "game/race_models.h"
+#include <fstream>
 #include "game_files.h"
+#include "pfs_fixtures.h"
+#include "scratch_dir.h"
 #include "net/opcodes.h"
 #include "net/zone_packets.h"
 
@@ -255,7 +258,9 @@ TEST_CASE("EQGL material layers: names, texture roles by suffix, entry sizes per
 }
 
 TEST_CASE("EQG texture variants come from the model's .lay layers" * doctest::skip(!hailstone::test::game_dir())) {
-    const auto& game = *hailstone::test::game_dir();
+    const auto* game_ptr = hailstone::test::game_dir();
+    if (!game_ptr) return;
+    const auto& game = *game_ptr;
     auto lib = CharacterLibrary::load(game, "");
     auto gus = lib.model("GUS"); // race 549, the small goo
     if (!gus) return;            // an install without gus.eqg
@@ -287,7 +292,9 @@ TEST_CASE("EQG texture variants come from the model's .lay layers" * doctest::sk
 }
 
 TEST_CASE("dressing classic, Luclin and EQG models from the game files" * doctest::skip(!hailstone::test::game_dir())) {
-    const auto& game = *hailstone::test::game_dir();
+    const auto* game_ptr = hailstone::test::game_dir();
+    if (!game_ptr) return;
+    const auto& game = *game_ptr;
     auto lib = CharacterLibrary::load(game, "");
     auto hum = lib.model("HUM");
     REQUIRE(hum);
@@ -404,7 +411,9 @@ TEST_CASE("armour tints a classic body slot only where the model has that varian
     // 01), so each of materials 1..9 is checked against what this folder's SKE has: a variant whose SKECH<vv>
     // texture is there takes the colour; one that is not makes ReplaceMaterial fail and the chest stays as it was,
     // untinted. (A skeleton spawn's armour colours are dropped before dressing: game::drawn_appearance.)
-    auto lib = CharacterLibrary::load(*hailstone::test::game_dir(), "");
+    const auto* game_ptr = hailstone::test::game_dir();
+    if (!game_ptr) return;
+    auto lib = CharacterLibrary::load(*game_ptr, "");
     auto ske = lib.model("SKE");
     REQUIRE(ske);
     REQUIRE_FALSE(ske->luclin);
@@ -437,7 +446,9 @@ TEST_CASE("a Luclin robe's sleeves sit on the body's forearms" * doctest::skip(!
     // CHierarchicalActor::AttachToHostBones @0x10043e10: the robe's bones take the body bones' matrices of the same
     // names. IT4336's skeleton (the High Elf female's robe 10) holds its sleeve bones (FOROBEARML1..4) away from the
     // body's rest pose; posed by the robe's own rest pose, the sleeves hung detached about 1.4 units below the arms.
-    auto lib = CharacterLibrary::load(*hailstone::test::game_dir(), "", true);
+    const auto* game_ptr = hailstone::test::game_dir();
+    if (!game_ptr) return;
+    auto lib = CharacterLibrary::load(*game_ptr, "", true);
     auto hif = lib.model("HIF");
     REQUIRE(hif);
     REQUIRE(hif->luclin);
@@ -765,4 +776,163 @@ TEST_CASE("Luclin eyes: CHR_EYE<colour + race offset> on the eye palette entries
     find_eye_materials(f, frog);
     CHECK(f.eye_left == 1);
     CHECK(f.eye_right == 1);
+}
+
+TEST_CASE("EQG texture variants come from synthetic .lay layers without EQ_GAME_DIR") {
+    test::ScratchDir scratch("appearance_eqg_lay");
+    std::filesystem::create_directories(scratch.path() / "Resources");
+
+    auto write_bytes = [](const std::filesystem::path& path, const std::vector<std::byte>& data) {
+        std::ofstream out(path, std::ios::binary);
+        REQUIRE(out.good());
+        out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+        REQUIRE(out.good());
+    };
+    auto write_text = [](const std::filesystem::path& path, std::string_view text) {
+        std::ofstream out(path, std::ios::binary);
+        REQUIRE(out.good());
+        out.write(text.data(), static_cast<std::streamsize>(text.size()));
+        REQUIRE(out.good());
+    };
+
+    // Build synthetic gus.mds (EQGS v1) with materials GUS_m00 and GUS_m01.
+    std::string mds_strings(1, '\0');
+    auto add_mds_str = [&](std::string_view s) {
+        auto off = static_cast<std::uint32_t>(mds_strings.size());
+        mds_strings.append(s);
+        mds_strings.push_back('\0');
+        return off;
+    };
+    const std::uint32_t m0 = add_mds_str("GUS_m00");
+    const std::uint32_t m1 = add_mds_str("GUS_m01");
+    const std::uint32_t shader = add_mds_str("Opaque_MaxCBSG1.fx");
+    const std::uint32_t diff_prop = add_mds_str("e_TextureDiffuse0");
+    const std::uint32_t tex0 = add_mds_str("c_gus_bd_s00_c.dds");
+    const std::uint32_t tex1 = add_mds_str("c_gus_gb_s00_c.dds");
+    const std::uint32_t bone0 = add_mds_str("ROOT");
+    const std::uint32_t piece0 = add_mds_str("GUS");
+
+    ByteWriter mds;
+    mds.fixed_string("EQGS", 4);
+    mds.le<std::uint32_t>(1); // version
+    mds.le<std::uint32_t>(static_cast<std::uint32_t>(mds_strings.size()));
+    mds.le<std::uint32_t>(2); // materials
+    mds.le<std::uint32_t>(1); // bones
+    mds.le<std::uint32_t>(1); // pieces
+    mds.bytes({reinterpret_cast<const std::byte*>(mds_strings.data()), mds_strings.size()});
+    for (std::uint32_t i = 0; i < 2; ++i) {
+        mds.le<std::uint32_t>(i);
+        mds.le<std::uint32_t>(i == 0 ? m0 : m1);
+        mds.le<std::uint32_t>(shader);
+        mds.le<std::uint32_t>(1); // 1 property
+        mds.le<std::uint32_t>(diff_prop);
+        mds.le<std::uint32_t>(2); // string property
+        mds.le<std::uint32_t>(i == 0 ? tex0 : tex1);
+    }
+    // 1 bone
+    mds.le<std::uint32_t>(bone0);
+    mds.le<std::int32_t>(-1);
+    mds.le<std::uint32_t>(0);
+    mds.le<std::int32_t>(-1);
+    for (float f : {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f}) mds.f32(f);
+    // 1 piece: 6 vertices, 2 triangles (one per material)
+    mds.le<std::uint32_t>(1);
+    mds.le<std::uint32_t>(piece0);
+    mds.le<std::uint32_t>(6);
+    mds.le<std::uint32_t>(2);
+    mds.le<std::uint32_t>(6);
+    const float verts[6][3] = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}, {1, 0, 1}, {0, 1, 1}};
+    for (const auto& v : verts) {
+        mds.f32(v[0]); mds.f32(v[1]); mds.f32(v[2]);
+        mds.f32(0.0f); mds.f32(0.0f); mds.f32(1.0f);
+        mds.f32(0.0f); mds.f32(0.0f);
+    }
+    mds.le<std::uint32_t>(0); mds.le<std::uint32_t>(1); mds.le<std::uint32_t>(2); mds.le<std::int32_t>(0); mds.le<std::uint32_t>(0);
+    mds.le<std::uint32_t>(3); mds.le<std::uint32_t>(4); mds.le<std::uint32_t>(5); mds.le<std::int32_t>(1); mds.le<std::uint32_t>(0);
+    for (int i = 0; i < 6; ++i) {
+        mds.le<std::uint32_t>(1);
+        mds.le<std::int32_t>(0); mds.f32(1.0f);
+        for (int k = 0; k < 3; ++k) { mds.le<std::int32_t>(-1); mds.f32(0.0f); }
+    }
+
+    // Build synthetic gus.lay (EQGL v4).
+    std::string lay_strings(1, '\0');
+    auto add_lay_str = [&](std::string_view s) {
+        auto off = static_cast<std::uint32_t>(lay_strings.size());
+        lay_strings.append(s);
+        lay_strings.push_back('\0');
+        return off;
+    };
+    const std::pair<const char*, const char*> layer_defs[] = {
+        {"C_GUS_S01_M01", "C_GUS_BD_S01_C.DDS"},
+        {"C_GUS_S01_M02", "C_GUS_GB_S00_C.DDS"},
+        {"C_GUS_S04_M01", "C_GUS_BK_S04_C.DDS"},
+        {"C_GUS_S04_M02", "C_GUS_BK_S04_C.DDS"},
+        {"C_GUS_S05_M01", "C_GUS_EV_S05_C.DDS"},
+    };
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> lay_offs;
+    for (const auto& [ln, dn] : layer_defs) lay_offs.emplace_back(add_lay_str(ln), add_lay_str(dn));
+
+    ByteWriter lay;
+    lay.fixed_string("EQGL", 4);
+    lay.le<std::uint32_t>(4);
+    lay.le<std::uint32_t>(static_cast<std::uint32_t>(lay_strings.size()));
+    lay.le<std::uint32_t>(static_cast<std::uint32_t>(lay_offs.size()));
+    lay.bytes({reinterpret_cast<const std::byte*>(lay_strings.data()), lay_strings.size()});
+    for (const auto& [no, doff] : lay_offs) {
+        lay.le<std::uint32_t>(no);
+        lay.le<std::uint32_t>(doff);
+        lay.le<std::uint32_t>(0xffffffffu);
+        lay.le<std::uint32_t>(0xffffffffu);
+        lay.le<std::uint32_t>(0xffffffffu);
+        lay.le<std::uint32_t>(0xffffffffu);
+        lay.f32(1.0f);
+        lay.f32(0.5f);
+    }
+
+    const std::vector<std::byte> dummy_dds{std::byte{'D'}, std::byte{'D'}, std::byte{'S'}, std::byte{' '}};
+    auto eqg = test::pfs_fixtures::make_pfs({
+        {"gus.mds", mds.take()},
+        {"gus.lay", lay.take()},
+        {"c_gus_bd_s00_c.dds", dummy_dds},
+        {"c_gus_bd_s01_c.dds", dummy_dds},
+        {"c_gus_gb_s00_c.dds", dummy_dds},
+        {"c_gus_bk_s04_c.dds", dummy_dds},
+        {"c_gus_ev_s05_c.dds", dummy_dds},
+    });
+    write_bytes(scratch.path() / "gus.eqg", eqg);
+    write_text(scratch.path() / "Resources" / "OnDemandResources.txt",
+               "gus.eqg^gus.mds^GUS_ACTORDEF^EQGS\n"
+               "gus.eqg^gus.lay^C_GUS_S01_M01^EQGL\n"
+               "gus.eqg^gus.lay^C_GUS_S01_M02^EQGL\n"
+               "gus.eqg^gus.lay^C_GUS_S04_M01^EQGL\n"
+               "gus.eqg^gus.lay^C_GUS_S04_M02^EQGL\n"
+               "gus.eqg^gus.lay^C_GUS_S05_M01^EQGL\n");
+
+    GameDir game(scratch.path());
+    auto lib = CharacterLibrary::load(game, "");
+    auto gus = lib.model("GUS");
+    REQUIRE(gus);
+    auto diffuse = [&](int texture) {
+        game::Appearance a;
+        a.texture = static_cast<std::uint8_t>(texture);
+        auto m = lib.dress(*gus, a);
+        std::map<std::string, std::string> out;
+        if (m)
+            for (const auto& mat : m->materials)
+                if (!mat.frames.empty()) {
+                    std::string f = mat.frames.front();
+                    for (char& c : f) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    out[mat.name] = f;
+                }
+        return out;
+    };
+    auto t1 = diffuse(1);
+    CHECK(t1["GUS_m00"] == "c_gus_bd_s01_c.dds");
+    CHECK(t1["GUS_m01"] == "c_gus_gb_s00_c.dds");
+    auto t4 = diffuse(4);
+    CHECK(t4["GUS_m00"] == "c_gus_bk_s04_c.dds");
+    CHECK(t4["GUS_m01"] == "c_gus_bk_s04_c.dds");
+    CHECK(diffuse(5)["GUS_m00"] == "c_gus_ev_s05_c.dds");
+    CHECK(diffuse(9)["GUS_m00"] == "c_gus_bd_s00_c.dds");
 }

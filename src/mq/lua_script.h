@@ -14,6 +14,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -22,8 +23,10 @@
 #include "core/log.h"
 #include "core/sha256.h"
 #include "game/server_ext.h"
+#include "ipc/session_bus.h"
 #include "mq/event_pattern.h"
 #include "mq/lua_mq.h"
+#include "mq/rgmercs_bridge.h"
 
 namespace hailstone::mq {
 
@@ -168,6 +171,8 @@ struct ScriptHost::Impl {
     void resume_threads(Script& s);
     void draw_windows(Script& s);
     plugin::ButtonRules rules(const game::LuaSocial& lua) const;
+    std::deque<ipc::ActorPacket> actor_inbox;
+    std::unordered_map<std::string, ScriptHost::LastOutcome> last_outcomes;
 };
 
 struct Script {
@@ -280,6 +285,10 @@ struct Script {
         if (status == Status::Failed || status == Status::Exited) return;
         status = Status::Failed;
         error = std::move(why);
+        if (host) {
+            host->last_outcomes[name] = ScriptHost::LastOutcome{name, "ERROR", error};
+            if (name == "rgmercs" && host->env.rgmercs) host->env.rgmercs->set_script_error(error);
+        }
         host->say(std::format("[Lua] {} ended with an error: {}", name, error));
         log::warn("lua script {}: {}", name, log_text.empty() ? std::string_view(error) : log_text);
         stop_requested = true;

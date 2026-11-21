@@ -24,6 +24,13 @@
 #include "platform/shared_file.h"
 #include "scratch_dir.h"
 
+#if !defined(_WIN32)
+#include <grp.h>
+#include <pwd.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 using namespace hailstone;
 namespace fs = std::filesystem;
 
@@ -322,3 +329,124 @@ TEST_CASE("shared_file: stamps describe the opened source and detect size time a
     CHECK(resized != retimed);
     CHECK_FALSE(platform::file_stamp(nullptr));
 }
+
+#if !defined(_WIN32)
+TEST_CASE("shared_file: ScratchDir isolates permissions under umask 0002") {
+    struct ScopedUmask {
+        mode_t previous;
+        explicit ScopedUmask(mode_t mask) : previous(::umask(mask)) {}
+        ~ScopedUmask() { ::umask(previous); }
+    };
+    ScopedUmask permissive(0002);
+    test::ScratchDir scratch("shared_umask_0002");
+    const auto perms = fs::status(scratch.path()).permissions() & fs::perms::all;
+    CHECK(perms == fs::perms::owner_all);
+    const fs::path cache = fs::canonical(scratch.path()) / "nested" / "cache";
+    CHECK(platform::prepare_private_cache_directory(cache));
+    CHECK((fs::status(cache).permissions() & fs::perms::all) == fs::perms::owner_all);
+}
+
+TEST_CASE("shared_file: ancestor policy allows user private-group 0775 but rejects shared and world-writable directories") {
+    using platform::detail::PosixGroupRecord;
+    using platform::detail::PosixUserRecord;
+    using platform::detail::is_safe_ancestor_mode;
+    using platform::detail::is_user_private_group_record;
+
+    // Pure policy checks covering UPG vs genuinely shared multi-user groups and permission modes.
+    const PosixUserRecord alice{1000, 1000, "alice"};
+    const std::array<std::string_view, 0> no_members{};
+    const std::array<std::string_view, 1> self_only{"alice"};
+    const std::array<std::string_view, 2> shared_members{"alice", "bob"};
+    const std::array<std::string_view, 1> other_member{"bob"};
+
+    CHECK(is_user_private_group_record(alice, PosixGroupRecord{1000, "alice", no_members}));
+    CHECK(is_user_private_group_record(alice, PosixGroupRecord{1000, "alice", self_only}));
+    CHECK_FALSE(is_user_private_group_record(alice, PosixGroupRecord{1000, "alice", shared_members}));
+    CHECK_FALSE(is_user_private_group_record(alice, PosixGroupRecord{1000, "alice", other_member}));
+    CHECK_FALSE(is_user_private_group_record(alice, PosixGroupRecord{1000, "users", no_members}));
+    CHECK_FALSE(is_user_private_group_record(alice, PosixGroupRecord{100, "alice", no_members}));
+
+    // Standard safe modes
+    CHECK(is_safe_ancestor_mode(0755, 1000, 1000, 1000, false));
+    CHECK(is_safe_ancestor_mode(0755, 0, 0, 1000, false));
+    CHECK(is_safe_ancestor_mode(01777, 0, 0, 1000, false));
+    // User-owned UPG 0775 is accepted; genuinely shared 0775 is rejected.
+    CHECK(is_safe_ancestor_mode(0775, 1000, 1000, 1000, true));
+    CHECK_FALSE(is_safe_ancestor_mode(0775, 1000, 100, 1000, false));
+    // Root-owned 0775 for non-root user, foreign-owned 0775, and non-sticky 0777 are rejected.
+    CHECK_FALSE(is_safe_ancestor_mode(0775, 0, 0, 1000, true));
+    CHECK_FALSE(is_safe_ancestor_mode(0775, 1001, 1001, 1000, true));
+    CHECK_FALSE(is_safe_ancestor_mode(0777, 1000, 1000, 1000, true));
+
+    // Real filesystem checks inside an isolated ScratchDir.
+    test::ScratchDir scratch("shared_upg_fs");
+    const fs::path base = fs::canonical(scratch.path());
+
+    // World-writable non-sticky ancestor must always fail.
+    const fs::path world_parent = base / "world_writable";
+    fs::create_directory(world_parent);
+    fs::permissions(world_parent, fs::perms::all, fs::perm_options::replace);
+    CHECK_FALSE(platform::prepare_private_cache_directory(world_parent / "cache"));
+
+    // A 0775 directory owned by the current user cannot be accepted as a private leaf (leaf must remain 0700).
+    const fs::path upg_parent = base / "upg_parent";
+    fs::create_directory(upg_parent);
+    fs::permissions(upg_parent,
+                    fs::perms::owner_all | fs::perms::group_all | fs::perms::others_read | fs::perms::others_exec,
+                    fs::perm_options::replace);
+    CHECK_FALSE(platform::prepare_private_cache_directory(upg_parent));
+
+    // Check whether the current user has a true User Private Group on this host.
+    struct stat st{};
+    REQUIRE(::lstat(upg_parent.c_str(), &st) == 0);
+    const struct passwd* pw = ::getpwuid(::geteuid());
+    const struct group* gr = pw ? ::getgrgid(st.st_gid) : nullptr;
+    bool host_has_upg = false;
+    if (pw && gr && pw->pw_name && gr->gr_name) {
+        std::vector<std::string_view> members;
+        if (gr->gr_mem) {
+            for (char** m = gr->gr_mem; *m; ++m) members.emplace_back(*m);
+        }
+        host_has_upg = is_user_private_group_record(
+            PosixUserRecord{static_cast<std::uint32_t>(pw->pw_uid), static_cast<std::uint32_t>(pw->pw_gid), pw->pw_name},
+            PosixGroupRecord{static_cast<std::uint32_t>(gr->gr_gid), gr->gr_name, members});
+    }
+    if (host_has_upg) {
+        CHECK(platform::prepare_private_cache_directory(upg_parent / "cache"));
+        // Ancestor permissions must not be modified; leaf must be strictly 0700.
+        CHECK((fs::status(upg_parent).permissions() & fs::perms::all) ==
+              (fs::perms::owner_all | fs::perms::group_all | fs::perms::others_read | fs::perms::others_exec));
+        CHECK((fs::status(upg_parent / "cache").permissions() & fs::perms::all) == fs::perms::owner_all);
+    }
+
+    // Real filesystem check for a genuinely shared non-UPG group when a different group can be assigned.
+    std::vector<gid_t> candidate_gids;
+    int ngroups = ::getgroups(0, nullptr);
+    if (ngroups > 0) {
+        std::vector<gid_t> groups(static_cast<std::size_t>(ngroups));
+        if (::getgroups(ngroups, groups.data()) > 0) {
+            for (gid_t g : groups) {
+                if (g != st.st_gid) candidate_gids.push_back(g);
+            }
+        }
+    }
+    if (::geteuid() == 0) {
+        for (const char* name : {"staff", "users", "daemon", "bin", "sys", "adm", "nogroup"}) {
+            if (const struct group* alt = ::getgrnam(name); alt && alt->gr_gid != st.st_gid)
+                candidate_gids.push_back(alt->gr_gid);
+        }
+    }
+    for (gid_t shared_gid : candidate_gids) {
+        const fs::path shared_parent = base / ("shared_group_" + std::to_string(shared_gid));
+        fs::create_directory(shared_parent);
+        if (::chown(shared_parent.c_str(), static_cast<uid_t>(-1), shared_gid) == 0) {
+            fs::permissions(shared_parent,
+                            fs::perms::owner_all | fs::perms::group_all | fs::perms::others_read |
+                                fs::perms::others_exec,
+                            fs::perm_options::replace);
+            CHECK_FALSE(platform::prepare_private_cache_directory(shared_parent / "cache"));
+            break;
+        }
+    }
+}
+#endif

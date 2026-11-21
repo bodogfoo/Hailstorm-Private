@@ -363,6 +363,7 @@ void emit_login(Out& o, const ui::LoginView& v) {
     o.boolean("savePassword", v.save_password && v.remember && keyring);
     o.boolean("canSavePasswords", keyring);
     o.boolean("music", v.pregame_music);
+    o.boolean("autoLogin", v.auto_login);
     o.str("ui", v.ui);
     o.str("defaultUi", v.default_ui);
     o.table();
@@ -485,6 +486,9 @@ int LoginSet(lua_State* L) {
     } else if (field == "music") {
         v.pregame_music = lua_toboolean(L, 2) != 0;
         h.login_action = static_cast<int>(ui::LoginAction::MusicChanged);
+    } else if (field == "autoLogin") {
+        v.auto_login = lua_toboolean(L, 2) != 0;
+        h.login_action = static_cast<int>(ui::LoginAction::AutoLoginChanged);
     } else if (field == "ui") {
         std::string id = text();
         if (std::none_of(v.ui_packs.begin(), v.ui_packs.end(), [&](const ui::UiPack& p) { return p.id == id; }))
@@ -507,6 +511,8 @@ int LoginSet(lua_State* L) {
     } else if (field == "quick") {
         const std::size_t n = ui::quick_characters(v).size(); // (gone before the argument is checked)
         v.quick_selected = index_arg(L, 2, n);
+    } else if (field == "groupSlot") {
+        v.group_slot_selected = index_arg(L, 2, v.group_slots.size());
     } else {
         return luaL_error(L, "hs.LoginSet: no field %s", lua_tostring(L, 1));
     }
@@ -760,6 +766,52 @@ int LoginDo(lua_State* L) {
             }
         }
         if (ok) action = A::AccountsChanged;
+    } else if (what == "refreshGroupProfiles") {
+        ok = !v.transient;
+        if (ok) action = A::RefreshGroupProfiles;
+    } else if (what == "selectGroupProfile") {
+        ok = !v.transient && !v.group_profiles.empty();
+        if (ok) {
+            if (lua_type(L, 2) == LUA_TNUMBER) {
+                const int idx = index_arg(L, 2, v.group_profiles.size());
+                if (idx >= 0 && idx < static_cast<int>(v.group_profiles.size())) {
+                    v.group_profile_choice = v.group_profiles[static_cast<std::size_t>(idx)].id;
+                } else {
+                    ok = false;
+                }
+            } else {
+                v.group_profile_choice = luaL_checkstring(L, 2);
+                ok = !v.group_profile_choice.empty();
+            }
+            if (ok) action = A::SelectGroupProfile;
+        }
+    } else if (what == "launchGroup") {
+        ok = !v.transient && v.group_selected >= 0 && !v.group_slots.empty();
+        if (ok) action = A::LaunchGroup;
+    } else if (what == "launchGroupSlot") {
+        if (!lua_isnoneornil(L, 2)) {
+            const int idx = index_arg(L, 2, v.group_slots.size());
+            if (idx >= 0 && idx < static_cast<int>(v.group_slots.size())) {
+                v.group_slot_selected = idx;
+                v.group_slot_choice = v.group_slots[static_cast<std::size_t>(idx)].slot_number;
+                ok = true;
+            } else {
+                ok = false;
+            }
+        } else if (v.group_slot_selected >= 0 &&
+                   v.group_slot_selected < static_cast<int>(v.group_slots.size())) {
+            v.group_slot_choice = v.group_slots[static_cast<std::size_t>(v.group_slot_selected)].slot_number;
+            ok = true;
+        } else {
+            ok = false;
+        }
+        if (ok) action = A::LaunchGroupSlot;
+    } else if (what == "stopGroup") {
+        ok = !v.transient;
+        if (ok) action = A::StopGroup;
+    } else if (what == "relaunchGroup") {
+        ok = !v.transient && v.group_selected >= 0 && !v.group_slots.empty();
+        if (ok) action = A::RelaunchGroup;
     } else {
         return luaL_error(L, "hs.LoginDo: no action %s", lua_tostring(L, 1));
     }
@@ -813,6 +865,21 @@ int ServerSelect(lua_State* L) {
 // ok = hs.ServerSelectDo(action [, i]): "select", i; "play" [, i] (the picked world, or row i; only one that can be
 // joined); "favorite", i (marks or unmarks row i as a favourite: the list is sorted again the next frame); "back" (to
 // the login screen).
+int ServerSelectSet(lua_State* L) {
+    UiHost& h = host_of(L);
+    if (!h.server_select || plugin_window()) return 0;
+    ui::ServerSelectView& v = *h.server_select;
+    const std::string_view field = luaL_checkstring(L, 1);
+    if (field == "filter") {
+        std::string s = luaL_checkstring(L, 2);
+        if (s.size() > 128) s.resize(128);
+        v.filter = std::move(s);
+    } else {
+        return luaL_error(L, "hs.ServerSelectSet: no field %s", lua_tostring(L, 1));
+    }
+    return 0;
+}
+
 int ServerSelectDo(lua_State* L) {
     UiHost& h = host_of(L);
     bool ok = false;
@@ -1134,7 +1201,7 @@ int CharacterCreateDo(lua_State* L) {
 void register_pregame_api(lua_State* L, UiHost& host, ScreenReplacements& screens) {
     static const luaL_Reg fns[] = {{"LoginScreen", LoginScreen},         {"LoginSet", LoginSet},
                                    {"LoginDo", LoginDo},                 {"ServerSelect", ServerSelect},
-                                   {"ServerSelectDo", ServerSelectDo},   {"CharacterSelect", CharacterSelect},
+                                   {"ServerSelectSet", ServerSelectSet}, {"ServerSelectDo", ServerSelectDo},   {"CharacterSelect", CharacterSelect},
                                    {"CharacterSelectDo", CharacterSelectDo}, {"CharacterCreate", CharacterCreate},
                                    {"CharacterCreateHelp", CharacterCreateHelp},
                                    {"CharacterCreateDo", CharacterCreateDo}, {nullptr, nullptr}};

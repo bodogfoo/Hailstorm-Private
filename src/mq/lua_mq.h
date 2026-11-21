@@ -35,10 +35,13 @@
 #include "plugin/policy.h"
 
 namespace hailstone::game { class ExtensionChain; class NameplateCanvasRegistry; }
+namespace hailstone::ipc { class SessionBusClient; }
 namespace hailstone::net { struct AppPacket; class GameConnection; }
 namespace hailstone::plugin { class UiBridge; class WebAccess; }
 
 namespace hailstone::mq {
+
+class RGMercsBridge;
 
 // An installed, explicitly managed Lua add-on. The installer supplies its exact entry and recorded bytes;
 // a disabled or unverified record remains present so an ordinary autorun cannot bypass activation.
@@ -86,6 +89,10 @@ struct ScriptEnv {
     // How long a script may run without a chance to yield before it is stopped, in real time; 0: kRunawayMs (5 s).
     // Only tests set it, so a runaway is stopped in milliseconds.
     std::int64_t runaway_ms = 0;
+    // Hailstone 24: local IPC bus for require('actors') and cross-session routing.
+    ipc::SessionBusClient* ipc_bus = nullptr;
+    // Hailstone 24: native RG Mercs state/settings/log bridge (non-owning, optional).
+    RGMercsBridge* rgmercs = nullptr;
 };
 
 // A Lua social's hot button pressed (game/lua_social.h). The social's Lua sees `button` = {social, bar, button,
@@ -128,9 +135,17 @@ public:
     // /lua run: false with the reason when the script cannot start.
     bool run(const std::string& name, const std::vector<std::string>& args, std::string* why = nullptr);
     bool stop(std::string_view name);
+    bool reload(const std::string& name, const std::vector<std::string>& args = {}, std::string* why = nullptr);
     void stop_all();
     // Pauses or resumes (toggles when `paused` is unset).
     bool pause(std::string_view name, std::optional<bool> paused = {});
+
+    struct LastOutcome {
+        std::string name;
+        std::string status; // "RUNNING", "PAUSED", "EXITED", "STOPPED", "ERROR"
+        std::string error;
+    };
+    std::optional<LastOutcome> last_outcome(std::string_view name) const;
 
     struct Info {
         std::string name;

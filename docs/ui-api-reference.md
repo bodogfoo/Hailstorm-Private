@@ -10,7 +10,7 @@ does not bypass a function's own caller, screen or server-state checks.
 `API.version`, `API.Supports(module[, member])` and `API.Describe([module[, member]])`
 provide contract version and structural discovery. They confer no permissions.
 
-Coverage: **340/340 method implementation links**, **218/340 adjacent binding comment excerpts**, and **6/6 constant implementation links**. Excerpts below are verbatim binding comments; they preserve any documented signatures and results, and do not invent omitted arguments or results. **See binding** marks an author documentation gap.
+Coverage: **355/355 method implementation links**, **227/355 adjacent binding comment excerpts**, and **6/6 constant implementation links**. Excerpts below are verbatim binding comments; they preserve any documented signatures and results, and do not invent omitted arguments or results. **See binding** marks an author documentation gap.
 
 Unresolved method implementations: none.
 Unresolved constant implementations: none.
@@ -120,6 +120,20 @@ Unresolved constant implementations: none.
 | `API.chat.TellWindows` | `on = hs.ChatTellWindows()   /   hs.ChatSetTellWindows(on)   -- tells in a window per player` | `hs.ChatTellWindows` · [source](../src/app/lua_ui_chat.cpp) | none (outer gate) | closed |
 | `API.chat.Text` | `version, lines = hs.ChatText(slot [, version [, names [, stamps]]])   -- the lines of the window's tab that is up, as`<br>`STML, oldest first; only the version when the script already has it. names (Hailstone): players' names as name`<br>`links; stamps (Hailstone): each line's local time first, "[hh:mm:ss] " (another version than without). The version`<br>`changes only when this window's lines do (a line in another window leaves it as it is).`<br>`version, lines, reset, count = hs.ChatText(slot, version, names, stamps, true)   -- Hailstone: the lines added since`<br>`` `version` (one this call gave for the same slot, names and stamps) when the script can keep what it has: reset ``<br>`` false, add `lines` at the end and drop lines from the front until `count` are left. Else reset true and `lines` ``<br>`are all of them, as without the last argument.` | `hs.ChatText` · [source](../src/app/lua_ui_chat.cpp) | none (outer gate) | closed |
 | `API.chat.Windows` | `windows = hs.ChatWindows([into])   -- visible windows in slot order with slot, title (selected tab), windowTitle,`<br>`main, tells, tab (selected position, 1-based), select (a selection request), tellsIn (received tell count), and`<br>`ordered tabs with slot, title, unread, tell, scrollbar, flash, flashColor (RGB or nil), and highlighted (current phase).`<br>``A caller supplying `into` receives the same list and reusable records. Copy any data needed past the next fill.`` | `hs.ChatWindows` · [source](../src/app/lua_ui_chat.cpp) | none (outer gate) | closed |
+
+## combat
+
+| Member | Documented signature / binding comment | Existing binding | Required capabilities | Hook policy |
+| --- | --- | --- | --- | --- |
+| `API.combat.Do` | **See binding** | `hs.CombatDo` · [source](../src/app/lua_ui_combat.cpp) | actions, commands, move | closed |
+| `API.combat.Status` | **See binding** | `hs.CombatStatus` · [source](../src/app/lua_ui_combat.cpp) | none (outer gate) | closed |
+
+## commander
+
+| Member | Documented signature / binding comment | Existing binding | Required capabilities | Hook policy |
+| --- | --- | --- | --- | --- |
+| `API.commander.Do` | **See binding** | `hs.CommanderDo` · [source](../src/app/lua_ui_combat.cpp) | actions, commands, move | closed |
+| `API.commander.Status` | **See binding** | `hs.CommanderStatus` · [source](../src/app/lua_ui_combat.cpp) | none (outer gate) | closed |
 
 ## compare
 
@@ -383,7 +397,8 @@ Unresolved constant implementations: none.
 | `API.pregame.LoginScreen` | `view = hs.LoginScreen([revision])   -- nil unless the client shows its login screen; reading it draws the screen`<br>`in the client's place this frame. view.revision changes whenever anything in the view does: given the revision of`<br>`the table the script holds, hs.LoginScreen gives true while nothing changed (keep that table; nothing is built),`<br>`else a new view. (The same holds for hs.ServerSelect and hs.CharacterSelect.)`<br>`view: revision, busy, status {text, error}, transient (a test login: no saved servers), ready (Login can go),`<br>`sessionTicketAvailable (the app holds a returned ticket for this endpoint; no ticket value is exposed),`<br>`servers {name, host, port, id, ui}, selected (0: a new server), name, host, port, username, password, remember,`<br>`savePassword, canSavePasswords, music, ui, defaultUi, uiPacks {id, name, description, input, available, reason},`<br>`accounts {username, passwordSaved, box, canBox, world, character, characters {name, world, level, classes}},`<br>`worlds, characters {name, world, level, classes, account, passwordSaved, last}, quick (0: none),`<br>`gameFolders {path, label, live, usable} (the one in use first), gameFolderFixed, assetsDir, boxCount, boxReady,`<br>`addons (docs/addons.md): open (the panel shown: hs.LoginSet "addonsOpen"), available (links can be installed;`<br>`else whyOff says why), link, inspecting, status,`<br>`server (the picked server's name), suggestions {name ("" a server's suggestion), source, text, fromServer,`<br>`required} (the picked server's offered add-ons: docs/addons.md "Suggested add-ons"),`<br>`offer {name, kind, version, author, description, source, page, notes, key`<br>`(the signing key's start, "" unsigned), installedVersion, blocked (why not, "" it can), caps (in words)},`<br>`rows {name, kind ("script"/"plugin"/"tool"/"upscaler"), group ("installed", "manual", "server"), version, source, page, author,`<br>`description, state, stateText, newVersion, caps, newCaps, modified, note, autoUpdate, signed, canUpdate,`<br>`canRemove, canStart (an installed tool: hs.LoginDo "addonStart"), folder, consent (the server's compiled plugins: "allowed", "denied", "unasked"; else "")}.` | `hs.LoginScreen` · [source](../src/app/lua_ui_pregame.cpp) | none (outer gate) | closed |
 | `API.pregame.LoginSet` | `hs.LoginSet(field, value): a field as the player edits it. "name", "host", "username", "password", "ui" (a pack's`<br>`id: the client switches to it at once, and a saved server keeps it at once), strings; "port", 1..65535; "remember", "savePassword", "music" (the`<br>`pre-game music, kept in hailstone.ini at once), booleans; "quick", the Characters list's row (0: none); "addonLink",`<br>`the add-on link field; "addonsOpen", the add-ons panel shown.` | `hs.LoginSet` · [source](../src/app/lua_ui_pregame.cpp) | none (outer gate) | closed |
 | `API.pregame.ServerSelect` | **See binding** | `hs.ServerSelect` · [source](../src/app/lua_ui_pregame.cpp) | none (outer gate) | closed |
-| `API.pregame.ServerSelectDo` | `ok = hs.ServerSelectDo(action [, i]): "select", i; "play" [, i] (the picked world, or row i; only one that can be`<br>`joined); "favorite", i (marks or unmarks row i as a favourite: the list is sorted again the next frame); "back" (to`<br>`the login screen).` | `hs.ServerSelectDo` · [source](../src/app/lua_ui_pregame.cpp) | none (outer gate) | closed |
+| `API.pregame.ServerSelectDo` | **See binding** | `hs.ServerSelectDo` · [source](../src/app/lua_ui_pregame.cpp) | none (outer gate) | closed |
+| `API.pregame.ServerSelectSet` | `ok = hs.ServerSelectDo(action [, i]): "select", i; "play" [, i] (the picked world, or row i; only one that can be`<br>`joined); "favorite", i (marks or unmarks row i as a favourite: the list is sorted again the next frame); "back" (to`<br>`the login screen).` | `hs.ServerSelectSet` · [source](../src/app/lua_ui_pregame.cpp) | none (outer gate) | closed |
 
 ## preview
 
@@ -403,12 +418,27 @@ Unresolved constant implementations: none.
 | `API.rewards.RestorePending` | **See binding** | `hs.RestorePendingRewards` · [source](../src/app/lua_ui_rewards.cpp) | actions | closed |
 | `API.rewards.Selection` | `state = hs.RewardSelection([pendingRevision, previewRevision [, into]])   -- the reward selection windows: shown,`<br>`and pending and preview, each { revision (opaque), shown, claim_pending, claim_uncertain, inspect_pending, message,`<br>``unchanged (the revision given is current), tabs (only when it is not) }. `into`, a table the caller keeps from``<br>`frame to frame, is filled in place instead of a new table, its lane records too (app/lua_ui_record.h: every field`<br>`written; tabs nil while unchanged, else a new list whenever it has entries).` | `hs.RewardSelection` · [source](../src/app/lua_ui_rewards.cpp) | none (outer gate) | closed |
 
+## rgmercs
+
+| Member | Documented signature / binding comment | Existing binding | Required capabilities | Hook policy |
+| --- | --- | --- | --- | --- |
+| `API.rgmercs.ClearLogs` | `hs.RGMercsClearLogs()` | `hs.RGMercsClearLogs` · [source](../src/app/lua_ui_rgmercs.cpp) | none (outer gate) | closed |
+| `API.rgmercs.Command` | `ok = hs.RGMercsCommand(cmd)` | `hs.RGMercsCommand` · [source](../src/app/lua_ui_rgmercs.cpp) | commands | closed |
+| `API.rgmercs.Control` | `ok, msg = hs.RGMercsControl(action [, arg])` | `hs.RGMercsControl` · [source](../src/app/lua_ui_rgmercs.cpp) | none (outer gate) | closed |
+| `API.rgmercs.ImportDb` | `ok, count, detail, warnings = hs.RGMercsImportDb([path])` | `hs.RGMercsImportDb` · [source](../src/app/lua_ui_rgmercs.cpp) | none (outer gate) | closed |
+| `API.rgmercs.ResetDefaults` | `ok = hs.RGMercsResetDefaults()` | `hs.RGMercsResetDefaults` · [source](../src/app/lua_ui_rgmercs.cpp) | none (outer gate) | closed |
+| `API.rgmercs.SaveSettings` | `ok = hs.RGMercsSaveSettings()` | `hs.RGMercsSaveSettings` · [source](../src/app/lua_ui_rgmercs.cpp) | none (outer gate) | closed |
+| `API.rgmercs.SetModule` | `ok = hs.RGMercsSetModule(name, enabled)` | `hs.RGMercsSetModule` · [source](../src/app/lua_ui_rgmercs.cpp) | none (outer gate) | closed |
+| `API.rgmercs.SetSetting` | `ok = hs.RGMercsSetSetting(key, val [, category])` | `hs.RGMercsSetSetting` · [source](../src/app/lua_ui_rgmercs.cpp) | none (outer gate) | closed |
+| `API.rgmercs.State` | `st = hs.RGMercsState([rescan])` | `hs.RGMercsState` · [source](../src/app/lua_ui_rgmercs.cpp) | none (outer gate) | closed |
+
 ## scripts
 
 | Member | Documented signature / binding comment | Existing binding | Required capabilities | Hook policy |
 | --- | --- | --- | --- | --- |
 | `API.scripts.List` | `list, info = hs.Scripts([rescan])` | `hs.Scripts` · [source](../src/app/lua_ui_scripts.cpp) | none (outer gate) | closed |
 | `API.scripts.Pause` | **See binding** | `hs.ScriptPause` · [source](../src/app/lua_ui_scripts.cpp) | none (outer gate) | closed |
+| `API.scripts.Reload` | **See binding** | `hs.ScriptReload` · [source](../src/app/lua_ui_scripts.cpp) | none (outer gate) | closed |
 | `API.scripts.Run` | `ok, why = hs.ScriptRun(name [, args]): the arguments split as /lua run's are ("quoted words" one).` | `hs.ScriptRun` · [source](../src/app/lua_ui_scripts.cpp) | none (outer gate) | closed |
 | `API.scripts.SetAutorun` | **See binding** | `hs.SetScriptAutorun` · [source](../src/app/lua_ui_scripts.cpp) | none (outer gate) | closed |
 | `API.scripts.Stop` | **See binding** | `hs.ScriptStop` · [source](../src/app/lua_ui_scripts.cpp) | none (outer gate) | closed |
