@@ -616,6 +616,16 @@ void ClientApp::enter_zone() {
     // The character's autorun scripts (the Scripts window; the same file at each zone-in starts nothing again).
     if (automation_) {
         automation_->scripts().set_autorun_file(files.scripts_ini());
+        // RGMercs owns its heartbeat from the main script.  Normalize imported
+        // MacroQuest autorun files so every character starts the main script
+        // once at zone entry and never launches a second heartbeat instance.
+        automation_->scripts().set_autorun("rgmercs/heartbeat", false);
+        automation_->scripts().set_autorun("rgmercs", true);
+        if (!automation_->scripts().running("rgmercs")) {
+            std::string why;
+            automation_->scripts().run("rgmercs", {}, &why);
+            if (!why.empty()) log::warn("rgmercs: startup note: {}", why);
+        }
         const std::string server_label =
             server_profile_.name.empty() ? char_view_.server_name : server_profile_.name;
         automation_->rgmercs().attach_character(platform::data_dir(), files.dir,
