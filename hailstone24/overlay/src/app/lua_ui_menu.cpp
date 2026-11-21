@@ -296,6 +296,7 @@ void CascadeMenu::load_text(std::string_view file, std::uint32_t expansions, std
     where = top.insert(where, {1, icon, "Report a Bug", kMenuReportBug, -1});
     where = top.insert(where, {1, icon, "Web Browser", kMenuWebBrowser, -1});
     where = top.insert(where, {1, icon, "Lua Scripts", kMenuScripts, -1});
+    where = top.insert(where, {1, icon, "RGMercs", kMenuRGMercs, -1});
     top.insert(where, {1, icon, "Combat Controller", kMenuCombat, -1});
     plugin_menu_ = -1;
     apply_plugin_entries();
@@ -436,9 +437,10 @@ void CascadeMenu::apply_plugin_entries() {
     plugin_menu_ = static_cast<int>(menus_.size());
     menus_.push_back(std::move(m));
     auto& rows = menus_[0].items; // (push_back may have moved menus_)
-    // Before Hailstone's own rows (Lua Scripts, Web Browser, Report a Bug).
+    // Before Hailstone's own rows (Combat Controller, RGMercs, Lua Scripts, Web Browser, Report a Bug).
     auto where = std::find_if(rows.begin(), rows.end(), [](const Item& it) {
-        return it.command == kMenuScripts || it.command == kMenuWebBrowser || it.command == kMenuReportBug;
+        return it.command == kMenuCombat || it.command == kMenuRGMercs || it.command == kMenuScripts ||
+               it.command == kMenuWebBrowser || it.command == kMenuReportBug;
     });
     rows.insert(where, {5, -1, "Plugins", -1, plugin_menu_});
     if (sorted_) arrange();

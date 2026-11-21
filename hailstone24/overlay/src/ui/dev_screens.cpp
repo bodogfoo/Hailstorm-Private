@@ -130,8 +130,12 @@ std::string_view trim_sv(std::string_view value) {
 }
 
 bool is_favorite_world(std::string_view name, const std::vector<std::string>& favorites) {
-    return std::any_of(favorites.begin(), favorites.end(),
-                       [&](const std::string& favorite) { return iequals(favorite, name); });
+    const std::string_view trimmed_name = trim_sv(name);
+    if (trimmed_name.empty()) return false;
+    return std::any_of(favorites.begin(), favorites.end(), [&](const std::string& favorite) {
+        const std::string_view trimmed_fav = trim_sv(favorite);
+        return !trimmed_fav.empty() && iequals(trimmed_fav, trimmed_name);
+    });
 }
 
 // ---- The gamepad on the pre-game screens ----------------------------------

@@ -63,6 +63,7 @@ inline constexpr int kMenuWebBrowser = 0x10001;
 // docs/plugins.md "The Scripts window"), before Web Browser.
 inline constexpr int kMenuScripts = 0x10002;
 inline constexpr int kMenuCombat = 0x10003;
+inline constexpr int kMenuRGMercs = 0x10004;
 // Hailstone: the plugins' menu entries (plugin/ui_bridge.h) in a "Plugins" submenu; entry i's row returns
 // kMenuPluginFirst + i.
 inline constexpr int kMenuPluginFirst = 0x20000;

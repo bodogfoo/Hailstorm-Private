@@ -28,6 +28,7 @@
 #include "game/char_select_camera.h"
 #include "game/hotbuttons.h"
 #include "game/pet_buttons.h"
+#include "ipc/session_bus.h"
 #include "mq/tlo.h"
 #include "plugin/consent.h"
 #include "ui/ui_packs.h"
@@ -38,7 +39,7 @@ namespace hailstone::net { class GameConnection; struct Item; struct ItemSlot; s
 namespace hailstone::game { class HotButtonStore; struct HotButton; namespace mechanics { class Character; } }
 namespace hailstone { class GameDir; }
 namespace hailstone::assets { class CharacterLibrary; struct CharacterModel; }
-namespace hailstone::mq { class ScriptHost; class Registry; struct Context; }
+namespace hailstone::mq { class ScriptHost; class Registry; class RGMercsBridge; struct Context; }
 namespace hailstone::ui {
 class UiTextures; class UiIni; struct ChatView; struct ServerSelectView; struct LoginView; struct CharacterSelectView;
 struct CharacterCreateView;
@@ -407,6 +408,28 @@ struct UiHost {
         std::function<bool(std::string_view action, std::string_view arg, std::string& message)> command;
     };
     CombatBridge combat;
+
+    mq::RGMercsBridge* rgmercs = nullptr;
+    std::string rgmercs_server;
+    std::function<bool(const std::string& line)> run_rgmercs_command;
+
+    struct CommanderStatusSnapshot {
+        std::string session_id;
+        std::string character_name;
+        std::string execution_state;
+        bool bus_connected = false;
+        bool auto_headless_others = true;
+        std::string active_profile_id;
+        std::vector<std::string> available_profiles;
+        std::vector<ipc::SessionSnapshot> peers;
+        std::vector<ipc::TrackedCommand> tracked_commands;
+    };
+    struct CommanderBridge {
+        std::function<CommanderStatusSnapshot()> status;
+        std::function<bool(std::string_view action, std::string_view target, std::string_view arg,
+                           std::string& message)> command;
+    };
+    CommanderBridge commander;
 };
 
 // CQuantityWnd::Open (game/quantity_dialog.h) for a window: accepted at once calls `done`, else shows the dialog.

@@ -10,7 +10,7 @@ does not bypass a function's own caller, screen or server-state checks.
 `API.version`, `API.Supports(module[, member])` and `API.Describe([module[, member]])`
 provide contract version and structural discovery. They confer no permissions.
 
-Coverage: **343/343 method implementation links**, **218/343 adjacent binding comment excerpts**, and **6/6 constant implementation links**. Excerpts below are verbatim binding comments; they preserve any documented signatures and results, and do not invent omitted arguments or results. **See binding** marks an author documentation gap.
+Coverage: **355/355 method implementation links**, **227/355 adjacent binding comment excerpts**, and **6/6 constant implementation links**. Excerpts below are verbatim binding comments; they preserve any documented signatures and results, and do not invent omitted arguments or results. **See binding** marks an author documentation gap.
 
 Unresolved method implementations: none.
 Unresolved constant implementations: none.
@@ -127,6 +127,13 @@ Unresolved constant implementations: none.
 | --- | --- | --- | --- | --- |
 | `API.combat.Do` | **See binding** | `hs.CombatDo` · [source](../src/app/lua_ui_combat.cpp) | actions, commands, move | closed |
 | `API.combat.Status` | **See binding** | `hs.CombatStatus` · [source](../src/app/lua_ui_combat.cpp) | none (outer gate) | closed |
+
+## commander
+
+| Member | Documented signature / binding comment | Existing binding | Required capabilities | Hook policy |
+| --- | --- | --- | --- | --- |
+| `API.commander.Do` | **See binding** | `hs.CommanderDo` · [source](../src/app/lua_ui_combat.cpp) | actions, commands, move | closed |
+| `API.commander.Status` | **See binding** | `hs.CommanderStatus` · [source](../src/app/lua_ui_combat.cpp) | none (outer gate) | closed |
 
 ## compare
 
@@ -411,12 +418,27 @@ Unresolved constant implementations: none.
 | `API.rewards.RestorePending` | **See binding** | `hs.RestorePendingRewards` · [source](../src/app/lua_ui_rewards.cpp) | actions | closed |
 | `API.rewards.Selection` | `state = hs.RewardSelection([pendingRevision, previewRevision [, into]])   -- the reward selection windows: shown,`<br>`and pending and preview, each { revision (opaque), shown, claim_pending, claim_uncertain, inspect_pending, message,`<br>``unchanged (the revision given is current), tabs (only when it is not) }. `into`, a table the caller keeps from``<br>`frame to frame, is filled in place instead of a new table, its lane records too (app/lua_ui_record.h: every field`<br>`written; tabs nil while unchanged, else a new list whenever it has entries).` | `hs.RewardSelection` · [source](../src/app/lua_ui_rewards.cpp) | none (outer gate) | closed |
 
+## rgmercs
+
+| Member | Documented signature / binding comment | Existing binding | Required capabilities | Hook policy |
+| --- | --- | --- | --- | --- |
+| `API.rgmercs.ClearLogs` | `hs.RGMercsClearLogs()` | `hs.RGMercsClearLogs` · [source](../src/app/lua_ui_rgmercs.cpp) | none (outer gate) | closed |
+| `API.rgmercs.Command` | `ok = hs.RGMercsCommand(cmd)` | `hs.RGMercsCommand` · [source](../src/app/lua_ui_rgmercs.cpp) | commands | closed |
+| `API.rgmercs.Control` | `ok, msg = hs.RGMercsControl(action [, arg])` | `hs.RGMercsControl` · [source](../src/app/lua_ui_rgmercs.cpp) | none (outer gate) | closed |
+| `API.rgmercs.ImportDb` | `ok, count, detail, warnings = hs.RGMercsImportDb([path])` | `hs.RGMercsImportDb` · [source](../src/app/lua_ui_rgmercs.cpp) | none (outer gate) | closed |
+| `API.rgmercs.ResetDefaults` | `ok = hs.RGMercsResetDefaults()` | `hs.RGMercsResetDefaults` · [source](../src/app/lua_ui_rgmercs.cpp) | none (outer gate) | closed |
+| `API.rgmercs.SaveSettings` | `ok = hs.RGMercsSaveSettings()` | `hs.RGMercsSaveSettings` · [source](../src/app/lua_ui_rgmercs.cpp) | none (outer gate) | closed |
+| `API.rgmercs.SetModule` | `ok = hs.RGMercsSetModule(name, enabled)` | `hs.RGMercsSetModule` · [source](../src/app/lua_ui_rgmercs.cpp) | none (outer gate) | closed |
+| `API.rgmercs.SetSetting` | `ok = hs.RGMercsSetSetting(key, val [, category])` | `hs.RGMercsSetSetting` · [source](../src/app/lua_ui_rgmercs.cpp) | none (outer gate) | closed |
+| `API.rgmercs.State` | `st = hs.RGMercsState([rescan])` | `hs.RGMercsState` · [source](../src/app/lua_ui_rgmercs.cpp) | none (outer gate) | closed |
+
 ## scripts
 
 | Member | Documented signature / binding comment | Existing binding | Required capabilities | Hook policy |
 | --- | --- | --- | --- | --- |
 | `API.scripts.List` | `list, info = hs.Scripts([rescan])` | `hs.Scripts` · [source](../src/app/lua_ui_scripts.cpp) | none (outer gate) | closed |
 | `API.scripts.Pause` | **See binding** | `hs.ScriptPause` · [source](../src/app/lua_ui_scripts.cpp) | none (outer gate) | closed |
+| `API.scripts.Reload` | **See binding** | `hs.ScriptReload` · [source](../src/app/lua_ui_scripts.cpp) | none (outer gate) | closed |
 | `API.scripts.Run` | `ok, why = hs.ScriptRun(name [, args]): the arguments split as /lua run's are ("quoted words" one).` | `hs.ScriptRun` · [source](../src/app/lua_ui_scripts.cpp) | none (outer gate) | closed |
 | `API.scripts.SetAutorun` | **See binding** | `hs.SetScriptAutorun` · [source](../src/app/lua_ui_scripts.cpp) | none (outer gate) | closed |
 | `API.scripts.Stop` | **See binding** | `hs.ScriptStop` · [source](../src/app/lua_ui_scripts.cpp) | none (outer gate) | closed |

@@ -30,12 +30,19 @@ struct GroupSlot {
     int bg_tick_hz = 25;
     std::string gpu_mode = "cached";
     std::string group_leader;
+    // Extended MQ Commander-style slot settings (all optional, password-free).
+    std::string follow_target;     // character name to follow by default
+    std::string combat_profile;    // e.g. "Tank", "MeleeDPS", "CasterDPS", "Healer", "Solo"
+    std::string script_module;     // e.g. "rgmercs" or ""
+    std::string script_settings;   // relative profile/config identifier for script_module
+    std::string spell_loadout;     // named spell loadout preset for this slot
 };
 
 struct GroupProfile {
     std::string id;                // filename stem (e.g. "ez_6box")
     std::string name;              // human display name
     std::string description;
+    std::string preset_kind;       // e.g. "Main Tank", "Caster Group", "Melee Group", "Raid", "Solo"
     std::string default_server_id;
     std::string default_world;
     std::filesystem::path source_path;
@@ -56,11 +63,23 @@ struct PreLoginProfileState {
     std::string settings_path;
     std::string session_id;
     std::string gpu_mode;
+    std::string follow_target;
+    std::string combat_profile;
+    std::string script_module;
+    std::string spell_loadout;
     int bg_tick_hz = 0;
     bool auto_login = false;
     bool auto_kick = false;
     bool headless_bg = false;
 };
+
+// Supported built-in MQ Commander-style group profile presets.
+std::vector<std::string> default_group_profile_preset_names();
+
+// Build a deterministic passwordless preset profile ("Main Tank", "Caster Group", "Melee Group", "Raid", "Solo").
+GroupProfile make_named_group_profile_preset(std::string_view preset_name,
+                                             std::string_view server_id = {},
+                                             std::string_view world = {});
 
 // Sanitize a profile name or id into a filesystem-safe slug (lowercase [a-z0-9_-]).
 std::string sanitize_group_profile_id(std::string_view raw);
@@ -121,5 +140,14 @@ std::vector<std::filesystem::path> export_group_profiles_from_mq(const std::vect
                                                                    std::string_view default_profile_name,
                                                                    const std::filesystem::path& profiles_dir,
                                                                    std::vector<std::string>* warnings = nullptr);
+
+// Import MacroQuest profile/roster INI definitions (preserving roles, follow targets, combat/script settings,
+// spell loadouts, startup order, and headless preferences) while strictly discarding any password/secret keys.
+bool import_mq_profiles_from_ini(const std::filesystem::path& mq_ini_path,
+                                 std::string_view server_id,
+                                 std::string_view fallback_world,
+                                 const std::filesystem::path& profiles_dir,
+                                 std::vector<std::filesystem::path>& out_written,
+                                 std::vector<std::string>* warnings = nullptr);
 
 } // namespace hailstone::core

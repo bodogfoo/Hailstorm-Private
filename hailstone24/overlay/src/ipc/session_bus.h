@@ -79,6 +79,12 @@ struct SessionSnapshot {
     std::uint32_t last_switch_ms = 0;
     std::uint64_t updated_ms = 0;
     bool online = false;
+    // Extended commander telemetry (wire-backward-compatible tail fields).
+    std::string script_name;
+    std::string script_state;     // "stopped", "starting", "running", "paused", "stopping", "reloading", "error"
+    std::string active_profile;
+    std::string follow_target;
+    std::string connection_state; // "in_game", "zoning", "char_select", "login", "disconnected"
 };
 
 struct ActorPacket {
@@ -108,9 +114,42 @@ struct CommandAckPacket {
     std::string message;
 };
 
+enum class CommandTrackStatus : std::uint8_t {
+    Pending = 0,
+    Acked = 1,
+    Partial = 2,
+    Failed = 3,
+    TimedOut = 4,
+};
+
+inline constexpr const char* command_track_status_name(CommandTrackStatus s) noexcept {
+    switch (s) {
+    case CommandTrackStatus::Pending: return "Pending";
+    case CommandTrackStatus::Acked: return "Acked";
+    case CommandTrackStatus::Partial: return "Partial";
+    case CommandTrackStatus::Failed: return "Failed";
+    case CommandTrackStatus::TimedOut: return "TimedOut";
+    }
+    return "Pending";
+}
+
+struct TrackedCommand {
+    std::uint64_t seq = 0;
+    CommandScope scope = CommandScope::TargetPeer;
+    std::string target;
+    std::string command;
+    std::uint64_t sent_ms = 0;
+    std::uint64_t updated_ms = 0;
+    std::uint32_t expected_acks = 1;
+    CommandTrackStatus status = CommandTrackStatus::Pending;
+    std::vector<CommandAckPacket> acks;
+    std::string summary;
+};
+
 struct StateControlPacket {
     std::string target_session;
     app::ExecutionState desired_state = app::ExecutionState::ForegroundFull;
+    bool exclusive_foreground = true;
 };
 
 // Default runtime socket path: $XDG_RUNTIME_DIR/hailstone24/bus.sock (fallback /tmp/hailstone24-<uid>/bus.sock).
@@ -140,8 +179,10 @@ public:
     bool connect(const std::string& socket_path, const std::string& session_id);
     void disconnect();
     bool connected() const noexcept;
+    std::string session_id() const;
 
     void set_on_command(std::function<CommandAckPacket(const CommandPacket&)> cb);
+    void set_on_command_ack(std::function<void(const CommandAckPacket&)> cb);
     void set_on_actor(std::function<void(const ActorPacket&)> cb);
     void set_on_state_control(std::function<void(const StateControlPacket&)> cb);
     void set_on_roster(std::function<void(std::vector<SessionSnapshot>)> cb);
@@ -153,7 +194,16 @@ public:
     std::uint64_t send_command(CommandPacket cmd);
     bool send_actor(const ActorPacket& pkt);
     bool request_switch_foreground(const std::string& target_session_or_char);
+    bool request_state_control(const std::string& target_session_or_char,
+                               app::ExecutionState desired_state,
+                               bool exclusive_foreground = false);
     bool request_roster();
+
+    // Outbound command ACK/failure/timeout tracking for Commander UI.
+    void set_command_timeout_ms(std::uint64_t timeout_ms);
+    std::vector<TrackedCommand> tracked_commands() const;
+    std::optional<TrackedCommand> find_tracked_command(std::uint64_t seq) const;
+    void clear_tracked_commands();
 
     // Cached peer roster for DanNet TLO / peer queries without blocking.
     std::vector<SessionSnapshot> cached_roster() const;
@@ -181,6 +231,9 @@ public:
 
     std::vector<SessionSnapshot> roster() const;
     bool switch_foreground(const std::string& target_session_or_char);
+    bool set_peer_state(const std::string& target_session_or_char,
+                        app::ExecutionState desired_state,
+                        bool exclusive_foreground = false);
     std::uint64_t dispatch_command(CommandPacket cmd);
     std::vector<CommandAckPacket> take_acks();
 

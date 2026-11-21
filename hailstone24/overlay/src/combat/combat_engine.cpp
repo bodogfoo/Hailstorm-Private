@@ -193,6 +193,53 @@ void CombatEngine::request_rememorize() {
 void CombatEngine::clear_logs() {
     transitions_.clear();
     actions_.clear();
+    failed_memorizations_.clear();
+    pending_memo_checks_.clear();
+}
+
+void CombatEngine::record_memo_failure(std::string msg) {
+    if (msg.empty()) return;
+    for (const auto& existing : failed_memorizations_) {
+        if (existing == msg) return;
+    }
+    if (failed_memorizations_.size() >= 16) failed_memorizations_.pop_front();
+    failed_memorizations_.push_back(std::move(msg));
+}
+
+void CombatEngine::check_pending_memorizations(const CombatSnapshot& snapshot, ICombatActions& actions) {
+    // Clear stale failure entries for gems that now match their desired spell.
+    if (!failed_memorizations_.empty()) {
+        for (const auto& slot : last_audit_.slots) {
+            if (slot.status == GemSyncKind::Match) {
+                const std::string prefix = "Gem " + std::to_string(slot.gem_index + 1) + ":";
+                std::erase_if(failed_memorizations_, [&](const std::string& msg) {
+                    return msg.rfind(prefix, 0) == 0;
+                });
+            }
+        }
+    }
+    if (pending_memo_checks_.empty()) return;
+    std::vector<PendingMemoCheck> still_pending;
+    for (const auto& chk : pending_memo_checks_) {
+        bool memorized = false;
+        for (const auto& g : snapshot.gems) {
+            if (g.gem_index == chk.gem_index && g.spell_id == chk.spell_id && g.spell_id != 0) {
+                memorized = true;
+                break;
+            }
+        }
+        if (memorized) continue;
+        if (!snapshot.memorizing && snapshot.now_ms >= chk.started_ms &&
+            (snapshot.now_ms - chk.started_ms) >= 1500ULL) {
+            std::string msg = "Gem " + std::to_string(chk.gem_index + 1) + ": " + chk.spell_name +
+                              " did not memorize (interrupted or rejected by server)";
+            record_memo_failure(msg);
+            append_action(snapshot.now_ms, false, "spells", "Memorization failed: " + msg, &actions);
+            continue;
+        }
+        still_pending.push_back(chk);
+    }
+    pending_memo_checks_ = std::move(still_pending);
 }
 
 void CombatEngine::on_zone_change(ICombatActions* actions, std::string_view new_zone) {
@@ -547,6 +594,8 @@ void CombatEngine::tick(const CombatSnapshot& snapshot, ICombatActions& actions)
     }
 
     last_audit_ = audit_loadout(snapshot, profile_);
+    check_pending_memorizations(snapshot, actions);
+    last_audit_.failed_memorizations.assign(failed_memorizations_.begin(), failed_memorizations_.end());
 
     std::string assist_name;
     const SpawnSnapshot* assist_spawn = resolve_assist_spawn(snapshot, assist_name);
@@ -754,19 +803,50 @@ void CombatEngine::tick(const CombatSnapshot& snapshot, ICombatActions& actions)
                     for (const auto& s : plan.slots_to_memorize) {
                         batch.emplace_back(s.gem_index, s.resolved_spell_id);
                     }
-                    std::string detail = "Rememorizing loadout (" + std::to_string(batch.size()) + " gems)";
+                    bool ok = true;
                     if (!profile_.dry_run) {
-                        actions.memorize_loadout(batch);
+                        ok = actions.memorize_loadout(batch);
                     }
-                    append_action(snapshot.now_ms, profile_.dry_run, "spells", detail, &actions);
+                    if (ok) {
+                        if (!profile_.dry_run) {
+                            for (const auto& s : plan.slots_to_memorize) {
+                                pending_memo_checks_.push_back(
+                                    {s.gem_index, s.resolved_spell_id, s.resolved_spell_name, snapshot.now_ms});
+                            }
+                        }
+                        std::string detail = "Rememorizing loadout (" + std::to_string(batch.size()) + " gems)";
+                        append_action(snapshot.now_ms, profile_.dry_run, "spells", detail, &actions);
+                    } else {
+                        std::string detail = "Batch loadout memorization failed (" +
+                                             std::to_string(batch.size()) + " gems rejected)";
+                        record_memo_failure(detail);
+                        last_audit_.failed_memorizations.assign(failed_memorizations_.begin(),
+                                                                failed_memorizations_.end());
+                        append_action(snapshot.now_ms, profile_.dry_run, "spells", detail, &actions);
+                    }
                 } else {
                     const auto& s = plan.slots_to_memorize.front();
-                    std::string detail = "Rememorizing Gem " + std::to_string(s.gem_index + 1) +
-                                         ": " + s.resolved_spell_name;
+                    bool ok = true;
                     if (!profile_.dry_run) {
-                        actions.memorize_gem(s.book_slot, s.gem_index);
+                        ok = actions.memorize_gem(s.book_slot, s.gem_index);
                     }
-                    append_action(snapshot.now_ms, profile_.dry_run, "spells", detail, &actions);
+                    if (ok) {
+                        if (!profile_.dry_run) {
+                            pending_memo_checks_.push_back(
+                                {s.gem_index, s.resolved_spell_id, s.resolved_spell_name, snapshot.now_ms});
+                        }
+                        std::string detail = "Rememorizing Gem " + std::to_string(s.gem_index + 1) +
+                                             ": " + s.resolved_spell_name;
+                        append_action(snapshot.now_ms, profile_.dry_run, "spells", detail, &actions);
+                    } else {
+                        std::string detail = "Gem " + std::to_string(s.gem_index + 1) + ": " +
+                                             s.resolved_spell_name + " memorization rejected";
+                        record_memo_failure(detail);
+                        last_audit_.failed_memorizations.assign(failed_memorizations_.begin(),
+                                                                failed_memorizations_.end());
+                        append_action(snapshot.now_ms, profile_.dry_run, "spells",
+                                      "Memorization failed: " + detail, &actions);
+                    }
                 }
             } else if (was_manual_req && !plan.blocked_reason.empty()) {
                 append_action(snapshot.now_ms, profile_.dry_run, "spells",
@@ -979,6 +1059,7 @@ CombatStatusSnapshot CombatEngine::status_snapshot(const CombatSnapshot* latest_
     out.last_cast = last_cast_;
     out.last_movement_decision = movement_.last_decision();
     out.loadout_audit = last_audit_;
+    out.loadout_audit.failed_memorizations.assign(failed_memorizations_.begin(), failed_memorizations_.end());
     out.transitions.assign(transitions_.begin(), transitions_.end());
     out.actions.assign(actions_.begin(), actions_.end());
     return out;

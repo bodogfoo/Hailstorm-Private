@@ -38,7 +38,17 @@ local GEM_COLORS = {
   Missing = "gold",
   ManualChange = "bad",
   NotInBook = "danger",
+  LevelRestricted = "danger",
+  MissingSpellData = "danger",
   SlotEmpty = "faint",
+}
+
+local ACK_COLORS = {
+  Pending = "gold",
+  Acked = "good",
+  Partial = "gold",
+  Failed = "danger",
+  TimedOut = "danger",
 }
 
 local assistInput = ""
@@ -46,6 +56,9 @@ local followInput = ""
 local syncedChar = ""
 local lastMsg = ""
 local lastOk = true
+local cmdScope = "all"
+local selectedProfile = "Main Tank"
+local scriptArgInput = "rgmercs"
 
 local function colored(c, text)
   local col = c or C.text
@@ -58,6 +71,18 @@ end
 
 local function runCmd(action, arg)
   local ok, msg = API.combat.Do(action, arg or "")
+  lastOk = ok == true
+  if msg and msg ~= "" then lastMsg = msg end
+  return ok
+end
+
+local function runCommander(action, target, arg)
+  if not API.commander or not API.commander.Do then
+    lastOk = false
+    lastMsg = "Commander API unavailable"
+    return false
+  end
+  local ok, msg = API.commander.Do(action, target or "", arg or "")
   lastOk = ok == true
   if msg and msg ~= "" then lastMsg = msg end
   return ok
@@ -178,7 +203,7 @@ end
 local function drawLoadoutTab(st, s)
   ui.Spacing()
   if st.autoLoadout then
-    colored(C.bad or C.danger, "AUTO LOADOUT ENABLED: Missing or manually changed gems WILL be overwritten.")
+    colored(C.bad or C.danger, "AUTO LOADOUT ENABLED: Missing or manually changed gems WILL be overwritten (out of combat).")
   else
     colored(C.good, "Manual Gem Protection ACTIVE: Hailstone will NOT overwrite manually changed gems.")
   end
@@ -186,25 +211,33 @@ local function drawLoadoutTab(st, s)
   local missingCount = #(st.missingSpells or {})
   local manualCount = #(st.manuallyChangedGems or {})
   local unknownCount = #(st.unknownSpells or {})
+  local levelCount = #(st.levelRestrictedSpells or {})
+  local dataCount = #(st.missingSpellData or {})
+  local failCount = #(st.failedMemorizations or {})
   colored(C.muted, string.format(
-    "Missing empty slots: %d  |  Manually changed (protected): %d  |  Not in spellbook: %d",
-    missingCount, manualCount, unknownCount))
+    "Missing: %d  |  Manual (protected): %d  |  Unavailable: %d  |  Level-restricted: %d  |  Missing data: %d",
+    missingCount, manualCount, unknownCount, levelCount, dataCount))
   ui.SameLine()
   if ui.SmallButton("Rememorize Missing Now") then
     runCmd("rememorize_now")
   end
   if ui.IsItemHovered() then
-    ui.SetTooltip("Memorizes missing desired spells into empty slots (and skips manually changed gems unless Auto Loadout is enabled)")
+    ui.SetTooltip("Memorizes missing desired spells into empty slots while idle/out of combat (skips manually changed gems unless Auto Loadout is enabled)")
+  end
+
+  if failCount > 0 then
+    colored(C.danger, "Failed memorizations: " .. table.concat(st.failedMemorizations, "  |  "))
   end
 
   ui.Spacing()
   local flags = ui.TableFlags.RowBg | ui.TableFlags.ScrollY | ui.TableFlags.SizingStretchProp | ui.TableFlags.BordersInnerV
-  if ui.BeginTable("##combatLoadout", 5, flags, 0, 0) then
-    ui.TableSetupColumn("Gem", ui.TableColumnFlags.WidthFixed, 40 * s)
-    ui.TableSetupColumn("Desired Spec", ui.TableColumnFlags.WidthStretch, 1.3)
-    ui.TableSetupColumn("Resolved", ui.TableColumnFlags.WidthStretch, 1.1)
-    ui.TableSetupColumn("Current Gem", ui.TableColumnFlags.WidthStretch, 1.1)
-    ui.TableSetupColumn("Status", ui.TableColumnFlags.WidthFixed, 105 * s)
+  if ui.BeginTable("##combatLoadout", 6, flags, 0, 0) then
+    ui.TableSetupColumn("Gem", ui.TableColumnFlags.WidthFixed, 36 * s)
+    ui.TableSetupColumn("Desired Spec", ui.TableColumnFlags.WidthStretch, 1.1)
+    ui.TableSetupColumn("Resolved", ui.TableColumnFlags.WidthStretch, 1.0)
+    ui.TableSetupColumn("Current Gem", ui.TableColumnFlags.WidthStretch, 1.0)
+    ui.TableSetupColumn("Status", ui.TableColumnFlags.WidthFixed, 108 * s)
+    ui.TableSetupColumn("Diagnostic", ui.TableColumnFlags.WidthStretch, 1.2)
     ui.TableHeadersRow()
 
     for _, slot in ipairs(st.loadout or {}) do
@@ -220,6 +253,210 @@ local function drawLoadoutTab(st, s)
       ui.TableNextColumn()
       local status = slot.status or ""
       colored(colorByName(GEM_COLORS[status] or "muted"), status)
+      ui.TableNextColumn()
+      local diag = slot.diagnostic or ""
+      if diag == "" and (slot.requiredLevel or 0) > 0 then
+        diag = string.format("Requires level %d", slot.requiredLevel)
+      end
+      colored(diag ~= "" and C.danger or C.faint, diag)
+    end
+    ui.EndTable()
+  end
+end
+
+local function drawClientsTab(s)
+  if not API.commander or not API.commander.Status then
+    colored(C.muted, "MQ Commander bridge unavailable.")
+    return
+  end
+  local cst = API.commander.Status()
+  if not cst or not cst.available then
+    colored(C.muted, "Session bus commander offline.")
+    return
+  end
+
+  local peers = cst.peers or {}
+
+  -- Clickable Player/Client Switcher Tabs (never destroys or reconnects a client)
+  ui.Spacing()
+  colored(C.heading or C.accent, "Active Client Tabs")
+  ui.SameLine()
+  colored(cst.busConnected and C.good or C.gold, cst.busConnected and " [Bus Connected]" or " [Local Only]")
+  ui.SameLine()
+  local ah, ahCh = ui.Checkbox("Auto-Headless Others##cmdAutoHeadless", cst.autoHeadlessOthers == true)
+  if ahCh then runCommander("set_auto_headless", "", ah and "1" or "0") end
+  if ui.IsItemHovered() then
+    ui.SetTooltip("When clicking a player tab, demote previously active client to Headless/Background without reconnecting")
+  end
+
+  for idx, p in ipairs(peers) do
+    if idx > 1 then ui.SameLine() end
+    ui.PushID("ptab_" .. tostring(idx))
+    local label = (p.characterName ~= "" and p.characterName or p.sessionId)
+      .. (p.classShort ~= "" and (" (" .. p.classShort .. ")") or "")
+      .. (p.isLive and " [LIVE]" or " [BG]")
+    if p.isLive then
+      ui.PushStyleColor(ui.Col.Button, C.good[1], C.good[2], C.good[3], 0.35)
+      ui.PushStyleColor(ui.Col.ButtonHovered, C.good[1], C.good[2], C.good[3], 0.55)
+    end
+    if ui.SmallButton(label) then
+      runCommander("switch_tab", p.sessionId, "")
+    end
+    if p.isLive then ui.PopStyleColor(2) end
+    if ui.IsItemHovered() then
+      ui.SetTooltip(string.format("Click to make %s the live visible client (no reconnect)\nZone: %s  |  Combat: %s  |  Script: %s",
+        p.characterName ~= "" and p.characterName or p.sessionId,
+        p.zoneShort ~= "" and p.zoneShort or "offline",
+        p.combatState or "Idle",
+        p.scriptState or "stopped"))
+    end
+    ui.PopID()
+  end
+
+  -- Connected Clients Roster Table
+  ui.Spacing()
+  local tflags = ui.TableFlags.RowBg | ui.TableFlags.ScrollY | ui.TableFlags.SizingStretchProp | ui.TableFlags.BordersInnerV
+  if ui.BeginTable("##commanderPeers", 9, tflags, 0, 145 * s) then
+    ui.TableSetupColumn("Character", ui.TableColumnFlags.WidthStretch, 1.0)
+    ui.TableSetupColumn("Class", ui.TableColumnFlags.WidthFixed, 44 * s)
+    ui.TableSetupColumn("Lvl", ui.TableColumnFlags.WidthFixed, 34 * s)
+    ui.TableSetupColumn("Zone", ui.TableColumnFlags.WidthStretch, 0.8)
+    ui.TableSetupColumn("Conn", ui.TableColumnFlags.WidthFixed, 62 * s)
+    ui.TableSetupColumn("Combat", ui.TableColumnFlags.WidthFixed, 70 * s)
+    ui.TableSetupColumn("Script", ui.TableColumnFlags.WidthFixed, 76 * s)
+    ui.TableSetupColumn("Mode", ui.TableColumnFlags.WidthFixed, 68 * s)
+    ui.TableSetupColumn("Actions", ui.TableColumnFlags.WidthFixed, 236 * s)
+    ui.TableHeadersRow()
+
+    for idx, p in ipairs(peers) do
+      ui.PushID("peer_" .. tostring(idx))
+      ui.TableNextRow()
+      ui.TableNextColumn()
+      colored(p.isSelf and C.accent or C.text, p.characterName ~= "" and p.characterName or p.sessionId)
+      ui.TableNextColumn()
+      colored(C.muted, p.classShort or "")
+      ui.TableNextColumn()
+      colored(C.muted, tostring(p.level or 0))
+      ui.TableNextColumn()
+      colored(C.text, p.zoneShort ~= "" and p.zoneShort or "-")
+      ui.TableNextColumn()
+      colored(p.online and C.good or C.gold, p.connectionState ~= "" and p.connectionState or (p.online and "in_game" or "offline"))
+      ui.TableNextColumn()
+      colored(colorByName(STATE_COLORS[p.combatState] or "muted"), p.combatState or "Idle")
+      ui.TableNextColumn()
+      local sc = (p.scriptState == "error" and C.danger) or ((p.scriptState == "RUNNING" or p.scriptState == "running") and C.good or C.muted)
+      colored(sc, (p.scriptName ~= "" and (p.scriptName .. ":") or "") .. (p.scriptState ~= "" and p.scriptState or "stopped"))
+      ui.TableNextColumn()
+      colored(p.isLive and C.good or C.faint, p.isLive and "Live" or "Headless")
+      ui.TableNextColumn()
+      if ui.SmallButton("Live") then runCommander("make_live", p.sessionId, "") end
+      ui.SameLine()
+      if ui.SmallButton("BG") then runCommander("make_headless", p.sessionId, "") end
+      ui.SameLine()
+      if ui.SmallButton("Follow") then runCommander("follow", p.sessionId, cst.characterName or "") end
+      ui.SameLine()
+      if ui.SmallButton("Stop") then runCommander("stop", p.sessionId, "") end
+      ui.SameLine()
+      if ui.SmallButton("Restart") then runCommander("restart_script", p.sessionId, scriptArgInput) end
+      ui.PopID()
+    end
+    ui.EndTable()
+  end
+
+  -- MQ Commander Group Controls
+  ui.Spacing()
+  ui.SeparatorText("MQ Commander Group Controls")
+
+  ui.Text("Target Scope:")
+  ui.SameLine()
+  ui.SetNextItemWidth(120 * s)
+  if ui.BeginCombo("##cmdScope", cmdScope) then
+    if ui.Selectable("all", cmdScope == "all") then cmdScope = "all" end
+    if ui.Selectable("others", cmdScope == "others") then cmdScope = "others" end
+    for _, p in ipairs(peers) do
+      local id = p.sessionId or ""
+      local disp = (p.characterName ~= "" and p.characterName or id) .. " (" .. id .. ")"
+      if ui.Selectable(disp, cmdScope == id) then cmdScope = id end
+    end
+    ui.EndCombo()
+  end
+
+  ui.SameLine()
+  ui.Text("Profile:")
+  ui.SameLine()
+  ui.SetNextItemWidth(130 * s)
+  local profs = cst.availableProfiles or { "Main Tank", "Caster Group", "Melee Group", "Raid", "Solo" }
+  if ui.BeginCombo("##cmdProfile", selectedProfile) then
+    for _, pr in ipairs(profs) do
+      if ui.Selectable(pr, pr == selectedProfile) then selectedProfile = pr end
+    end
+    ui.EndCombo()
+  end
+  ui.SameLine()
+  if ui.SmallButton("Apply / Reload Profile") then
+    runCommander("apply_profile", cmdScope, selectedProfile)
+  end
+  ui.SameLine()
+  ui.SetNextItemWidth(85 * s)
+  scriptArgInput = ui.InputTextWithHint("##cmdScript", "script", scriptArgInput, 32)
+
+  -- Group action buttons row 1
+  if ui.SmallButton("Follow Me") then runCommander("follow", cmdScope, cst.characterName or "") end
+  ui.SameLine()
+  if ui.SmallButton("Stop Follow") then runCommander("stop_follow", cmdScope, "") end
+  ui.SameLine()
+  if ui.SmallButton("Assist Me") then runCommander("assist", cmdScope, cst.characterName or "") end
+  ui.SameLine()
+  if ui.SmallButton("Attack On") then runCommander("attack_on", cmdScope, "") end
+  ui.SameLine()
+  if ui.SmallButton("Attack Off") then runCommander("attack_off", cmdScope, "") end
+  ui.SameLine()
+  if ui.SmallButton("Pause Script") then runCommander("pause_script", cmdScope, scriptArgInput) end
+  ui.SameLine()
+  if ui.SmallButton("Resume Script") then runCommander("resume_script", cmdScope, scriptArgInput) end
+
+  -- Group action buttons row 2
+  if ui.SmallButton("Reload Spells") then runCommander("reload_spells", cmdScope, "") end
+  ui.SameLine()
+  if ui.SmallButton("Camp") then runCommander("camp", cmdScope, "") end
+  ui.SameLine()
+  if ui.SmallButton("Return to Bind") then runCommander("return_to_bind", cmdScope, "") end
+  ui.SameLine()
+  if ui.SmallButton("TP To Me (Safe)") then runCommander("tp_to_me", cmdScope, cst.characterName or "") end
+  if ui.IsItemHovered() then ui.SetTooltip("Uses only existing server-authorized safe teleport commands (never forges position packets)") end
+  ui.SameLine()
+  if ui.SmallButton("TP Here (Safe)") then runCommander("tp_here", cmdScope, "") end
+  if ui.IsItemHovered() then ui.SetTooltip("Uses only existing server-authorized safe teleport commands (never forges position packets)") end
+  ui.SameLine()
+  if ui.SmallButton("Open RGMercs") then API.windows.Show("RGMercsWnd", true) end
+
+  -- Command Acknowledgements / Failure / Timeout Log
+  ui.Spacing()
+  colored(C.heading or C.accent, "Command Acknowledgements & Diagnostics")
+  ui.SameLine()
+  if ui.SmallButton("Clear ACKs") then runCommander("clear_acks", "", "") end
+
+  local acks = cst.trackedCommands or {}
+  if ui.BeginTable("##commanderAcks", 5, tflags, 0, 0) then
+    ui.TableSetupColumn("Seq", ui.TableColumnFlags.WidthFixed, 42 * s)
+    ui.TableSetupColumn("Target", ui.TableColumnFlags.WidthFixed, 86 * s)
+    ui.TableSetupColumn("Command", ui.TableColumnFlags.WidthStretch, 1.0)
+    ui.TableSetupColumn("Status", ui.TableColumnFlags.WidthFixed, 74 * s)
+    ui.TableSetupColumn("Detail / Failure Reason", ui.TableColumnFlags.WidthStretch, 1.4)
+    ui.TableHeadersRow()
+    for i = #acks, 1, -1 do
+      local a = acks[i]
+      ui.TableNextRow()
+      ui.TableNextColumn()
+      colored(C.faint, tostring(a.seq or 0))
+      ui.TableNextColumn()
+      colored(C.muted, a.target or "")
+      ui.TableNextColumn()
+      colored(C.text, a.command or "")
+      ui.TableNextColumn()
+      colored(colorByName(ACK_COLORS[a.status] or "muted"), a.status or "")
+      ui.TableNextColumn()
+      colored((a.status == "Failed" or a.status == "TimedOut") and C.danger or C.text, a.detail or "")
     end
     ui.EndTable()
   end
@@ -402,6 +639,10 @@ local function drawWindow(x, y, w, h, s)
   ui.Separator()
 
   if ui.BeginTabBar("##combatTabs") then
+    if ui.BeginTabItem("Players / Clients") then
+      drawClientsTab(s)
+      ui.EndTabItem()
+    end
     if ui.BeginTabItem("Overview & Rules") then
       drawOverviewTab(st, s)
       ui.EndTabItem()

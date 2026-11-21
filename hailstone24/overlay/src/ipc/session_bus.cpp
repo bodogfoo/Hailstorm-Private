@@ -1,6 +1,7 @@
 #include "ipc/session_bus.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
@@ -219,6 +220,11 @@ std::vector<std::uint8_t> encode_snapshot(const SessionSnapshot& s) {
     w.u32(s.last_switch_ms);
     w.u64(s.updated_ms);
     w.u8(s.online ? 1 : 0);
+    w.str(s.script_name);
+    w.str(s.script_state);
+    w.str(s.active_profile);
+    w.str(s.follow_target);
+    w.str(s.connection_state);
     return std::move(w.buf);
 }
 
@@ -247,6 +253,13 @@ bool decode_snapshot(const std::uint8_t* data, std::size_t size, SessionSnapshot
     out.last_switch_ms = r.u32();
     out.updated_ms = r.u64();
     out.online = r.u8() != 0;
+    if (r.ok && r.rem > 0) {
+        out.script_name = r.str();
+        if (r.ok && r.rem > 0) out.script_state = r.str();
+        if (r.ok && r.rem > 0) out.active_profile = r.str();
+        if (r.ok && r.rem > 0) out.follow_target = r.str();
+        if (r.ok && r.rem > 0) out.connection_state = r.str();
+    }
     return r.ok;
 }
 
@@ -320,6 +333,7 @@ std::vector<std::uint8_t> encode_state_control(const StateControlPacket& ctrl) {
     Writer w;
     w.str(ctrl.target_session);
     w.u8(static_cast<std::uint8_t>(ctrl.desired_state));
+    w.u8(ctrl.exclusive_foreground ? 1 : 0);
     return std::move(w.buf);
 }
 
@@ -327,8 +341,59 @@ bool decode_state_control(const std::uint8_t* data, std::size_t size, StateContr
     Reader r{data, size};
     out.target_session = r.str();
     out.desired_state = static_cast<app::ExecutionState>(r.u8());
+    out.exclusive_foreground = (r.ok && r.rem > 0) ? (r.u8() != 0) : true;
     return r.ok;
 }
+
+namespace {
+std::atomic<std::uint64_t> g_next_bus_cmd_seq{1};
+constexpr std::size_t kMaxTrackedCommands = 64;
+
+std::uint32_t estimate_expected_acks(const std::vector<SessionSnapshot>& roster,
+                                     const std::string& self_session,
+                                     const CommandPacket& cmd) {
+    if (cmd.scope == CommandScope::Self || cmd.scope == CommandScope::TargetPeer) return 1;
+    std::string self_leader;
+    for (const auto& s : roster) {
+        if (ieq(s.session_id, self_session)) {
+            self_leader = s.group_leader;
+            break;
+        }
+    }
+    std::uint32_t matched = 0;
+    for (const auto& s : roster) {
+        if (!s.online) continue;
+        const bool is_self = ieq(s.session_id, self_session);
+        bool match = false;
+        switch (cmd.scope) {
+        case CommandScope::Self: match = is_self; break;
+        case CommandScope::AllExceptSelf: match = !is_self; break;
+        case CommandScope::AllIncludingSelf: match = true; break;
+        case CommandScope::ZoneExceptSelf:
+            match = !is_self && !cmd.sender_zone.empty() && ieq(s.zone_short, cmd.sender_zone);
+            break;
+        case CommandScope::ZoneIncludingSelf:
+            match = !cmd.sender_zone.empty() && ieq(s.zone_short, cmd.sender_zone);
+            break;
+        case CommandScope::GroupExceptSelf:
+            match = !is_self && !self_leader.empty() && ieq(s.group_leader, self_leader);
+            break;
+        case CommandScope::GroupIncludingSelf:
+            match = !self_leader.empty() && ieq(s.group_leader, self_leader);
+            break;
+        case CommandScope::TargetPeer:
+            match = ieq(s.character_name, cmd.target) || ieq(s.session_id, cmd.target);
+            break;
+        case CommandScope::Channel:
+            match = ieq(s.class_short, cmd.target) || ieq(s.zone_short, cmd.target) ||
+                    ieq(s.session_id, cmd.target);
+            break;
+        }
+        if (match) ++matched;
+    }
+    return matched > 0 ? matched : 1;
+}
+} // namespace
 
 // -----------------------------------------------------------------------------
 // SessionBusClient
@@ -339,12 +404,14 @@ struct SessionBusClient::Impl {
     std::string session_id;
     std::vector<std::uint8_t> rx;
     std::deque<std::vector<std::uint8_t>> tx;
-    std::uint64_t next_seq = 1;
     std::uint64_t last_reconnect_ms = 0;
+    std::uint64_t command_timeout_ms = 3000;
 
     mutable std::mutex mutex;
     std::vector<SessionSnapshot> roster;
+    std::deque<TrackedCommand> tracked_cmds;
     std::function<CommandAckPacket(const CommandPacket&)> on_command;
+    std::function<void(const CommandAckPacket&)> on_command_ack;
     std::function<void(const ActorPacket&)> on_actor;
     std::function<void(const StateControlPacket&)> on_state_control;
     std::function<void(std::vector<SessionSnapshot>)> on_roster;
@@ -353,6 +420,81 @@ struct SessionBusClient::Impl {
         if (fd < 0) return;
         if (tx.size() >= kMaxPendingInbound) tx.pop_front();
         tx.push_back(encode_frame(t, body));
+    }
+
+    void record_outbound_command_locked(const CommandPacket& cmd) {
+        TrackedCommand tc;
+        tc.seq = cmd.seq;
+        tc.scope = cmd.scope;
+        tc.target = cmd.target;
+        tc.command = cmd.command;
+        tc.sent_ms = now_epoch_ms();
+        tc.updated_ms = tc.sent_ms;
+        tc.expected_acks = estimate_expected_acks(roster, session_id, cmd);
+        tc.status = CommandTrackStatus::Pending;
+        tc.summary = "Pending";
+        if (tracked_cmds.size() >= kMaxTrackedCommands) tracked_cmds.pop_front();
+        tracked_cmds.push_back(std::move(tc));
+    }
+
+    void record_ack_locked(const CommandAckPacket& ack) {
+        for (auto& tc : tracked_cmds) {
+            if (tc.seq != ack.seq) continue;
+            tc.acks.push_back(ack);
+            tc.updated_ms = now_epoch_ms();
+            std::size_t ok_count = 0;
+            std::size_t fail_count = 0;
+            std::string first_fail;
+            std::string first_ok;
+            for (const auto& a : tc.acks) {
+                if (a.ok) {
+                    ++ok_count;
+                    if (first_ok.empty() && !a.message.empty()) first_ok = a.message;
+                } else {
+                    ++fail_count;
+                    if (first_fail.empty()) {
+                        first_fail = a.session_id.empty() ? a.message : (a.session_id + ": " + a.message);
+                    }
+                }
+            }
+            if (fail_count > 0 && ok_count == 0) {
+                tc.status = CommandTrackStatus::Failed;
+                tc.summary = first_fail.empty() ? "Command rejected" : first_fail;
+            } else if (fail_count > 0 && ok_count > 0) {
+                tc.status = CommandTrackStatus::Partial;
+                tc.summary = std::to_string(ok_count) + " ok, " + std::to_string(fail_count) + " failed (" +
+                             (first_fail.empty() ? "rejected" : first_fail) + ")";
+            } else if (tc.acks.size() >= tc.expected_acks) {
+                tc.status = CommandTrackStatus::Acked;
+                tc.summary = first_ok.empty() ? "OK" : first_ok;
+            } else {
+                tc.status = CommandTrackStatus::Partial;
+                tc.summary = "Acked " + std::to_string(ok_count) + "/" + std::to_string(tc.expected_acks);
+            }
+            return;
+        }
+    }
+
+    void sweep_command_timeouts_locked() {
+        const auto now = now_epoch_ms();
+        for (auto& tc : tracked_cmds) {
+            if (tc.status != CommandTrackStatus::Pending && tc.status != CommandTrackStatus::Partial) continue;
+            bool has_failure = false;
+            for (const auto& a : tc.acks) {
+                if (!a.ok) { has_failure = true; break; }
+            }
+            if (has_failure) continue;
+            if (now >= tc.sent_ms && (now - tc.sent_ms) >= command_timeout_ms) {
+                tc.status = CommandTrackStatus::TimedOut;
+                tc.updated_ms = now;
+                if (tc.acks.empty()) {
+                    tc.summary = "Timed out after " + std::to_string(command_timeout_ms) + "ms";
+                } else {
+                    tc.summary = "Timed out (" + std::to_string(tc.acks.size()) + "/" +
+                                 std::to_string(tc.expected_acks) + " acked)";
+                }
+            }
+        }
     }
 
     bool try_connect() {
@@ -411,10 +553,21 @@ void SessionBusClient::disconnect() {
 
 bool SessionBusClient::connected() const noexcept { return impl_ && impl_->fd >= 0; }
 
+std::string SessionBusClient::session_id() const {
+    if (!impl_) return {};
+    return impl_->session_id;
+}
+
 void SessionBusClient::set_on_command(std::function<CommandAckPacket(const CommandPacket&)> cb) {
     if (!impl_) impl_ = std::make_unique<Impl>();
     std::lock_guard lock(impl_->mutex);
     impl_->on_command = std::move(cb);
+}
+
+void SessionBusClient::set_on_command_ack(std::function<void(const CommandAckPacket&)> cb) {
+    if (!impl_) impl_ = std::make_unique<Impl>();
+    std::lock_guard lock(impl_->mutex);
+    impl_->on_command_ack = std::move(cb);
 }
 
 void SessionBusClient::set_on_actor(std::function<void(const ActorPacket&)> cb) {
@@ -439,6 +592,10 @@ void SessionBusClient::poll() {
 #if !defined(_WIN32)
     if (!impl_) return;
     if (impl_->fd < 0) {
+        {
+            std::lock_guard lock(impl_->mutex);
+            impl_->sweep_command_timeouts_locked();
+        }
         const auto now = now_epoch_ms();
         if (now - impl_->last_reconnect_ms >= 2000 && !impl_->socket_path.empty()) {
             impl_->last_reconnect_ms = now;
@@ -463,7 +620,19 @@ void SessionBusClient::poll() {
             }
             CommandAckPacket ack{cmd.seq, impl_->session_id, true, {}};
             if (cb) ack = cb(cmd);
+            if (ack.seq == 0) ack.seq = cmd.seq;
+            if (ack.session_id.empty()) ack.session_id = impl_->session_id;
             impl_->enqueue(MsgType::CommandAck, encode_command_ack(ack));
+        } else if (type == MsgType::CommandAck) {
+            CommandAckPacket ack;
+            if (!decode_command_ack(body, len, ack)) return;
+            std::function<void(const CommandAckPacket&)> cb;
+            {
+                std::lock_guard lock(impl_->mutex);
+                impl_->record_ack_locked(ack);
+                cb = impl_->on_command_ack;
+            }
+            if (cb) cb(ack);
         } else if (type == MsgType::ActorSend) {
             ActorPacket pkt;
             if (!decode_actor(body, len, pkt)) return;
@@ -506,6 +675,10 @@ void SessionBusClient::poll() {
             if (cb) cb(std::move(list));
         }
     });
+    {
+        std::lock_guard lock(impl_->mutex);
+        impl_->sweep_command_timeouts_locked();
+    }
     if (!ok) {
         disconnect();
         return;
@@ -522,7 +695,11 @@ bool SessionBusClient::publish_telemetry(const SessionSnapshot& snapshot) {
 
 std::uint64_t SessionBusClient::send_command(CommandPacket cmd) {
     if (!impl_ || impl_->fd < 0) return 0;
-    if (cmd.seq == 0) cmd.seq = impl_->next_seq++;
+    if (cmd.seq == 0) cmd.seq = g_next_bus_cmd_seq.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard lock(impl_->mutex);
+        impl_->record_outbound_command_locked(cmd);
+    }
     impl_->enqueue(MsgType::CommandDispatch, encode_command(cmd));
     return cmd.seq;
 }
@@ -534,9 +711,15 @@ bool SessionBusClient::send_actor(const ActorPacket& pkt) {
 }
 
 bool SessionBusClient::request_switch_foreground(const std::string& target_session_or_char) {
+    return request_state_control(target_session_or_char, app::ExecutionState::ForegroundFull, true);
+}
+
+bool SessionBusClient::request_state_control(const std::string& target_session_or_char,
+                                             app::ExecutionState desired_state,
+                                             bool exclusive_foreground) {
     if (!impl_ || impl_->fd < 0) return false;
     impl_->enqueue(MsgType::StateControl,
-                   encode_state_control({target_session_or_char, app::ExecutionState::ForegroundFull}));
+                   encode_state_control({target_session_or_char, desired_state, exclusive_foreground}));
     return true;
 }
 
@@ -544,6 +727,33 @@ bool SessionBusClient::request_roster() {
     if (!impl_ || impl_->fd < 0) return false;
     impl_->enqueue(MsgType::RosterQuery, {});
     return true;
+}
+
+void SessionBusClient::set_command_timeout_ms(std::uint64_t timeout_ms) {
+    if (!impl_) impl_ = std::make_unique<Impl>();
+    std::lock_guard lock(impl_->mutex);
+    impl_->command_timeout_ms = std::max<std::uint64_t>(timeout_ms, 50);
+}
+
+std::vector<TrackedCommand> SessionBusClient::tracked_commands() const {
+    if (!impl_) return {};
+    std::lock_guard lock(impl_->mutex);
+    return {impl_->tracked_cmds.begin(), impl_->tracked_cmds.end()};
+}
+
+std::optional<TrackedCommand> SessionBusClient::find_tracked_command(std::uint64_t seq) const {
+    if (!impl_) return std::nullopt;
+    std::lock_guard lock(impl_->mutex);
+    for (const auto& tc : impl_->tracked_cmds) {
+        if (tc.seq == seq) return tc;
+    }
+    return std::nullopt;
+}
+
+void SessionBusClient::clear_tracked_commands() {
+    if (!impl_) return;
+    std::lock_guard lock(impl_->mutex);
+    impl_->tracked_cmds.clear();
 }
 
 std::vector<SessionSnapshot> SessionBusClient::cached_roster() const {
@@ -574,11 +784,17 @@ struct SessionBusServer::Impl {
         std::deque<std::vector<std::uint8_t>> tx;
     };
 
+    struct PendingCommandOrigin {
+        std::uint64_t seq = 0;
+        int origin_fd = -1;
+    };
+
     int listen_fd = -1;
     std::string socket_path;
     mutable std::mutex mutex;
     std::vector<Peer> peers;
     std::vector<CommandAckPacket> acks;
+    std::deque<PendingCommandOrigin> pending_origins;
     std::string active_foreground_session;
     std::uint64_t next_seq = 1;
 
@@ -612,8 +828,38 @@ struct SessionBusServer::Impl {
         for (auto& p : peers) enqueue(p, MsgType::RosterReply, body);
     }
 
-    void route_command_locked(const CommandPacket& cmd, const Peer* sender) {
+    void remember_origin_locked(std::uint64_t seq, int origin_fd) {
+        if (seq == 0 || origin_fd < 0) return;
+        for (auto& entry : pending_origins) {
+            if (entry.seq == seq) {
+                entry.origin_fd = origin_fd;
+                return;
+            }
+        }
+        if (pending_origins.size() >= 256) pending_origins.pop_front();
+        pending_origins.push_back({seq, origin_fd});
+    }
+
+    void relay_ack_to_origin_locked(const CommandAckPacket& ack) {
+        int target_fd = -1;
+        for (const auto& entry : pending_origins) {
+            if (entry.seq == ack.seq) {
+                target_fd = entry.origin_fd;
+                break;
+            }
+        }
+        if (target_fd < 0) return;
+        for (auto& p : peers) {
+            if (p.fd == target_fd) {
+                enqueue(p, MsgType::CommandAck, encode_command_ack(ack));
+                break;
+            }
+        }
+    }
+
+    void route_command_locked(const CommandPacket& cmd, Peer* sender) {
         const auto body = encode_command(cmd);
+        std::size_t matched = 0;
         for (auto& p : peers) {
             if (is_controller_id(p.session_id)) continue;
             const bool is_self = sender && p.fd == sender->fd;
@@ -644,7 +890,23 @@ struct SessionBusServer::Impl {
                         ieq(p.session_id, cmd.target);
                 break;
             }
-            if (match) enqueue(p, MsgType::CommandDispatch, body);
+            if (match) {
+                enqueue(p, MsgType::CommandDispatch, body);
+                ++matched;
+            }
+        }
+        if (sender) {
+            remember_origin_locked(cmd.seq, sender->fd);
+            if (matched == 0) {
+                CommandAckPacket miss;
+                miss.seq = cmd.seq;
+                miss.session_id = "bus";
+                miss.ok = false;
+                miss.message = cmd.target.empty()
+                                   ? "No matching online client"
+                                   : ("Target '" + cmd.target + "' is not online");
+                enqueue(*sender, MsgType::CommandAck, encode_command_ack(miss));
+            }
         }
     }
 
@@ -660,24 +922,40 @@ struct SessionBusServer::Impl {
         }
     }
 
-    bool apply_foreground_switch_locked(const std::string& target) {
+    bool apply_state_control_locked(const StateControlPacket& ctrl) {
         Peer* chosen = nullptr;
         for (auto& p : peers) {
             if (is_controller_id(p.session_id)) continue;
-            if (ieq(p.session_id, target) || ieq(p.snapshot.character_name, target)) {
+            if (ieq(p.session_id, ctrl.target_session) || ieq(p.snapshot.character_name, ctrl.target_session)) {
                 chosen = &p;
                 break;
             }
         }
         if (!chosen) return false;
-        active_foreground_session = chosen->session_id;
-        for (auto& p : peers) {
-            if (is_controller_id(p.session_id)) continue;
-            const auto desired = (&p == chosen) ? app::ExecutionState::ForegroundFull
-                                                : app::ExecutionState::BackgroundHeadless;
-            enqueue(p, MsgType::StateControl, encode_state_control({p.session_id, desired}));
+        if (ctrl.desired_state == app::ExecutionState::ForegroundFull && ctrl.exclusive_foreground) {
+            active_foreground_session = chosen->session_id;
+            for (auto& p : peers) {
+                if (is_controller_id(p.session_id)) continue;
+                const auto desired = (&p == chosen) ? app::ExecutionState::ForegroundFull
+                                                    : app::ExecutionState::BackgroundHeadless;
+                p.snapshot.exec_state = desired;
+                enqueue(p, MsgType::StateControl, encode_state_control({p.session_id, desired, true}));
+            }
+            return true;
         }
+        chosen->snapshot.exec_state = ctrl.desired_state;
+        if (ctrl.desired_state == app::ExecutionState::ForegroundFull) {
+            active_foreground_session = chosen->session_id;
+        } else if (ieq(active_foreground_session, chosen->session_id)) {
+            active_foreground_session.clear();
+        }
+        enqueue(*chosen, MsgType::StateControl,
+                encode_state_control({chosen->session_id, ctrl.desired_state, ctrl.exclusive_foreground}));
         return true;
+    }
+
+    bool apply_foreground_switch_locked(const std::string& target) {
+        return apply_state_control_locked({target, app::ExecutionState::ForegroundFull, true});
     }
 };
 
@@ -727,6 +1005,7 @@ void SessionBusServer::stop() {
         if (p.fd >= 0) ::close(p.fd);
     }
     impl_->peers.clear();
+    impl_->pending_origins.clear();
     if (impl_->listen_fd >= 0) {
         ::close(impl_->listen_fd);
         impl_->listen_fd = -1;
@@ -824,16 +1103,16 @@ bool SessionBusServer::poll_once(int timeout_ms) {
                     CommandAckPacket ack;
                     if (decode_command_ack(body, len, ack)) {
                         if (impl_->acks.size() >= kMaxPendingInbound) impl_->acks.erase(impl_->acks.begin());
-                        impl_->acks.push_back(std::move(ack));
+                        impl_->acks.push_back(ack);
+                        impl_->relay_ack_to_origin_locked(ack);
                     }
                 } else if (type == MsgType::ActorSend) {
                     ActorPacket pkt;
                     if (decode_actor(body, len, pkt)) impl_->route_actor_locked(pkt);
                 } else if (type == MsgType::StateControl) {
                     StateControlPacket ctrl;
-                    if (decode_state_control(body, len, ctrl) &&
-                        ctrl.desired_state == app::ExecutionState::ForegroundFull) {
-                        impl_->apply_foreground_switch_locked(ctrl.target_session);
+                    if (decode_state_control(body, len, ctrl)) {
+                        if (impl_->apply_state_control_locked(ctrl)) roster_dirty = true;
                     }
                 } else if (type == MsgType::RosterQuery) {
                     impl_->enqueue(peer, MsgType::RosterReply, impl_->build_roster_reply_locked());
@@ -853,11 +1132,29 @@ bool SessionBusServer::poll_once(int timeout_ms) {
         for (int dfd : dead_fds) {
             ::close(dfd);
             std::erase_if(impl_->peers, [dfd](const Impl::Peer& p) { return p.fd == dfd; });
+            std::erase_if(impl_->pending_origins,
+                          [dfd](const Impl::PendingCommandOrigin& o) { return o.origin_fd == dfd; });
         }
         roster_dirty = true;
     }
 
     if (roster_dirty) impl_->broadcast_roster_locked();
+
+    // Flush any newly enqueued replies/broadcasts immediately so peers observe them without an extra poll cycle.
+    std::vector<int> flush_dead;
+    for (auto& peer : impl_->peers) {
+        if (!peer.tx.empty() && !flush_outbox(peer.fd, peer.tx)) {
+            flush_dead.push_back(peer.fd);
+        }
+    }
+    if (!flush_dead.empty()) {
+        for (int dfd : flush_dead) {
+            ::close(dfd);
+            std::erase_if(impl_->peers, [dfd](const Impl::Peer& p) { return p.fd == dfd; });
+            std::erase_if(impl_->pending_origins,
+                          [dfd](const Impl::PendingCommandOrigin& o) { return o.origin_fd == dfd; });
+        }
+    }
     return did_work;
 #endif
 }
@@ -874,9 +1171,18 @@ std::vector<SessionSnapshot> SessionBusServer::roster() const {
 }
 
 bool SessionBusServer::switch_foreground(const std::string& target_session_or_char) {
+    return set_peer_state(target_session_or_char, app::ExecutionState::ForegroundFull, true);
+}
+
+bool SessionBusServer::set_peer_state(const std::string& target_session_or_char,
+                                      app::ExecutionState desired_state,
+                                      bool exclusive_foreground) {
     if (!impl_) return false;
     std::lock_guard lock(impl_->mutex);
-    return impl_->apply_foreground_switch_locked(target_session_or_char);
+    const bool ok = impl_->apply_state_control_locked(
+        {target_session_or_char, desired_state, exclusive_foreground});
+    if (ok) impl_->broadcast_roster_locked();
+    return ok;
 }
 
 std::uint64_t SessionBusServer::dispatch_command(CommandPacket cmd) {

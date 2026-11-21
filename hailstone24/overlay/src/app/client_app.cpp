@@ -1,6 +1,7 @@
 // ClientApp: the main loop, and run_client.
 
 #include "app/client_app_internal.h"
+#include "mq/rgmercs_bridge.h"
 #include "app/ui_visibility.h"
 #include "app/frame_pace.h"
 #include "assets/zone_flora.h"
@@ -1351,6 +1352,7 @@ void ClientApp::publish_bus_telemetry() {
 
     if (conn_ && screen_ == Screen::InGame && player_ready_) {
         snap.online = true;
+        snap.connection_state = "in_game";
         snap.character_name = conn_->character_name();
         snap.server_name = server_profile_.name.empty() ? char_view_.server_name : server_profile_.name;
         snap.zone_short = conn_->world().zone_short_name;
@@ -1375,12 +1377,42 @@ void ClientApp::publish_bus_telemetry() {
         }
     } else {
         snap.online = false;
+        snap.connection_state = screen_ == Screen::Loading    ? "loading"
+                                : screen_ == Screen::Characters ? "char_select"
+                                : screen_ == Screen::Servers    ? "server_select"
+                                : screen_ == Screen::Create     ? "char_create"
+                                                                : "login";
         snap.character_name = opts_.auto_character.empty() ? opts_.account : opts_.auto_character;
         snap.server_name = server_profile_.name;
     }
     snap.combat_state = combat_engine_
                             ? std::string(combat::combat_state_name(combat_engine_->state()))
                             : "Idle";
+    if (combat_engine_) {
+        snap.follow_target = combat_engine_->profile().follow_target;
+        snap.active_profile = active_commander_profile_.empty()
+                                  ? combat_engine_->profile().profile_name
+                                  : active_commander_profile_;
+    } else {
+        snap.active_profile = active_commander_profile_;
+    }
+    if (automation_) {
+        const auto running = automation_->scripts().list();
+        if (!running.empty()) {
+            snap.script_name = running.front().name;
+            snap.script_state = running.front().status;
+        } else {
+            const auto rg = automation_->rgmercs().snapshot();
+            if (rg.script_status == "error" || !rg.last_error.empty()) {
+                snap.script_name = "rgmercs";
+                snap.script_state = "error";
+            } else {
+                snap.script_state = "stopped";
+            }
+        }
+    } else {
+        snap.script_state = "stopped";
+    }
     bus_.publish_telemetry(snap);
 }
 

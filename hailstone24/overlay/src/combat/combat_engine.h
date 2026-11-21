@@ -90,11 +90,23 @@ private:
     std::string idle_reason_ = "Controller stopped";
     std::string last_action_;
     std::string last_cast_;
+    struct PendingMemoCheck {
+        int gem_index = 0;
+        std::uint32_t spell_id = 0;
+        std::string spell_name;
+        std::uint64_t started_ms = 0;
+    };
+
+    void record_memo_failure(std::string msg);
+    void check_pending_memorizations(const CombatSnapshot& snapshot, ICombatActions& actions);
+
     LoadoutAudit last_audit_{};
     MovementController movement_{};
     std::unordered_map<std::string, std::uint64_t> last_rule_used_ms_;
     std::deque<TransitionLogEntry> transitions_;
     std::deque<ActionLogEntry> actions_;
+    std::deque<std::string> failed_memorizations_;
+    std::vector<PendingMemoCheck> pending_memo_checks_;
 };
 
 } // namespace hailstone::combat

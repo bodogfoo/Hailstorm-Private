@@ -409,6 +409,15 @@ void ClientApp::update_ui_host() {
     }
     h.web = web_service_.get();
     h.scripts = automation_ ? &automation_->scripts() : nullptr;
+    h.rgmercs = automation_ ? &automation_->rgmercs() : nullptr;
+    h.rgmercs_server = server_profile_.name.empty() ? char_view_.server_name : server_profile_.name;
+    if (!h.run_rgmercs_command) {
+        h.run_rgmercs_command = [this](const std::string& line) -> bool {
+            if (!automation_) return false;
+            automation_->run_command(line);
+            return true;
+        };
+    }
     if (!h.combat.status && combat_engine_) {
         h.combat.status = [this]() -> combat::CombatStatusSnapshot {
             return combat_engine_->status_snapshot(
@@ -419,6 +428,15 @@ void ClientApp::update_ui_host() {
         };
         h.combat.command = [this](std::string_view action, std::string_view arg, std::string& msg) -> bool {
             return handle_combat_command(action, arg, msg);
+        };
+    }
+    if (!h.commander.status) {
+        h.commander.status = [this]() -> UiHost::CommanderStatusSnapshot {
+            return commander_status();
+        };
+        h.commander.command = [this](std::string_view action, std::string_view target,
+                                     std::string_view arg, std::string& msg) -> bool {
+            return handle_commander_command(action, target, arg, msg);
         };
     }
     h.registry = automation_ ? &automation_->registry() : nullptr;

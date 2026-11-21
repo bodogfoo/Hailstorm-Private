@@ -3,6 +3,7 @@
 #include <cstdlib>
 
 #include "app/client_app_internal.h"
+#include "mq/rgmercs_bridge.h"
 #include "app/connection_frontend.h"
 #include "app/lua_ui.h"
 #include "app/addon_install.h"
@@ -690,6 +691,7 @@ void ClientApp::back_to_login(std::string message, bool is_error) {
     login_.reset();
     unload_zone();
     leave_character();
+    if (automation_) automation_->rgmercs().clear_character();
     player_ready_ = false;
     screen_ = Screen::Login;
     if (audio_) {

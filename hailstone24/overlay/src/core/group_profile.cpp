@@ -9,6 +9,7 @@
 #include <set>
 #include <sstream>
 #include <system_error>
+#include <tuple>
 #include <variant>
 
 #include "core/ini_file.h"
@@ -520,6 +521,7 @@ bool load_ini_profile(const fs::path& path, GroupProfile& out, std::string* erro
     out.id = meta_str("id");
     out.name = meta_str("name");
     out.description = meta_str("description");
+    out.preset_kind = meta_str("preset_kind", "preset");
     out.default_server_id = meta_str("default_server", "server");
     if (out.default_server_id.empty()) out.default_server_id = meta_str("server_id");
     out.default_world = meta_str("default_world", "world");
@@ -536,7 +538,7 @@ bool load_ini_profile(const fs::path& path, GroupProfile& out, std::string* erro
         GroupSlot s;
         const int parsed_sec_num = parse_slot_section_number(sec, seq);
         s.slot_number = std::clamp(ini.get_int(sec, "slot_number", ini.get_int(sec, "slot", parsed_sec_num)), 1, 24);
-        s.launch_order = ini.get_int(sec, "launch_order", ini.get_int(sec, "order", seq));
+        s.launch_order = ini.get_int(sec, "launch_order", ini.get_int(sec, "order", ini.get_int(sec, "startup_order", seq)));
         s.enabled = parse_bool_str(ini.get_string(sec, "enabled", "1"), true);
         s.session_id = ini.get_string(sec, "session_id");
         s.character = ini.get_string(sec, "character");
@@ -550,11 +552,19 @@ bool load_ini_profile(const fs::path& path, GroupProfile& out, std::string* erro
         s.settings_path = ini.get_string(sec, "settings_path");
         if (s.settings_path.empty()) s.settings_path = ini.get_string(sec, "settings");
         s.group_leader = ini.get_string(sec, "group_leader");
+        s.follow_target = ini.get_string(sec, "follow_target");
+        if (s.follow_target.empty()) s.follow_target = ini.get_string(sec, "follow");
+        s.combat_profile = ini.get_string(sec, "combat_profile");
+        s.script_module = ini.get_string(sec, "script_module");
+        if (s.script_module.empty()) s.script_module = ini.get_string(sec, "script");
+        s.script_settings = ini.get_string(sec, "script_settings");
+        s.spell_loadout = ini.get_string(sec, "spell_loadout");
+        if (s.spell_loadout.empty()) s.spell_loadout = ini.get_string(sec, "spells");
         s.auto_login = parse_bool_str(ini.get_string(sec, "auto_login", out.auto_login ? "1" : "0"), out.auto_login);
         if (auto h = ini.get(sec, "headless")) {
             s.headless = parse_bool_str(*h, out.slots.empty() ? false : true);
         } else if (auto st = ini.get(sec, "state")) {
-            s.headless = (*st != "foreground");
+            s.headless = (*st != "foreground" && *st != "live");
         } else {
             s.headless = !out.slots.empty();
         }
@@ -563,7 +573,7 @@ bool load_ini_profile(const fs::path& path, GroupProfile& out, std::string* erro
         s.gpu_mode = ini.get_string(sec, "gpu_mode", out.gpu_mode);
         (void)read_meta;
 
-        if (!s.account.empty() || !s.character.empty()) {
+        if (!s.account.empty() || !s.character.empty() || !s.class_role.empty()) {
             out.slots.push_back(std::move(s));
         }
         ++seq;
@@ -611,6 +621,7 @@ bool load_json_profile(const fs::path& path, GroupProfile& out, std::string* err
     out.id = str_field(root, "id");
     out.name = str_field(root, "name");
     out.description = str_field(root, "description");
+    out.preset_kind = str_field(root, "preset_kind", "preset");
     out.default_server_id = str_field(root, "default_server", "server_id");
     if (out.default_server_id.empty()) out.default_server_id = str_field(root, "server");
     out.default_world = str_field(root, "default_world", "world");
@@ -628,7 +639,7 @@ bool load_json_profile(const fs::path& path, GroupProfile& out, std::string* err
             if (!item.is_object()) continue;
             GroupSlot s;
             s.slot_number = std::clamp(int_field(item, "slot_number", "slot", seq), 1, 24);
-            s.launch_order = int_field(item, "launch_order", "order", seq);
+            s.launch_order = int_field(item, "launch_order", "order", int_field(item, "startup_order", {}, seq));
             s.enabled = bool_field(item, "enabled", true);
             s.session_id = str_field(item, "session_id");
             s.character = str_field(item, "character");
@@ -639,12 +650,17 @@ bool load_json_profile(const fs::path& path, GroupProfile& out, std::string* err
             if (s.class_role.empty()) s.class_role = str_field(item, "role");
             s.settings_path = str_field(item, "settings_path", "settings");
             s.group_leader = str_field(item, "group_leader");
+            s.follow_target = str_field(item, "follow_target", "follow");
+            s.combat_profile = str_field(item, "combat_profile");
+            s.script_module = str_field(item, "script_module", "script");
+            s.script_settings = str_field(item, "script_settings");
+            s.spell_loadout = str_field(item, "spell_loadout", "spells");
             s.auto_login = bool_field(item, "auto_login", out.auto_login);
             s.headless = bool_field(item, "headless", !out.slots.empty());
             s.auto_kick = bool_field(item, "auto_kick", out.auto_kick);
             s.bg_tick_hz = int_field(item, "bg_tick_hz", {}, out.bg_tick_hz);
             s.gpu_mode = str_field(item, "gpu_mode");
-            if (!s.account.empty() || !s.character.empty()) {
+            if (!s.account.empty() || !s.character.empty() || !s.class_role.empty()) {
                 out.slots.push_back(std::move(s));
             }
             ++seq;
@@ -771,6 +787,7 @@ bool save_group_profile_ini(const GroupProfile& profile, const fs::path& path, s
     out << "id=" << norm.id << "\n";
     out << "name=" << norm.name << "\n";
     if (!norm.description.empty()) out << "description=" << norm.description << "\n";
+    if (!norm.preset_kind.empty()) out << "preset_kind=" << norm.preset_kind << "\n";
     if (!norm.default_server_id.empty()) out << "default_server=" << norm.default_server_id << "\n";
     if (!norm.default_world.empty()) out << "default_world=" << norm.default_world << "\n";
     out << "auto_login=" << (norm.auto_login ? 1 : 0) << "\n";
@@ -794,6 +811,11 @@ bool save_group_profile_ini(const GroupProfile& profile, const fs::path& path, s
             out << "settings_path=" << normalize_settings_for_storage(s.settings_path) << "\n";
         }
         if (!s.group_leader.empty()) out << "group_leader=" << s.group_leader << "\n";
+        if (!s.follow_target.empty()) out << "follow_target=" << s.follow_target << "\n";
+        if (!s.combat_profile.empty()) out << "combat_profile=" << s.combat_profile << "\n";
+        if (!s.script_module.empty()) out << "script_module=" << s.script_module << "\n";
+        if (!s.script_settings.empty()) out << "script_settings=" << s.script_settings << "\n";
+        if (!s.spell_loadout.empty()) out << "spell_loadout=" << s.spell_loadout << "\n";
         out << "auto_login=" << (s.auto_login ? 1 : 0) << "\n";
         out << "headless=" << (s.headless ? 1 : 0) << "\n";
         out << "auto_kick=" << (s.auto_kick ? 1 : 0) << "\n";
@@ -815,6 +837,7 @@ bool save_group_profile_json(const GroupProfile& profile, const fs::path& path, 
     out << "  \"id\": " << json_escape(norm.id) << ",\n";
     out << "  \"name\": " << json_escape(norm.name) << ",\n";
     out << "  \"description\": " << json_escape(norm.description) << ",\n";
+    out << "  \"preset_kind\": " << json_escape(norm.preset_kind) << ",\n";
     out << "  \"default_server\": " << json_escape(norm.default_server_id) << ",\n";
     out << "  \"default_world\": " << json_escape(norm.default_world) << ",\n";
     out << "  \"auto_login\": " << (norm.auto_login ? "true" : "false") << ",\n";
@@ -836,6 +859,11 @@ bool save_group_profile_json(const GroupProfile& profile, const fs::path& path, 
         out << "      \"class_role\": " << json_escape(s.class_role) << ",\n";
         out << "      \"settings_path\": " << json_escape(normalize_settings_for_storage(s.settings_path)) << ",\n";
         out << "      \"group_leader\": " << json_escape(s.group_leader) << ",\n";
+        out << "      \"follow_target\": " << json_escape(s.follow_target) << ",\n";
+        out << "      \"combat_profile\": " << json_escape(s.combat_profile) << ",\n";
+        out << "      \"script_module\": " << json_escape(s.script_module) << ",\n";
+        out << "      \"script_settings\": " << json_escape(s.script_settings) << ",\n";
+        out << "      \"spell_loadout\": " << json_escape(s.spell_loadout) << ",\n";
         out << "      \"auto_login\": " << (s.auto_login ? "true" : "false") << ",\n";
         out << "      \"headless\": " << (s.headless ? "true" : "false") << ",\n";
         out << "      \"auto_kick\": " << (s.auto_kick ? "true" : "false") << ",\n";
@@ -996,6 +1024,10 @@ bool resolve_pre_autologin_profile(const fs::path& profiles_dir,
     if (state.character.empty()) state.character = slot->character;
     if (state.session_id.empty()) state.session_id = slot->session_id;
     if (state.gpu_mode.empty()) state.gpu_mode = slot->gpu_mode;
+    if (state.follow_target.empty()) state.follow_target = slot->follow_target;
+    if (state.combat_profile.empty()) state.combat_profile = slot->combat_profile;
+    if (state.script_module.empty()) state.script_module = slot->script_module;
+    if (state.spell_loadout.empty()) state.spell_loadout = slot->spell_loadout;
     if (state.bg_tick_hz <= 0) state.bg_tick_hz = slot->bg_tick_hz;
 
     state.auto_login = state.auto_login || slot->auto_login;
@@ -1022,6 +1054,145 @@ bool resolve_pre_autologin_profile(const fs::path& profiles_dir,
     if (out_profile) *out_profile = gp;
     if (out_slot) *out_slot = *slot;
     return true;
+}
+
+namespace {
+std::string infer_combat_profile_from_class(std::string_view cls) {
+    const std::string c = lower_copy(trim_copy(cls));
+    if (c == "war" || c == "warrior" || c == "pal" || c == "paladin" || c == "shd" || c == "sk" ||
+        c == "shadowknight" || c == "tank") {
+        return "Tank";
+    }
+    if (c == "clr" || c == "cleric" || c == "dru" || c == "druid" || c == "shm" || c == "shaman" ||
+        c == "healer") {
+        return "Healer";
+    }
+    if (c == "wiz" || c == "wizard" || c == "mag" || c == "mage" || c == "magician" || c == "nec" ||
+        c == "necromancer" || c == "enc" || c == "enchanter" || c == "caster") {
+        return "CasterDPS";
+    }
+    if (c == "brd" || c == "bard") return "Support";
+    if (c == "mnk" || c == "monk") return "Puller";
+    return "MeleeDPS";
+}
+
+std::string infer_spell_loadout_from_class(std::string_view cls) {
+    const std::string c = lower_copy(trim_copy(cls));
+    if (c == "war" || c == "warrior" || c == "rog" || c == "rogue" || c == "mnk" || c == "monk" ||
+        c == "ber" || c == "berserker") {
+        return "melee_default";
+    }
+    if (c == "clr" || c == "cleric" || c == "dru" || c == "druid" || c == "shm" || c == "shaman" ||
+        c == "healer") {
+        return "healer_group";
+    }
+    if (c == "pal" || c == "paladin" || c == "shd" || c == "sk" || c == "tank") return "tank_aggro";
+    if (c == "wiz" || c == "mag" || c == "nec" || c == "enc" || c == "caster") return "caster_nuke";
+    return "default";
+}
+} // namespace
+
+std::vector<std::string> default_group_profile_preset_names() {
+    return {"Main Tank", "Caster Group", "Melee Group", "Raid", "Solo"};
+}
+
+GroupProfile make_named_group_profile_preset(std::string_view preset_name,
+                                             std::string_view server_id,
+                                             std::string_view world) {
+    const std::string low = lower_copy(trim_copy(preset_name));
+    GroupProfile gp;
+    gp.default_server_id = std::string(server_id);
+    gp.default_world = std::string(world);
+    gp.auto_login = true;
+    gp.auto_kick = true;
+    gp.bg_tick_hz = 25;
+    gp.gpu_mode = "cached";
+
+    auto add_slot = [&](int num, std::string_view role, std::string_view combat_prof,
+                        std::string_view spells, bool headless, std::string_view follow,
+                        std::string_view script_mod = "rgmercs") {
+        GroupSlot s;
+        s.slot_number = num;
+        s.launch_order = num;
+        s.enabled = true;
+        s.session_id = format_slot_id(num);
+        s.server_id = gp.default_server_id;
+        s.world = gp.default_world;
+        s.class_role = std::string(role);
+        s.combat_profile = std::string(combat_prof);
+        s.spell_loadout = std::string(spells);
+        s.follow_target = std::string(follow);
+        s.script_module = std::string(script_mod);
+        s.headless = headless;
+        s.auto_login = true;
+        s.auto_kick = true;
+        s.bg_tick_hz = gp.bg_tick_hz;
+        s.gpu_mode = gp.gpu_mode;
+        gp.slots.push_back(std::move(s));
+    };
+
+    if (low == "main tank" || low == "main-tank" || low == "main_tank" || low == "tank") {
+        gp.id = "main-tank";
+        gp.name = "Main Tank";
+        gp.preset_kind = "Main Tank";
+        gp.description = "Main tank lead with dedicated cleric, slow/buff support, and melee/caster DPS.";
+        add_slot(1, "WAR", "Tank", "melee_default", false, "");
+        add_slot(2, "CLR", "Healer", "healer_group", true, "slot01");
+        add_slot(3, "SHM", "Healer", "healer_group", true, "slot01");
+        add_slot(4, "BRD", "Support", "support_songs", true, "slot01");
+        add_slot(5, "ROG", "MeleeDPS", "melee_default", true, "slot01");
+        add_slot(6, "WIZ", "CasterDPS", "caster_nuke", true, "slot01");
+    } else if (low == "caster group" || low == "caster-group" || low == "caster_group" || low == "caster") {
+        gp.id = "caster-group";
+        gp.name = "Caster Group";
+        gp.preset_kind = "Caster Group";
+        gp.description = "Caster-focused 6-box with tank anchor, enchanter mana regen, healer, and nuke/pet DPS.";
+        add_slot(1, "SHD", "Tank", "tank_aggro", false, "");
+        add_slot(2, "CLR", "Healer", "healer_group", true, "slot01");
+        add_slot(3, "ENC", "Support", "caster_cc", true, "slot01");
+        add_slot(4, "WIZ", "CasterDPS", "caster_nuke", true, "slot01");
+        add_slot(5, "MAG", "CasterDPS", "caster_nuke", true, "slot01");
+        add_slot(6, "NEC", "CasterDPS", "caster_dot", true, "slot01");
+    } else if (low == "melee group" || low == "melee-group" || low == "melee_group" || low == "melee") {
+        gp.id = "melee-group";
+        gp.name = "Melee Group";
+        gp.preset_kind = "Melee Group";
+        gp.description = "High-DPS melee 6-box with warrior tank, rogue/monk/berserker DPS, bard, and shaman.";
+        add_slot(1, "WAR", "Tank", "melee_default", false, "");
+        add_slot(2, "ROG", "MeleeDPS", "melee_default", true, "slot01");
+        add_slot(3, "MNK", "Puller", "melee_default", true, "slot01");
+        add_slot(4, "BER", "MeleeDPS", "melee_default", true, "slot01");
+        add_slot(5, "BRD", "Support", "support_songs", true, "slot01");
+        add_slot(6, "SHM", "Healer", "healer_group", true, "slot01");
+    } else if (low == "raid") {
+        gp.id = "raid";
+        gp.name = "Raid";
+        gp.preset_kind = "Raid";
+        gp.description = "18-box multi-group raid roster with tank, melee, and caster wings.";
+        gp.bg_tick_hz = 20;
+        const std::vector<std::tuple<const char*, const char*, const char*>> roles = {
+            {"WAR", "Tank", "melee_default"},      {"CLR", "Healer", "healer_group"},
+            {"SHM", "Healer", "healer_group"},     {"BRD", "Support", "support_songs"},
+            {"PAL", "Tank", "tank_aggro"},         {"ROG", "MeleeDPS", "melee_default"},
+            {"SHD", "Tank", "tank_aggro"},         {"MNK", "Puller", "melee_default"},
+            {"BER", "MeleeDPS", "melee_default"},  {"ROG", "MeleeDPS", "melee_default"},
+            {"BST", "MeleeDPS", "melee_default"},  {"DRU", "Healer", "healer_group"},
+            {"ENC", "Support", "caster_cc"},       {"WIZ", "CasterDPS", "caster_nuke"},
+            {"WIZ", "CasterDPS", "caster_nuke"},   {"MAG", "CasterDPS", "caster_nuke"},
+            {"NEC", "CasterDPS", "caster_dot"},    {"CLR", "Healer", "healer_group"},
+        };
+        for (std::size_t i = 0; i < roles.size(); ++i) {
+            const auto& [cls, prof, spells] = roles[i];
+            add_slot(static_cast<int>(i + 1), cls, prof, spells, i != 0, i == 0 ? "" : "slot01");
+        }
+    } else {
+        gp.id = "solo";
+        gp.name = "Solo";
+        gp.preset_kind = "Solo";
+        gp.description = "Single foreground client with native combat controller.";
+        add_slot(1, "ROG", "Solo", "default", false, "", "");
+    }
+    return gp;
 }
 
 std::vector<fs::path> export_group_profiles_from_mq(const std::vector<MqImportedAccount>& records,
@@ -1062,6 +1233,12 @@ std::vector<fs::path> export_group_profiles_from_mq(const std::vector<MqImported
         GroupProfile gp;
         gp.id = id;
         gp.name = bucket.display_name;
+        for (const auto& preset : default_group_profile_preset_names()) {
+            if (ieq(preset, gp.name)) {
+                gp.preset_kind = preset;
+                break;
+            }
+        }
         gp.description = "Imported from MacroQuest AutoLogin (keyring credentials only)";
         gp.default_server_id = std::string(server_id);
         gp.default_world = std::string(fallback_world);
@@ -1086,12 +1263,18 @@ std::vector<fs::path> export_group_profiles_from_mq(const std::vector<MqImported
             s.server_id = std::string(server_id);
             s.world = !r.server_name.empty() ? r.server_name : std::string(fallback_world);
             s.class_role = r.character_class;
+            s.combat_profile = infer_combat_profile_from_class(r.character_class);
+            s.spell_loadout = infer_spell_loadout_from_class(r.character_class);
             s.settings_path = default_slot_settings_relpath(s.server_id, s.world, s.character);
             s.auto_login = true;
             s.headless = (slot_idx != 1);
             s.auto_kick = true;
-            if (!gp.slots.empty()) s.group_leader = gp.slots.front().character;
-            else s.group_leader = s.character;
+            if (!gp.slots.empty()) {
+                s.group_leader = gp.slots.front().character;
+                s.follow_target = gp.slots.front().character;
+            } else {
+                s.group_leader = s.character;
+            }
             gp.slots.push_back(std::move(s));
         }
 
@@ -1105,6 +1288,130 @@ std::vector<fs::path> export_group_profiles_from_mq(const std::vector<MqImported
     }
 
     return written;
+}
+
+bool import_mq_profiles_from_ini(const fs::path& mq_ini_path,
+                                 std::string_view server_id,
+                                 std::string_view fallback_world,
+                                 const fs::path& profiles_dir,
+                                 std::vector<fs::path>& out_written,
+                                 std::vector<std::string>* warnings) {
+    out_written.clear();
+    IniFile ini;
+    if (!ini.load(mq_ini_path)) {
+        if (warnings) warnings->push_back("Cannot read MacroQuest profile INI: " + mq_ini_path.string());
+        return false;
+    }
+
+    // Group sections into profile buckets. Supports:
+    //   [Profile:<Name>] / [Group:<Name>] / [<ProfileName>] with MemberN / Character / Account / Role / Follow / Script / Spells
+    //   or flat [SessionN] / [SlotN] sections with optional Profile=<Name>.
+    std::map<std::string, GroupProfile, std::less<>> profiles;
+    auto get_or_create = [&](const std::string& display_name) -> GroupProfile& {
+        const std::string id = sanitize_group_profile_id(display_name);
+        auto& gp = profiles[id];
+        if (gp.id.empty()) {
+            gp.id = id;
+            gp.name = display_name;
+            gp.description = "Imported from MacroQuest profile INI (credentials stay in keyring)";
+            gp.default_server_id = std::string(server_id);
+            gp.default_world = std::string(fallback_world);
+            for (const auto& preset : default_group_profile_preset_names()) {
+                if (ieq(preset, display_name)) {
+                    gp.preset_kind = preset;
+                    break;
+                }
+            }
+        }
+        return gp;
+    };
+
+    auto safe_get = [&](std::string_view sec, std::string_view key) -> std::string {
+        if (is_secret_key(key)) return {};
+        return trim_copy(ini.get_string(sec, key));
+    };
+
+    std::vector<std::string> declared_groups;
+    for (const std::string& key : ini.keys("Profiles")) {
+        const std::string val = trim_copy(ini.get_string("Profiles", key));
+        if (!val.empty() && val.find('^') == std::string::npos) declared_groups.push_back(val);
+    }
+    auto resolve_declared_group = [&](std::string_view sec) -> std::string {
+        for (const auto& g : declared_groups) {
+            if (ieq(sec, g)) return g;
+            if (sec.size() > g.size() + 1 && ieq(sec.substr(0, g.size()), g) &&
+                (sec[g.size()] == '_' || sec[g.size()] == '-')) {
+                return g;
+            }
+        }
+        return {};
+    };
+
+    for (const std::string& sec : ini.sections()) {
+        if (ieq(sec, "Settings") || ieq(sec, "Profiles")) continue;
+        // Check if this section defines a single character/slot entry.
+        const std::string ch = safe_get(sec, "Character");
+        std::string acct = safe_get(sec, "Account");
+        if (acct.empty()) acct = safe_get(sec, "StationName");
+        if (!ch.empty() || !acct.empty()) {
+            std::string group_name = safe_get(sec, "Profile");
+            if (group_name.empty()) group_name = safe_get(sec, "Group");
+            if (group_name.empty()) group_name = resolve_declared_group(sec);
+            if (group_name.empty()) group_name = mq_ini_path.stem().string();
+
+            auto& gp = get_or_create(group_name);
+            const int idx = static_cast<int>(gp.slots.size()) + 1;
+            if (idx > 24) continue;
+
+            GroupSlot s;
+            s.slot_number = std::clamp(ini.get_int(sec, "Slot", idx), 1, 24);
+            s.launch_order = ini.get_int(sec, "StartupOrder", ini.get_int(sec, "Order", idx));
+            s.enabled = parse_bool_str(safe_get(sec, "Enabled"), true);
+            s.session_id = format_slot_id(s.slot_number);
+            s.character = ch;
+            s.account = acct;
+            s.server_id = std::string(server_id);
+            const std::string srv = safe_get(sec, "Server");
+            s.world = !srv.empty() ? srv : std::string(fallback_world);
+            s.class_role = safe_get(sec, "Class");
+            if (s.class_role.empty()) s.class_role = safe_get(sec, "Role");
+            s.follow_target = safe_get(sec, "FollowTarget");
+            if (s.follow_target.empty()) s.follow_target = safe_get(sec, "Follow");
+            s.combat_profile = safe_get(sec, "CombatProfile");
+            if (s.combat_profile.empty()) s.combat_profile = infer_combat_profile_from_class(s.class_role);
+            s.script_module = safe_get(sec, "ScriptModule");
+            if (s.script_module.empty()) s.script_module = safe_get(sec, "Script");
+            s.script_settings = safe_get(sec, "ScriptSettings");
+            s.spell_loadout = safe_get(sec, "SpellLoadout");
+            if (s.spell_loadout.empty()) s.spell_loadout = safe_get(sec, "Spells");
+            if (s.spell_loadout.empty()) s.spell_loadout = infer_spell_loadout_from_class(s.class_role);
+            s.settings_path = default_slot_settings_relpath(s.server_id, s.world, s.character);
+            const std::string headless_str = safe_get(sec, "Headless");
+            if (!headless_str.empty()) {
+                s.headless = parse_bool_str(headless_str, idx != 1);
+            } else {
+                const std::string live_str = safe_get(sec, "Live");
+                s.headless = !live_str.empty() ? !parse_bool_str(live_str, idx == 1) : (idx != 1);
+            }
+            s.group_leader = safe_get(sec, "GroupLeader");
+            if (s.group_leader.empty()) {
+                s.group_leader = gp.slots.empty() ? s.character : gp.slots.front().character;
+            }
+            gp.slots.push_back(std::move(s));
+        }
+    }
+
+    for (auto& [id, gp] : profiles) {
+        if (gp.slots.empty()) continue;
+        const fs::path out_path = profiles_dir / (id + ".ini");
+        std::string err;
+        if (save_group_profile_ini(gp, out_path, &err)) {
+            out_written.push_back(out_path);
+        } else if (warnings) {
+            warnings->push_back("Failed to write imported profile '" + id + "': " + err);
+        }
+    }
+    return !out_written.empty();
 }
 
 } // namespace hailstone::core

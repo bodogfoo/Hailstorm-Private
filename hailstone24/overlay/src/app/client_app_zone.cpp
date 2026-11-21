@@ -1,6 +1,7 @@
 // ClientApp: Zone load and unload, scene fog, listener and music, entering the zone.
 
 #include "app/client_app_internal.h"
+#include "mq/rgmercs_bridge.h"
 #include "app/terrain_cache.h"
 
 #include <array>
@@ -613,7 +614,14 @@ void ClientApp::enter_zone() {
     actions_ui_->enter_zone(files.hot_buttons());
     load_combat_profile_for_zone(files.dir, game::class_short_name(me->class_id));
     // The character's autorun scripts (the Scripts window; the same file at each zone-in starts nothing again).
-    if (automation_) automation_->scripts().set_autorun_file(files.scripts_ini());
+    if (automation_) {
+        automation_->scripts().set_autorun_file(files.scripts_ini());
+        const std::string server_label =
+            server_profile_.name.empty() ? char_view_.server_name : server_profile_.name;
+        automation_->rgmercs().attach_character(platform::data_dir(), files.dir,
+                                                game::display_name(me->name), server_label,
+                                                game::class_short_name(me->class_id));
+    }
     // The UI's window layout is the character's (ui-<pack>.txt), its other settings shared.
     ui_character_dir_ = files.dir;
     if (lua_ui_) lua_ui_->set_character_settings(files.ui_settings(ui_name_));

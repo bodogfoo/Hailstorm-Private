@@ -231,6 +231,8 @@ combat::CombatSnapshot build_combat_snapshot(const net::GameConnection& conn,
             if (snap.me.class_id >= 1 && snap.me.class_id <= 16) {
                 info.min_level = sd->class_level[snap.me.class_id - 1];
             }
+        } else {
+            info.spell_data_missing = true;
         }
         snap.spellbook.push_back(std::move(info));
     }
@@ -373,7 +375,8 @@ bool HailstoneCombatAdapter::combat_ability(std::string_view ability_name) {
 }
 
 bool HailstoneCombatAdapter::memorize_gem(int book_slot, int gem_index) {
-    if (!conn_ || book_slot < 0 || gem_index < 0 || gem_index >= conn_->usable_gems()) {
+    if (!conn_ || conn_->state() != net::ConnectionState::InZone || conn_->player_down() ||
+        conn_->in_combat() || book_slot < 0 || gem_index < 0 || gem_index >= conn_->usable_gems()) {
         return false;
     }
     conn_->memorize(book_slot, gem_index);
@@ -382,7 +385,8 @@ bool HailstoneCombatAdapter::memorize_gem(int book_slot, int gem_index) {
 
 bool HailstoneCombatAdapter::memorize_loadout(
     const std::vector<std::pair<int, std::uint32_t>>& gem_spells) {
-    if (!conn_ || gem_spells.empty()) {
+    if (!conn_ || conn_->state() != net::ConnectionState::InZone || conn_->player_down() ||
+        conn_->in_combat() || gem_spells.empty()) {
         return false;
     }
     std::array<std::int32_t, game::kLoadoutGems> set_arr{};

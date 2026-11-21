@@ -145,6 +145,8 @@ add_library(hailstone_engine STATIC
   src/mq/lua_mq.cpp
   src/mq/lua_mq_web.cpp
   src/mq/lua_hailstone.cpp
+  src/mq/lua_compat_modules.cpp
+  src/mq/rgmercs_bridge.cpp
   src/ipc/session_bus.cpp
   src/plugin/native_plugins.cpp
   src/plugin/world_geometry.cpp
@@ -580,6 +582,7 @@ add_library(hailstone_engine STATIC
   src/app/lua_ui_plugins.cpp
   src/app/lua_ui_scripts.cpp
   src/app/lua_ui_combat.cpp
+  src/app/lua_ui_rgmercs.cpp
   src/app/hailstone_combat_adapter.cpp
   src/combat/combat_profile.cpp
   src/combat/spell_manager.cpp
@@ -1355,6 +1358,8 @@ if(HAILSTONE_BUILD_TESTS)
     tests/appearance_vectors_test.cpp
     tests/combat_test.cpp
     tests/hailstone24/combat_controller_test.cpp
+    tests/hailstone24/rgmercs_trusted_loader_test.cpp
+    tests/hailstone24/rgmercs_native_ui_test.cpp
     tests/pet_combat_chat_test.cpp
     tests/plate_test_test.cpp
     tests/nameplate_overlap_test.cpp

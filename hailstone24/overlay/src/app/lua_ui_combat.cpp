@@ -123,12 +123,14 @@ int CombatStatus(lua_State* L) {
     lua_createtable(L, static_cast<int>(st.loadout_audit.slots.size()), 0);
     for (std::size_t i = 0; i < st.loadout_audit.slots.size(); ++i) {
         const auto& s = st.loadout_audit.slots[i];
-        lua_createtable(L, 0, 6);
+        lua_createtable(L, 0, 8);
         set_int(L, "gem", s.gem_index + 1);
         set_str(L, "desired", s.desired_spec);
         set_str(L, "resolved", s.resolved_spell_name);
         set_str(L, "current", s.current_spell_name);
         set_str(L, "status", combat::gem_sync_kind_name(s.status));
+        set_int(L, "requiredLevel", s.required_level);
+        set_str(L, "diagnostic", s.diagnostic);
         lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
     }
     lua_setfield(L, -2, "loadout");
@@ -136,6 +138,9 @@ int CombatStatus(lua_State* L) {
     push_string_array(L, "missingSpells", st.loadout_audit.missing_spells);
     push_string_array(L, "manuallyChangedGems", st.loadout_audit.manually_changed_gems);
     push_string_array(L, "unknownSpells", st.loadout_audit.unknown_spells);
+    push_string_array(L, "levelRestrictedSpells", st.loadout_audit.level_restricted_spells);
+    push_string_array(L, "missingSpellData", st.loadout_audit.missing_spell_data);
+    push_string_array(L, "failedMemorizations", st.loadout_audit.failed_memorizations);
 
     // Rules summary
     lua_createtable(L, static_cast<int>(prof.rules.size()), 0);
@@ -213,12 +218,126 @@ int CombatDo(lua_State* L) {
     return 1;
 }
 
+int CommanderStatus(lua_State* L) {
+    UiHost& h = host_of(L);
+    if (plugin_code() || !h.commander.status) {
+        lua_createtable(L, 0, 5);
+        set_bool(L, "available", false);
+        set_bool(L, "busConnected", false);
+        set_bool(L, "autoHeadlessOthers", true);
+        lua_newtable(L);
+        lua_setfield(L, -2, "peers");
+        lua_newtable(L);
+        lua_setfield(L, -2, "trackedCommands");
+        return 1;
+    }
+
+    auto& snap = plugin::lua_keep<UiHost::CommanderStatusSnapshot>(L);
+    plugin::cxx_guard(L, [&] { snap = h.commander.status(); });
+
+    lua_createtable(L, 0, 10);
+    set_bool(L, "available", true);
+    set_str(L, "sessionId", snap.session_id);
+    set_str(L, "characterName", snap.character_name);
+    set_str(L, "executionState", snap.execution_state);
+    set_bool(L, "busConnected", snap.bus_connected);
+    set_bool(L, "autoHeadlessOthers", snap.auto_headless_others);
+    set_str(L, "activeProfile", snap.active_profile_id);
+    push_string_array(L, "availableProfiles", snap.available_profiles);
+
+    lua_createtable(L, static_cast<int>(snap.peers.size()), 0);
+    for (std::size_t i = 0; i < snap.peers.size(); ++i) {
+        const auto& p = snap.peers[i];
+        lua_createtable(L, 0, 18);
+        set_str(L, "sessionId", p.session_id);
+        set_str(L, "characterName", p.character_name);
+        set_str(L, "serverName", p.server_name);
+        set_str(L, "zoneShort", p.zone_short);
+        set_str(L, "classShort", p.class_short);
+        set_int(L, "level", p.level);
+        set_int(L, "hpPct", p.hp_pct);
+        set_int(L, "manaPct", p.mana_pct);
+        set_int(L, "endPct", p.end_pct);
+        set_bool(L, "online", p.online);
+        set_str(L, "connectionState", p.connection_state);
+        set_str(L, "executionState", execution_state_name(p.exec_state));
+        set_bool(L, "isLive", p.exec_state == ExecutionState::ForegroundFull);
+        set_bool(L, "isSelf", p.session_id == snap.session_id);
+        set_str(L, "combatState", p.combat_state);
+        set_str(L, "scriptName", p.script_name);
+        set_str(L, "scriptState", p.script_state);
+        set_str(L, "activeProfile", p.active_profile);
+        set_str(L, "followTarget", p.follow_target);
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "peers");
+
+    lua_createtable(L, static_cast<int>(snap.tracked_commands.size()), 0);
+    for (std::size_t i = 0; i < snap.tracked_commands.size(); ++i) {
+        const auto& c = snap.tracked_commands[i];
+        std::size_t ack_ok = 0;
+        std::size_t ack_fail = 0;
+        std::string last_msg = c.summary;
+        for (const auto& a : c.acks) {
+            if (a.ok) ++ack_ok;
+            else ++ack_fail;
+            if (!a.message.empty()) last_msg = a.message;
+        }
+        lua_createtable(L, 0, 9);
+        set_int(L, "seq", static_cast<lua_Integer>(c.seq));
+        set_str(L, "target", c.target);
+        set_str(L, "command", c.command);
+        set_str(L, "status", ipc::command_track_status_name(c.status));
+        set_int(L, "ackCount", static_cast<lua_Integer>(ack_ok));
+        set_int(L, "failCount", static_cast<lua_Integer>(ack_fail));
+        set_str(L, "detail", last_msg);
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "trackedCommands");
+
+    return 1;
+}
+
+int CommanderDo(lua_State* L) {
+    UiHost& h = host_of(L);
+    const char* action_c = luaL_checkstring(L, 1);
+    const char* target_c = luaL_optstring(L, 2, "");
+    const char* arg_c = luaL_optstring(L, 3, "");
+    if (plugin_code()) {
+        lua_pushboolean(L, 0);
+        lua_pushliteral(L, "Commander controls are player-controlled");
+        return 2;
+    }
+    if (!h.commander.command) {
+        lua_pushboolean(L, 0);
+        lua_pushliteral(L, "Commander bridge unavailable");
+        return 2;
+    }
+    auto& msg = plugin::lua_keep<std::string>(L);
+    msg.clear();
+    bool ok = false;
+    plugin::cxx_guard(L, [&] {
+        ok = h.commander.command(action_c ? std::string_view(action_c) : std::string_view{},
+                                 target_c ? std::string_view(target_c) : std::string_view{},
+                                 arg_c ? std::string_view(arg_c) : std::string_view{},
+                                 msg);
+    });
+    lua_pushboolean(L, ok ? 1 : 0);
+    if (!msg.empty()) {
+        lua_pushlstring(L, msg.data(), msg.size());
+        return 2;
+    }
+    return 1;
+}
+
 } // namespace
 
 void register_combat_api(lua_State* L, UiHost& host) {
     for (auto [name, fn] : std::initializer_list<std::pair<const char*, lua_CFunction>>{
              {"CombatStatus", CombatStatus},
              {"CombatDo", CombatDo},
+             {"CommanderStatus", CommanderStatus},
+             {"CommanderDo", CommanderDo},
          }) {
         lua_pushlightuserdata(L, &host);
         lua_pushcclosure(L, fn, 1);

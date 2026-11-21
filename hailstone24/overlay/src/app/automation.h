@@ -33,7 +33,8 @@
 #include "plugin/world_geometry.h"
 
 namespace hailstone::net { class GameConnection; }
-namespace hailstone::mq { class ScriptHost; class Registry; struct Context; }
+namespace hailstone::ipc { class SessionBusClient; }
+namespace hailstone::mq { class ScriptHost; class Registry; class RGMercsBridge; struct Context; }
 namespace hailstone::game { class ExtensionChain; class NameplateCanvasRegistry; }
 namespace hailstone::plugin { class UiBridge; class WebAccess; }
 namespace hailstone::nav { class NavControl; }
@@ -73,6 +74,7 @@ struct AutomationEnv {
     std::function<std::vector<plugin::AbilityBulkRow>()> ability_bulk;
     std::function<std::optional<bool>(std::uint32_t spawn)> can_see;
     std::function<std::optional<bool>(const std::array<float, 3>&, const std::array<float, 3>&)> line_of_sight;
+    ipc::SessionBusClient* ipc_bus = nullptr;
 };
 
 class Automation {
@@ -91,6 +93,7 @@ public:
     plugin::UiBridge& plugin_ui();
     // The script host (the Lua socials run there too) and MQ's TLOs and types.
     mq::ScriptHost& scripts();
+    mq::RGMercsBridge& rgmercs();
     const mq::Registry& registry() const;
     const mq::Context& context(); // what the TLOs read now
     // An owner's capabilities by its tag (plugin::UiBridge::owner_tag): "plugin:<name>" a compiled plugin's while it

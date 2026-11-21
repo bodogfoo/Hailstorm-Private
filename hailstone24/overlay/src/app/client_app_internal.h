@@ -516,8 +516,10 @@ public:
             if (!collision_) return std::nullopt;
             return collision_->line_of_sight(glm::vec3(a[0], a[1], a[2]), glm::vec3(b[0], b[1], b[2]));
         };
+        aenv.ipc_bus = &bus_;
         automation_ = std::make_unique<Automation>(aenv);
         combat_engine_ = std::make_unique<combat::CombatEngine>();
+        auto_headless_others_ = config_.get_bool("multibox.auto_headless_others", true);
         {
             const std::string bus_sock = !opts_.ipc_socket.empty()
                                              ? opts_.ipc_socket
@@ -534,30 +536,7 @@ public:
                 apply_execution_state(ctrl.desired_state);
             });
             bus_.set_on_command([this](const ipc::CommandPacket& cmd) {
-                ipc::CommandAckPacket ack;
-                ack.seq = cmd.seq;
-                if (cmd.command == "/estop" || cmd.command.rfind("/estop ", 0) == 0) {
-                    std::string msg;
-                    ack.ok = handle_combat_command("estop", {}, msg);
-                    ack.message = msg;
-                    return ack;
-                }
-                if (cmd.command == "/combat" || cmd.command.rfind("/combat ", 0) == 0) {
-                    std::string rest = cmd.command.size() > 7 ? cmd.command.substr(8) : std::string();
-                    run_slash_combat(rest);
-                    ack.ok = true;
-                    ack.message = "combat dispatched";
-                    return ack;
-                }
-                if (automation_) {
-                    automation_->run_command(cmd.command);
-                    ack.ok = true;
-                    ack.message = "dispatched";
-                } else {
-                    ack.ok = false;
-                    ack.message = "client command router unavailable";
-                }
-                return ack;
+                return handle_bus_command(cmd);
             });
             if (!bus_sock.empty() || !opts_.session_id.empty() || opts_.headless_bg ||
                 config_.get_bool("multibox.auto_connect_bus", true)) {
@@ -568,6 +547,9 @@ public:
         lua_ui_->add_ui_api([this](lua_State* L) { register_ui_api(L); });
         automation_->hooks().add_command(plugin::Hooks::kClient, "/lighting",
                                          [this](std::string_view args) { lighting_command(args); });
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/rgmercs", [this](std::string_view) {
+            if (ui_api_) ui_api_->toggle("RGMercsWnd");
+        });
         automation_->hooks().add_command(plugin::Hooks::kClient, "/switch", [this](std::string_view args) {
             while (!args.empty() && args.front() == ' ') args.remove_prefix(1);
             if (args.empty()) {
@@ -583,7 +565,7 @@ public:
                 return;
             }
             if (bus_.connected()) {
-                bus_.request_switch_foreground(std::string(args));
+                bus_.request_state_control(std::string(args), ExecutionState::ForegroundFull, auto_headless_others_);
             } else if (conn_) {
                 conn_->ui_message("[Hailstone24] Not connected to session bus; start hailstone24_broker.");
             }
@@ -1217,10 +1199,16 @@ private:
     ExecutionController execution_;
     ipc::SessionBusClient bus_;
     std::string session_id_;
+    bool auto_headless_others_ = true;
+    std::string active_commander_profile_;
     Clock::time_point last_telemetry_at_{};
     Clock::time_point last_drawn_time_{};
     void apply_execution_state(ExecutionState target);
     void publish_bus_telemetry();
+    ipc::CommandAckPacket handle_bus_command(const ipc::CommandPacket& cmd);
+    UiHost::CommanderStatusSnapshot commander_status();
+    bool handle_commander_command(std::string_view action, std::string_view target,
+                                  std::string_view arg, std::string& out_msg);
     std::unique_ptr<combat::CombatEngine> combat_engine_;
     combat::CombatSnapshot last_combat_snapshot_{};
     std::filesystem::path combat_char_dir_;

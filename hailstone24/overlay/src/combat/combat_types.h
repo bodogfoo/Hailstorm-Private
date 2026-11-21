@@ -149,6 +149,7 @@ struct KnownSpellInfo {
     std::uint32_t mana_cost = 0;
     float range = 200.0f;
     bool detrimental = false;
+    bool spell_data_missing = false;
 };
 
 struct ActiveBuffInfo {
@@ -324,6 +325,8 @@ enum class GemSyncKind : std::uint8_t {
     UnknownInBook,
     SlotLocked,
     UnusedSlot,
+    LevelRestricted,
+    MissingSpellData,
 };
 
 inline constexpr std::string_view gem_sync_kind_name(GemSyncKind k) noexcept {
@@ -334,6 +337,8 @@ inline constexpr std::string_view gem_sync_kind_name(GemSyncKind k) noexcept {
     case GemSyncKind::UnknownInBook: return "NotInBook";
     case GemSyncKind::SlotLocked: return "Locked";
     case GemSyncKind::UnusedSlot: return "Unused";
+    case GemSyncKind::LevelRestricted: return "LevelRestricted";
+    case GemSyncKind::MissingSpellData: return "MissingSpellData";
     }
     return "Unused";
 }
@@ -346,6 +351,8 @@ struct GemAuditEntry {
     int book_slot = -1;
     std::string current_spell_name;
     std::uint32_t current_spell_id = 0;
+    std::uint8_t required_level = 0;
+    std::string diagnostic;
     GemSyncKind status = GemSyncKind::UnusedSlot;
 };
 
@@ -354,6 +361,9 @@ struct LoadoutAudit {
     std::vector<std::string> missing_spells;
     std::vector<std::string> manually_changed_gems;
     std::vector<std::string> unknown_spells;
+    std::vector<std::string> level_restricted_spells;
+    std::vector<std::string> missing_spell_data;
+    std::vector<std::string> failed_memorizations;
     bool any_missing = false;
     bool any_manual_conflict = false;
 };

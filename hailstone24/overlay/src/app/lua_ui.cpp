@@ -2573,6 +2573,8 @@ int CascadeClick(lua_State* L) {
         if (StockWindow* w = m.window("ScriptsWnd")) w->set_shown(m.host, true);
     } else if (cmd && *cmd == kMenuCombat) {
         if (StockWindow* w = m.window("CombatWnd")) w->set_shown(m.host, true);
+    } else if (cmd && *cmd == kMenuRGMercs) {
+        if (StockWindow* w = m.window("RGMercsWnd")) w->set_shown(m.host, true);
     } else if (cmd && *cmd == kMenuWebBrowser) {
         if (StockWindow* w = m.window("BrowserWnd")) w->set_shown(m.host, true);
     } else if (cmd && *cmd >= kMenuPluginFirst) { // a plugin's entry: its command line, as the plugin
@@ -3202,6 +3204,7 @@ void UiApi::register_functions(lua_State* L) {
     register_ui_extensions(L, impl_->extensions_context);
     register_scripts_api(L, impl_->host);
     register_combat_api(L, impl_->host);
+    register_rgmercs_api(L, impl_->host);
     register_pregame_api(L, impl_->host, impl_->screens);
     static const luaL_Reg fns[] = {
         {"InGame", InGame}, {"UiReady", UiReady}, {"GameState", GameState}, {"Name", Name}, {"SlotName", SlotName},

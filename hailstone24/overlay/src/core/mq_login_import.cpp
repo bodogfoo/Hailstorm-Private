@@ -228,6 +228,7 @@ bool parse_autologin_ini(const std::filesystem::path& ini_path, std::vector<MqIm
     std::size_t sort_idx = 0;
 
     // 1) Check [Profiles] ProfileN=<SectionName> for _Blob or caret-delimited entries
+    std::vector<std::string> declared_groups;
     for (const std::string& key : active->keys("Profiles")) {
         const std::string val = trim_copy(active->get_string("Profiles", key));
         if (val.empty()) continue;
@@ -239,6 +240,8 @@ bool parse_autologin_ini(const std::filesystem::path& ini_path, std::vector<MqIm
             out_records.push_back(std::move(caret));
             continue;
         }
+
+        declared_groups.push_back(val);
 
         // Section referenced by ProfileN=<GroupSection>
         for (const std::string& gkey : active->keys(val)) {
@@ -256,19 +259,28 @@ bool parse_autologin_ini(const std::filesystem::path& ini_path, std::vector<MqIm
         }
     }
 
+    auto resolve_declared_group = [&](std::string_view sec) -> std::string {
+        for (const auto& g : declared_groups) {
+            if (iequals(sec, g)) return g;
+            if (sec.size() > g.size() + 1 &&
+                iequals(sec.substr(0, g.size()), g) &&
+                (sec[g.size()] == '_' || sec[g.size()] == '-')) {
+                return g;
+            }
+        }
+        return std::string(sec);
+    };
+
     // 2) SessionN or Account sections containing Password=
     for (const std::string& sec : active->sections()) {
         if (iequals(sec, "Settings") || iequals(sec, "Profiles")) continue;
         std::string pw = active->get_string(sec, "Password");
         if (pw.empty()) continue;
 
-        std::string account;
-        if (sec.size() >= 7 && iequals(std::string_view(sec).substr(0, 7), "Session")) {
-            account = trim_copy(active->get_string(sec, "StationName"));
-            if (account.empty()) account = trim_copy(active->get_string(sec, "Account"));
-        } else {
-            account = trim_copy(active->get_string(sec, "StationName"));
-            if (account.empty()) account = trim_copy(sec);
+        std::string account = trim_copy(active->get_string(sec, "StationName"));
+        if (account.empty()) account = trim_copy(active->get_string(sec, "Account"));
+        if (account.empty() && !(sec.size() >= 7 && iequals(std::string_view(sec).substr(0, 7), "Session"))) {
+            account = trim_copy(sec);
         }
         if (account.empty()) {
             core::wipe(pw);
@@ -276,7 +288,7 @@ bool parse_autologin_ini(const std::filesystem::path& ini_path, std::vector<MqIm
         }
 
         MqImportedAccount rec;
-        rec.profile_group = sec;
+        rec.profile_group = resolve_declared_group(sec);
         rec.account = std::move(account);
         rec.password = std::move(pw);
         rec.server_name = trim_copy(active->get_string(sec, "Server"));

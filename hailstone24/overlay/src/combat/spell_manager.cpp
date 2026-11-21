@@ -359,23 +359,39 @@ LoadoutAudit audit_loadout(const CombatSnapshot& snapshot, const CombatProfile& 
             slot.resolved_spell_id = known->spell_id;
             slot.resolved_spell_name = known->spell_name;
             slot.book_slot = known->book_slot;
+            slot.required_level = known->min_level;
 
-            const bool id_match = (slot.current_spell_id != 0 && slot.current_spell_id == known->spell_id);
-            const bool name_match = (slot.current_spell_id != 0 &&
-                                     spell_name_matches(slot.current_spell_name, desired->spell_name));
-            if (id_match || name_match) {
-                slot.status = GemSyncKind::Match;
-            } else if (slot.current_spell_id == 0) {
-                slot.status = GemSyncKind::EmptyMissing;
-                audit.any_missing = true;
-                audit.missing_spells.push_back(
-                    "Gem " + std::to_string(idx + 1) + ": " + known->spell_name);
+            if (known->spell_data_missing || known->spell_id == 0 || known->spell_name.empty()) {
+                slot.status = GemSyncKind::MissingSpellData;
+                slot.diagnostic = "Spell data incomplete in spellbook";
+                audit.missing_spell_data.push_back(
+                    "Gem " + std::to_string(idx + 1) + ": " + desired->spell_name + " (" + slot.diagnostic + ")");
+            } else if (known->min_level > 0 && snapshot.level > 0 && snapshot.level < known->min_level) {
+                slot.status = GemSyncKind::LevelRestricted;
+                slot.diagnostic = "Requires level " + std::to_string(known->min_level) +
+                                  " (character is level " + std::to_string(snapshot.level) + ")";
+                audit.level_restricted_spells.push_back(
+                    "Gem " + std::to_string(idx + 1) + ": " + known->spell_name + " (" + slot.diagnostic + ")");
             } else {
-                slot.status = GemSyncKind::ManuallyChanged;
-                audit.any_manual_conflict = true;
-                audit.manually_changed_gems.push_back(
-                    "Gem " + std::to_string(idx + 1) + ": " + slot.current_spell_name +
-                    " (desired: " + known->spell_name + ")");
+                const bool id_match = (slot.current_spell_id != 0 && slot.current_spell_id == known->spell_id);
+                const bool name_match = (slot.current_spell_id != 0 &&
+                                         spell_name_matches(slot.current_spell_name, desired->spell_name));
+                if (id_match || name_match) {
+                    slot.status = GemSyncKind::Match;
+                } else if (slot.current_spell_id == 0) {
+                    slot.status = GemSyncKind::EmptyMissing;
+                    slot.diagnostic = "Empty gem; eligible for auto-memorize when idle";
+                    audit.any_missing = true;
+                    audit.missing_spells.push_back(
+                        "Gem " + std::to_string(idx + 1) + ": " + known->spell_name);
+                } else {
+                    slot.status = GemSyncKind::ManuallyChanged;
+                    slot.diagnostic = "Manually changed to " + slot.current_spell_name;
+                    audit.any_manual_conflict = true;
+                    audit.manually_changed_gems.push_back(
+                        "Gem " + std::to_string(idx + 1) + ": " + slot.current_spell_name +
+                        " (desired: " + known->spell_name + ")");
+                }
             }
         } else {
             if (slot.current_spell_id != 0 &&
@@ -383,8 +399,14 @@ LoadoutAudit audit_loadout(const CombatSnapshot& snapshot, const CombatProfile& 
                 slot.resolved_spell_id = slot.current_spell_id;
                 slot.resolved_spell_name = slot.current_spell_name;
                 slot.status = GemSyncKind::Match;
+            } else if (snapshot.spellbook.empty()) {
+                slot.status = GemSyncKind::MissingSpellData;
+                slot.diagnostic = "Spellbook data not loaded";
+                audit.missing_spell_data.push_back(
+                    "Gem " + std::to_string(idx + 1) + ": " + desired->spell_name + " (spellbook not loaded)");
             } else {
                 slot.status = GemSyncKind::UnknownInBook;
+                slot.diagnostic = "Not scribed in spellbook";
                 audit.unknown_spells.push_back(
                     "Gem " + std::to_string(idx + 1) + ": " + desired->spell_name);
             }

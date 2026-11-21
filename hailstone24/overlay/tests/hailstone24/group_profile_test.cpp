@@ -283,3 +283,128 @@ TEST_CASE("GroupProfile: passwordless export from MQ AutoLogin import keeps cred
     CHECK(raw.find("SecretTwo!") == std::string::npos);
     CHECK(raw.find("Stabbinyah") != std::string::npos);
 }
+
+TEST_CASE("GroupProfile: built-in MQ Commander presets, extended slot fields INI/JSON roundtrip, and MQ profile INI import") {
+    test::ScratchDir dir("hs24_group_presets");
+    const fs::path profiles_dir = dir.path() / "profiles";
+    fs::create_directories(profiles_dir);
+
+    // 1. Named presets exist and generate valid, password-free profiles.
+    const auto names = core::default_group_profile_preset_names();
+    REQUIRE(names.size() == 5);
+    for (const auto& preset_name : names) {
+        const auto p = core::make_named_group_profile_preset(preset_name, "ez_login", "EZ Server");
+        CHECK(p.preset_kind == preset_name);
+        CHECK_FALSE(p.slots.empty());
+        const fs::path ini_out = profiles_dir / (p.id + ".ini");
+        const fs::path json_out = profiles_dir / (p.id + ".json");
+        std::string err;
+        REQUIRE(core::save_group_profile_ini(p, ini_out, &err));
+        REQUIRE(core::save_group_profile_json(p, json_out, &err));
+
+        core::GroupProfile from_ini, from_json;
+        REQUIRE(core::load_group_profile(ini_out, from_ini, &err));
+        REQUIRE(core::load_group_profile(json_out, from_json, &err));
+        CHECK(from_ini.preset_kind == preset_name);
+        CHECK(from_json.preset_kind == preset_name);
+        CHECK(from_ini.slots.size() == p.slots.size());
+        CHECK(from_json.slots.size() == p.slots.size());
+        CHECK(slurp(ini_out).find("password") == std::string::npos);
+        CHECK(slurp(json_out).find("password") == std::string::npos);
+    }
+
+    // 2. Extended slot fields (follow_target, combat_profile, script_module, script_settings, spell_loadout) round-trip.
+    core::GroupProfile custom;
+    custom.id = "ez_custom";
+    custom.name = "EZ Custom";
+    custom.preset_kind = "Melee Group";
+    custom.default_server_id = "ez_login";
+    custom.default_world = "EZ Server";
+    core::GroupSlot rog;
+    rog.slot_number = 1;
+    rog.launch_order = 1;
+    rog.character = "Stabbinyah";
+    rog.account = "pumpkin";
+    rog.class_role = "ROG";
+    rog.follow_target = "Yavaha";
+    rog.combat_profile = "MeleeDPS";
+    rog.script_module = "rgmercs";
+    rog.script_settings = "rog_ez_default";
+    rog.spell_loadout = "MeleeUtility";
+    rog.headless = false;
+    custom.slots.push_back(rog);
+
+    const fs::path custom_ini = profiles_dir / "ez_custom.ini";
+    const fs::path custom_json = profiles_dir / "ez_custom.json";
+    REQUIRE(core::save_group_profile_ini(custom, custom_ini));
+    REQUIRE(core::save_group_profile_json(custom, custom_json));
+
+    core::GroupProfile loaded_ini, loaded_json;
+    REQUIRE(core::load_group_profile(custom_ini, loaded_ini));
+    REQUIRE(core::load_group_profile(custom_json, loaded_json));
+    for (const auto* lp : {&loaded_ini, &loaded_json}) {
+        REQUIRE(lp->slots.size() == 1);
+        CHECK(lp->slots[0].follow_target == "Yavaha");
+        CHECK(lp->slots[0].combat_profile == "MeleeDPS");
+        CHECK(lp->slots[0].script_module == "rgmercs");
+        CHECK(lp->slots[0].script_settings == "rog_ez_default");
+        CHECK(lp->slots[0].spell_loadout == "MeleeUtility");
+    }
+
+    // 3. Import MacroQuest profile INI preserving extended slot metadata while stripping passwords.
+    const fs::path mq_ini = dir.path() / "MQProfiles.ini";
+    {
+        std::ofstream out(mq_ini);
+        out << "[Profiles]\n"
+            << "Group1=CasterBox\n\n"
+            << "[CasterBox_1]\n"
+            << "Server=EZ Server\n"
+            << "Account=tankacct\n"
+            << "Password=SuperSecretPassword1\n"
+            << "Character=Yavaha\n"
+            << "Class=WAR\n"
+            << "CombatProfile=Tank\n"
+            << "Script=rgmercs\n"
+            << "Headless=0\n"
+            << "Order=1\n\n"
+            << "[CasterBox_2]\n"
+            << "Server=EZ Server\n"
+            << "Account=casteracct\n"
+            << "Password=SuperSecretPassword2\n"
+            << "Character=Noro's Son\n"
+            << "Class=MAG\n"
+            << "Follow=Yavaha\n"
+            << "CombatProfile=CasterDPS\n"
+            << "Script=rgmercs\n"
+            << "ScriptSettings=mag_burn\n"
+            << "SpellLoadout=NukeAndPet\n"
+            << "Headless=1\n"
+            << "Order=2\n";
+    }
+
+    const fs::path imported_dir = dir.path() / "imported_profiles";
+    std::vector<fs::path> written;
+    std::vector<std::string> warnings;
+    REQUIRE(core::import_mq_profiles_from_ini(mq_ini, "ez_login", "EZ Server", imported_dir, written, &warnings));
+    REQUIRE(written.size() == 1);
+
+    const std::string imported_raw = slurp(written[0]);
+    CHECK(imported_raw.find("SuperSecretPassword1") == std::string::npos);
+    CHECK(imported_raw.find("SuperSecretPassword2") == std::string::npos);
+    CHECK(imported_raw.find("password") == std::string::npos);
+
+    core::GroupProfile imported;
+    REQUIRE(core::load_group_profile(written[0], imported));
+    REQUIRE(imported.slots.size() == 2);
+    CHECK(imported.slots[0].character == "Yavaha");
+    CHECK(imported.slots[0].combat_profile == "Tank");
+    CHECK_FALSE(imported.slots[0].headless);
+    CHECK(imported.slots[1].character == "Noro's Son");
+    CHECK(imported.slots[1].follow_target == "Yavaha");
+    CHECK(imported.slots[1].combat_profile == "CasterDPS");
+    CHECK(imported.slots[1].script_module == "rgmercs");
+    CHECK(imported.slots[1].script_settings == "mag_burn");
+    CHECK(imported.slots[1].spell_loadout == "NukeAndPet");
+    CHECK(imported.slots[1].headless);
+}
+

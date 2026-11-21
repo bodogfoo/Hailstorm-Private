@@ -821,3 +821,79 @@ TEST_CASE("CombatEngine: set_follow_target toggles Follow movement mode safely")
     CHECK(engine.profile().follow_target.empty());
     CHECK(engine.profile().movement_mode == MovementMode::None);
 }
+
+TEST_CASE("SpellManager & CombatEngine: level restriction, missing spell data, idle-only auto-restore, and truthful failed memorization") {
+    CombatProfile profile = default_combat_profile_for_class("NEC");
+    profile.auto_loadout = false;
+    profile.rememorize_missing = true;
+
+    CombatSnapshot snap = make_nec_snapshot(1000);
+    snap.level = 45;
+    snap.in_combat = false;
+
+    // Slot 0: missing gem whose known spellbook entry requires level 60 (> player level 45) -> LevelRestricted!
+    snap.gems[0].spell_id = 0;
+    snap.gems[0].spell_name.clear();
+    snap.spellbook[0].min_level = 60;
+
+    // Slot 1: missing gem whose known spellbook entry has missing spell data -> MissingSpellData!
+    snap.gems[1].spell_id = 0;
+    snap.gems[1].spell_name.clear();
+    snap.spellbook[1].spell_data_missing = true;
+
+    // Slot 2: missing gem that IS valid and memorizable (Engulfing Darkness, book_slot 2, req level 30)
+    snap.gems[2].spell_id = 0;
+    snap.gems[2].spell_name.clear();
+    snap.spellbook[2].min_level = 30;
+
+    // Slot 3: desired spell changed to a non-existent spell -> UnknownInBook
+    profile.loadout[3].spell_name = "NonExistentPhantomSpell";
+    snap.gems[3].spell_id = 0;
+    snap.gems[3].spell_name.clear();
+
+    const LoadoutAudit audit = audit_loadout(snap, profile);
+    CHECK(audit.slots[0].status == GemSyncKind::LevelRestricted);
+    CHECK(audit.slots[0].required_level == 60);
+    CHECK_FALSE(audit.level_restricted_spells.empty());
+
+    CHECK(audit.slots[1].status == GemSyncKind::MissingSpellData);
+    CHECK_FALSE(audit.missing_spell_data.empty());
+
+    CHECK(audit.slots[2].status == GemSyncKind::EmptyMissing);
+    CHECK(audit.slots[3].status == GemSyncKind::UnknownInBook);
+    CHECK_FALSE(audit.unknown_spells.empty());
+
+    // Plan only includes slot 2 — never attempts to memorize LevelRestricted, MissingSpellData, or UnknownInBook.
+    const RememorizePlan plan = plan_rememorize(snap, profile, audit, false);
+    CHECK(plan.allowed);
+    REQUIRE(plan.slots_to_memorize.size() == 1);
+    CHECK(plan.slots_to_memorize[0].gem_index == 2);
+
+    // CombatEngine idle auto-restore triggers out-of-combat when running & idle, and reports failed memorization truthfully
+    // if the spell fails to land in the gem after the confirmation window!
+    CombatEngine engine;
+    engine.set_profile(profile);
+    engine.start("Idle auto-restore test");
+    RecordedActions actions;
+
+    // Tick 1 (idle, out of combat): requests memorization of slot 2.
+    snap.now_ms = 1000;
+    engine.tick(snap, actions);
+    CHECK((!actions.memorized_single.empty() || !actions.memorized_batch.empty()));
+
+    // Server/client never applies the gem change; after 5 seconds engine MUST report failed_memorizations truthfully.
+    snap.now_ms = 7000;
+    engine.tick(snap, actions);
+    const CombatStatusSnapshot st = engine.status_snapshot(&snap);
+    CHECK_FALSE(st.loadout_audit.failed_memorizations.empty());
+    CHECK_FALSE(st.loadout_audit.level_restricted_spells.empty());
+    CHECK_FALSE(st.loadout_audit.missing_spell_data.empty());
+
+    // Once the spell actually lands in the gem, failed_memorizations clears cleanly.
+    snap.gems[2].spell_id = 1005;
+    snap.gems[2].spell_name = "Engulfing Darkness";
+    snap.now_ms = 8000;
+    engine.tick(snap, actions);
+    CHECK(engine.status_snapshot(&snap).loadout_audit.failed_memorizations.empty());
+}
+
