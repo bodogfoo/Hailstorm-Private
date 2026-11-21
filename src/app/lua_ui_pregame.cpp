@@ -849,6 +849,9 @@ int LoginDo(lua_State* L) {
     } else if (what == "stopGroup") {
         ok = !v.transient;
         if (ok) action = A::StopGroup;
+    } else if (what == "forceStopGroup") {
+        ok = !v.transient;
+        if (ok) action = A::ForceStopGroup;
     } else if (what == "relaunchGroup") {
         ok = !v.transient && v.group_selected >= 0 && !v.group_slots.empty();
         if (ok) action = A::RelaunchGroup;

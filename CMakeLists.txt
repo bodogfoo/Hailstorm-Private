@@ -321,6 +321,7 @@ add_library(hailstone_engine STATIC
   src/platform/gpu_ipc.cpp
   src/platform/gpu_external_memory.cpp
   src/platform/process.cpp
+  src/platform/process_identity.cpp
   src/game/eq_names.cpp
   src/ui/font_faces.cpp
   src/ui/imgui_layer.cpp
@@ -1360,6 +1361,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/combat_test.cpp
     tests/hailstone24/combat_controller_test.cpp
     tests/hailstone24/companion_call_test.cpp
+    tests/hailstone24/process_identity_test.cpp
     tests/hailstone24/rgmercs_trusted_loader_test.cpp
     tests/hailstone24/rgmercs_native_ui_test.cpp
     tests/pet_combat_chat_test.cpp

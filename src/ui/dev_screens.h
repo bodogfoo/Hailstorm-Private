@@ -273,7 +273,7 @@ enum class LoginAction {
     AddonInspect, AddonInstall, AddonCancel, AddonUpdate, AddonRemove, AddonAuto, AddonFolder, AddonPage, AddonCheck,
     AddonRevoke, AddonAskAgain, AddonSuggestLook, AddonSuggestLater, AddonSuggestNever, AddonBrowse, AddonStoreLook,
     AddonStart, ResumeToken, AddonEnabled,
-    SelectGroupProfile, LaunchGroup, LaunchGroupSlot, StopGroup, RelaunchGroup, RefreshGroupProfiles
+    SelectGroupProfile, LaunchGroup, LaunchGroupSlot, StopGroup, ForceStopGroup, RelaunchGroup, RefreshGroupProfiles
 };
 
 // A row of the login screen's Characters list: a character one of the server's accounts was seen to have.

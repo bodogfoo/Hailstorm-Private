@@ -884,6 +884,8 @@ LoginAction login_screen(LoginView& view) {
                 ImGui::SameLine();
                 if (ImGui::Button("Stop group")) action = LoginAction::StopGroup;
                 ImGui::SameLine();
+                if (ImGui::Button("Force stop all")) action = LoginAction::ForceStopGroup;
+                ImGui::SameLine();
                 if (ImGui::Button("Relaunch")) action = LoginAction::RelaunchGroup;
                 ImGui::EndGroup();
             }

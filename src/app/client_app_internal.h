@@ -1315,6 +1315,10 @@ private:
     Clock::time_point server_hint_at_{};
     std::vector<std::string> worlds_noted_; // the worlds the login server listed, as set_listed_worlds() last had them
     platform::ChildProcesses box_clients_; // the box set's other windows
+    // "Force stop all" needs a second press inside this window: the first only arms it, so a stray click cannot
+    // SIGKILL a group (app/client_app_login.cpp force_stop_group).
+    bool force_stop_armed_ = false;
+    Clock::time_point force_stop_armed_at_{};
     platform::ChildProcesses tools_;       // the tool add-ons the player started (left running when Hailstone quits)
     bool explicit_account_arg_ = false;
     bool explicit_autologin_arg_ = false;

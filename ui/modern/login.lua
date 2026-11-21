@@ -484,6 +484,8 @@ local function groupProfilesCard(view, s, bh)
     ui.SameLine()
     if P.Danger("Stop group", 0, bh, true) then API.pregame.LoginDo("stopGroup") end
     ui.SameLine()
+    if P.Danger("Force stop all", 0, bh, true) then API.pregame.LoginDo("forceStopGroup") end
+    ui.SameLine()
     if ui.Button("Relaunch group", 0, bh) then API.pregame.LoginDo("relaunchGroup") end
   else
     ui.Dummy(0, 4 * s)

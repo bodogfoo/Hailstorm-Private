@@ -10,6 +10,8 @@
 #include "core/ascii_case.h"
 #include "core/asset_folder.h"
 #include "net/server_files.h"
+#include "platform/executable_path.h"
+#include "platform/process_identity.h"
 #include "ui/ui_ini.h"
 #include "platform/open_folder.h"
 #include "plugin/policy.h"
@@ -260,6 +262,8 @@ void ClientApp::note_entered_character(const std::string& name) {
 }
 
 void ClientApp::login_action(ui::LoginAction action) {
+    // Any other login action cancels a "force stop all" the player armed and did not confirm.
+    if (action != ui::LoginAction::ForceStopGroup) force_stop_armed_ = false;
     switch (action) {
     case ui::LoginAction::ResumeToken:
         if (!login_view_.busy) start_session_login();
@@ -293,6 +297,9 @@ void ClientApp::login_action(ui::LoginAction action) {
         break;
     case ui::LoginAction::StopGroup:
         stop_group();
+        break;
+    case ui::LoginAction::ForceStopGroup:
+        force_stop_group();
         break;
     case ui::LoginAction::RelaunchGroup:
         relaunch_group();
@@ -1675,6 +1682,62 @@ void ClientApp::stop_group() {
     refresh_group_slot_statuses(true);
     if (count > 0) login_view_.status = {std::format("Stopped {} running group client(s).", count), false};
     else login_view_.status = {"No group clients launched by this window are running.", false};
+}
+
+void ClientApp::force_stop_group() {
+    // Two steps on purpose: the first press only arms the kill. A roster entry outlives the process it describes,
+    // and a reused PID would otherwise make "force stop" signal an unrelated program, so nothing is signalled
+    // until the second press and until platform::verify_session_process() agrees the process still is that client.
+    constexpr auto kArmWindow = std::chrono::seconds(5);
+    std::vector<std::string> ids;
+    if (active_group_profile_) {
+        for (const auto& slot : active_group_profile_->slots)
+            if (!slot.session_id.empty()) ids.push_back(slot.session_id);
+    }
+    if (!force_stop_armed_ || Clock::now() - force_stop_armed_at_ > kArmWindow) {
+        force_stop_armed_ = true;
+        force_stop_armed_at_ = Clock::now();
+        login_view_.status = {std::format(
+                                  "Force stop: press again within 5 s to SIGKILL {} verified group session(s).",
+                                  ids.size()),
+                              false};
+        return;
+    }
+    force_stop_armed_ = false;
+
+    std::size_t killed = 0;
+    std::size_t skipped = 0;
+    std::string first_refusal;
+#if !defined(_WIN32)
+    const auto exe = platform::process_executable_path();
+    const std::string program = exe ? exe->filename().string() : std::string{};
+    if (bus_.connected() && !program.empty()) {
+        for (const auto& peer : bus_.cached_roster()) {
+            if (!peer.online || peer.pid == 0) continue;
+            const bool match = std::any_of(ids.begin(), ids.end(), [&](const std::string& id) {
+                return iequals(id, peer.session_id);
+            });
+            if (!match) continue;
+            std::string why;
+            if (platform::kill_verified_session_process(peer.pid, peer.session_id, program, &why)) {
+                ++killed;
+            } else {
+                ++skipped;
+                if (first_refusal.empty()) first_refusal = std::format("{}: {}", peer.session_id, why);
+            }
+        }
+    }
+#endif
+    box_clients_.stop_all();
+    refresh_group_slot_statuses(true);
+    if (skipped > 0) {
+        login_view_.status = {std::format("Force-stopped {} verified group session(s); {} left alone ({}).", killed,
+                                          skipped, first_refusal),
+                              false};
+    } else {
+        login_view_.status = {std::format("Force-stopped {} verified group session(s); relaunch is now safe.", killed),
+                              false};
+    }
 }
 
 void ClientApp::relaunch_group() {
