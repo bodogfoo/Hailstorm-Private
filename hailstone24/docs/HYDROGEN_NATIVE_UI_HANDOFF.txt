@@ -1,0 +1,107 @@
+Project Hailstone 24 — Native RG Mercs UI Handoff
+
+Objective
+Build a native Hailstone ImGui interface based on the RG Mercs UI workflow, instead of continuing to emulate every MacroQuest/RG Mercs UI API.
+
+Current status
+The RG Mercs Lua script is discovered and autoruns for Stabbinyah on EZ Server. Database migration now succeeds. The remaining failures are UI compatibility failures, including missing or mismatched APIs such as:
+
+- ImHashStr
+- ImGui.GetStyleColorName
+- ImGuiStyleVar enumeration metadata
+- IM_COL32
+- Zep.Editor:CreateBuffer
+- ImGui.GetFont / GetFontSize
+- ImGui.GetIO().DisplaySize / DeltaTime
+- ImGui.GetForegroundDrawList
+- ImGui.Dummy(ImVec2(...)) argument shape
+
+These should not be chased indefinitely as individual shims. Replace the RG Mercs presentation layer with Hailstone-native UI code.
+
+Desired UI
+
+1. Main window
+- RG Mercs-style main window titled RGMercs.
+- Clear running/stopped/error state.
+- Start, stop, pause, and reload controls.
+- Character and server shown in the header.
+- Status and recent error messages visible without opening the game chat.
+
+2. Configuration navigation
+- Tabs or sidebar sections for:
+  Combat
+  Targeting
+  Healing
+  Buffs
+  Debuffs
+  Movement
+  Loot
+  Class settings
+  Debug/logging
+- Preserve RG Mercs terminology where useful so existing users recognize the controls.
+
+3. Settings
+- Read existing RG Mercs SQLite settings when possible.
+- If direct database compatibility is unsafe or too complex, provide a one-time import/conversion step.
+- Store new settings in Hailstone’s character/server configuration area.
+- Never write outside the Hailstone data/config root.
+
+4. Debug window
+- Native scrolling log panel.
+- Clear and copy controls.
+- Error banner when the script or module fails.
+- No dependency on Zep editor APIs.
+
+5. Rendering
+- Use the existing Hailstone Lua ImGui bindings and native Hailstone UI conventions.
+- Use ordinary ImVec2 arguments expected by the bindings.
+- Do not require MacroQuest globals such as IM_COL32 or ImHashStr.
+- Do not require ImGui foreground draw-list userdata unless Hailstone explicitly exposes it.
+- Keep animation optional; a stable static UI is preferable to a failing animated loader.
+
+Compatibility boundary
+
+Keep RG Mercs gameplay/module logic separate from the presentation layer. The goal is not to rewrite combat logic. The native UI should call a small Hailstone-facing adapter for:
+
+- Reading current module state
+- Updating settings
+- Starting/stopping modules
+- Receiving status/error events
+- Saving settings
+
+Acceptance criteria
+
+- Hailstone launches and auto-logs into Stabbinyah.
+- RG Mercs autoruns without an immediate Lua error.
+- The native RGMercs window opens and remains usable.
+- At least the Combat, Targeting, Healing, and Debug sections load.
+- Settings survive a restart.
+- No required API comes from the old Zep, ImGui compatibility, or MacroQuest-only UI surface.
+- Existing RG Mercs configuration is either loaded or clearly offered for migration.
+
+Relevant repository
+
+Private GitHub repository:
+https://github.com/bodogfoo/Hailstorm-Private
+
+Active branch:
+hailstone24-rgmercs-compat
+
+Latest compatibility work is already pushed there, but the preferred next change is the native UI described above rather than adding more one-off compatibility shims.
+
+Runtime paths
+
+Client checkout:
+/home/john/src/hailstone24-auto-src
+
+Hailstone data:
+/home/john/.local/share/hailstone24
+
+RG Mercs script:
+/home/john/.local/share/hailstone24/scripts/rgmercs
+
+Character:
+Stabbinyah
+
+Server:
+EZ Server / ez-server

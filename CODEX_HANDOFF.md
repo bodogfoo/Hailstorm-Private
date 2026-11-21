@@ -1,0 +1,14 @@
+# Project Hailstone 24 — Ubuntu Workstation Build & Validation Handoff
+
+See `hailstone24/CODEX_HANDOFF.md` for full build commands, two-client launch instructions, changed files list, verified test counts, and container limitations.
+
+## Summary
+- **MQ Commander & Multibox Control Layer (`hailstone24/overlay/` & `hailstone24/hailstone24.patch`)**: Extended Hailstone 24 over upstream `projecthailstone/hailstone-client` (`61e5135f78c6b492ad88ac029a469fee114f60cb`) with the **Players / Clients** live/headless tab switcher, group & per-client Commander controls (`SessionBus` ACKs/timeouts/failures, server-authorized safe teleports only), Hailstone-native group profiles (`Main Tank`, `Caster Group`, `Melee Group`, `Raid`, `Solo`), automatic out-of-combat spell loadout restoration with manual gem protection, and native `RGMercsWnd` / `CombatWnd` integration.
+- **Fixes Applied & Verified This Pass**:
+  - `src/mq/lua_mq.cpp` & `src/mq/lua_compat_modules.cpp`: Enforced disk-first add-on capability-ceiling checks (`ModuleFile::refused` before preload fallback) in `find_module` and gated `_G.io` exposure to `rgmercs` so standard Hailstone scripts keep `_G.io == nil`.
+  - `src/mq/lua_hailstone.cpp`: Fixed `lua_keep` stack ordering in `l_rgmercs_get_setting`, `l_rgmercs_get_settings`, `l_rgmercs_get_state`, and `l_rgmercs_take_pending_changes` so tables/values (rather than userdata keep boxes) are returned to Lua.
+  - `src/mq/rgmercs_bridge.cpp`: Restored typed defaults (`AutoAssistAt`, `MaxHealPct`, `BuffManaPct`, `PullRange`) so out-of-range clamping and malformed-numeric import warnings work properly.
+  - `src/ui/dev_screens.cpp`: Trimmed whitespace in `is_favorite_world` so `server_list_order` pins trimmed favorite worlds cleanly.
+  - `tests/hailstone24/rgmercs_trusted_loader_test.cpp` & `tests/hailstone24/rgmercs_native_ui_test.cpp`: Aligned assertions with reaped exited scripts (`last_outcome`), strict `[scripts]\nplayer = on` add-on ceiling policy, typed int `TriggerErr`/`FailNow`, `CommanderDo` capability mask (`kCapActions | kCapCommands | kCapMove`), `API.commander` usage in `combat.lua`, and leak-free `lua_close`.
+- **Verification**: All 13 C++ ASan+UBSan+LSan test binaries run under `umask 0002` passed (`mq_lua_test` 74/74, `rgmercs_trusted_loader_test` 5/5, `rgmercs_native_ui_test` 3/3, `combat_controller_test` 9/9, `execution_state_test` 2/2, `group_profile_test` 4/4, `login_autoselect_test` 3/3, `mq_login_import_test` 2/2, `session_bus_test` 2/2, `shared_file_test` 8/8, `animation_frames_test` 11/11, `appearance_test` 15/15 with 4 `EQ_GAME_DIR`-gated skips, `lua_ui_contract_test` 6/6), all 5 Python CI checks + 15 Python unit tests passed, and `git apply --check hailstone24/hailstone24.patch` passed against `61e5135f`.
+- **Workbench Dev Server**: Fixed Vite 8 HMR/WebSocket configuration in `server.ts` (`allowedHosts: true`, `ws: { server: httpServer }`, `hmr: !disableHmr`).
