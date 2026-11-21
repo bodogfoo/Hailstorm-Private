@@ -201,5 +201,7 @@ scratch path pushes it past the 108-byte `sun_path` limit, so they fail for an e
 ## Last verified build
 
 The numbers in "Build and test state" are the last verified build: Release, 1656/1656 targets,
-exit 0, and the full suite green (4000/4000 cases) on the branch tip that this document is
-committed on.
+exit 0, and the full suite green (4000/4000 cases) on `c5e2751b` — the tree the suite was run on. The
+two commits after it touch only this document and `tools/sync_wiki.py`'s PAGES list, so no compiled
+source changed; the wiki check they fix (`python3 tools/sync_wiki.py --check`) exits 0 and writes 45
+pages.
