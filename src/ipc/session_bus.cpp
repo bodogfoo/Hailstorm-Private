@@ -926,6 +926,11 @@ struct SessionBusServer::Impl {
         Peer* chosen = nullptr;
         for (auto& p : peers) {
             if (is_controller_id(p.session_id)) continue;
+            // A disconnected peer can leave a final snapshot in the roster while a
+            // replacement process with the same session id is already connected.
+            // Tab switching must resolve only against a live peer, otherwise the
+            // stale entry absorbs the request and the visible client never changes.
+            if (!p.snapshot.online) continue;
             if (ieq(p.session_id, ctrl.target_session) || ieq(p.snapshot.character_name, ctrl.target_session)) {
                 chosen = &p;
                 break;
