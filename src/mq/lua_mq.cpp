@@ -1289,6 +1289,27 @@ int l_load_trusted_script(lua_State* L) {
     return 3;
 }
 
+// Sandbox-compatible load(string [, chunkname [, mode [, env]]]). This compiles caller-supplied text only;
+// filesystem loading remains exclusively behind loadfile/dofile and the trusted-root policy.
+int l_load_text(lua_State* L) {
+    std::size_t size = 0;
+    const char* source = luaL_checklstring(L, 1, &size);
+    const char* chunk = luaL_optstring(L, 2, "=(load)");
+    const char* mode = luaL_optstring(L, 3, "t");
+    if (std::string_view(mode) != "t") {
+        lua_pushnil(L);
+        lua_pushliteral(L, "load: only text chunks are allowed");
+        return 2;
+    }
+    if (luaL_loadbufferx(L, source, size, chunk, "t") != LUA_OK) return 1;
+    if (!lua_isnoneornil(L, 4)) {
+        luaL_checktype(L, 4, LUA_TTABLE);
+        lua_pushvalue(L, 4);
+        lua_setupvalue(L, -2, 1);
+    }
+    return 1;
+}
+
 // The module file `given` names, next to the script or in the script directories, allowed by the server's rules like
 // the script. Calls no Lua.
 void search_module(Script& s, std::string_view given, ModuleFile& out) {
@@ -1474,7 +1495,7 @@ int l_require(lua_State* L) {
 
 // The Lua half of the mq module and MQ's ImGui table over the client's `ui` (ui/lua/lua_imgui.cpp).
 constexpr const char* kPrelude = R"lua(
-local mq, load_config, load_trusted = ...
+local mq, load_config, load_trusted, load_text = ...
 
 -- loadfile(path [, mode [, env]]) / dofile(path):
 --   * Approved script-root files (e.g. RG Mercs class_configs/*.lua) are loaded via the separate trusted-script
@@ -1520,6 +1541,7 @@ do
         return f()
     end
 end
+load = load_text
 local yield = coroutine.yield
 
 function mq.delay(t, cond)
@@ -2086,7 +2108,8 @@ bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
     lua_insert(L, -2);
     lua_pushcfunction(L, l_load_config);         // restricted data-only loader for mq.configDir
     lua_pushcfunction(L, l_load_trusted_script); // separate trusted-script loader for approved script roots
-    if (lua_pcall(L, 3, 0, 0) != LUA_OK) {
+    lua_pushcfunction(L, l_load_text);           // text-only string compiler for script compatibility
+    if (lua_pcall(L, 4, 0, 0) != LUA_OK) {
         std::string err = lua_tostring(L, -1);
         sc.close();
         why = "internal error: " + err;

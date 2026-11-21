@@ -1116,6 +1116,13 @@ int GetItemRect(lua_State *L) {
 	return 4;
 }
 int GetStyleAlpha(lua_State *L) { lua_pushnumber(L, ImGui::GetStyle().Alpha); return 1; }
+int GetStyleColorName(lua_State *L) {
+	const int idx = luaL_checkinteger(L, 1);
+	if (idx < 0 || idx >= ImGuiCol_COUNT) { lua_pushnil(L); return 1; }
+	const char* name = ImGui::GetStyleColorName(static_cast<ImGuiCol>(idx));
+	lua_pushstring(L, name ? name : "<Unused>");
+	return 1;
+}
 // ui.DrawRect(x0, y0, x1, y1, r, g, b, a [, rounding [, thickness]])  ui.DrawRectFilled(... same, no thickness)
 // ui.Foreground(on)   -- the Draw* functions draw above every window (ImGui's foreground list) until turned off;
 // reset each frame
@@ -1346,7 +1353,7 @@ bool pack_code(lua_State *L) {
 bool ContextOnly(std::string_view name) {
 	// These operations use context state, not a live window or its draw list. They remain
 	// valid between frames; scoped stack changes and current-window queries do not.
-	for (const char* allowed : {"GetIO", "GetTime", "GetFrameCount", "GetStyleAlpha", "GetMousePos",
+	for (const char* allowed : {"GetIO", "GetTime", "GetFrameCount", "GetStyleAlpha", "GetStyleColorName", "GetMousePos",
 		"IsMouseDoubleClicked", "IsMouseClicked", "IsMouseReleased", "IsMouseDown", "IsMouseDragging",
 		"IsKeyDown", "IsKeyPressed", "GetItemID", "GetItemRect", "IsItemActive", "IsItemDisabled",
 		"IsItemFocused", "IsItemDeactivatedAfterEdit", "IsWindowAppearing", "FindWindowRect", "SetWindowFocus",
@@ -1392,7 +1399,7 @@ void register_ui_api(lua_State *L) {
 		{"EndDragDropSource", EndDragDropSource}, {"BeginDragDropTarget", BeginDragDropTarget},
 		{"AcceptDragDropPayload", AcceptDragDropPayload}, {"EndDragDropTarget", EndDragDropTarget},
 		{"PushStyleColor", PushStyleColor}, {"PopStyleColor", PopStyleColor}, {"PushStyleVar", PushStyleVar},
-		{"PushStyleColors", PushStyleColors}, {"PushStyleVars", PushStyleVars},
+		{"PushStyleColors", PushStyleColors}, {"PushStyleVars", PushStyleVars}, {"GetStyleColorName", GetStyleColorName},
 		{"PopStyleVar", PopStyleVar}, {"GetItemRect", GetItemRect}, {"GetStyleAlpha", GetStyleAlpha}, {"DrawRect", DrawRect}, {"DrawRectGradient", DrawRectGradient},
 		{"DrawLine", DrawLine}, {"DrawCircleFilled", DrawCircleFilled}, {"DrawCircle", DrawCircle},
 		{"DrawTriangleFilled", DrawTriangleFilled},
