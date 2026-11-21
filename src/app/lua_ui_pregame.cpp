@@ -426,6 +426,46 @@ void emit_login(Out& o, const ui::LoginView& v) {
     o.str("assetsDir", ui::selected_assets_dir(v).string());
     o.integer("boxCount", static_cast<lua_Integer>(ui::box_accounts(v).size()));
     o.boolean("boxReady", ui::box_ready(v));
+    // MacroQuest-style group/box profiles. Keep these in the login view so
+    // the Lua login dialog can display and launch the profiles discovered by
+    // ClientApp::reload_group_profiles().
+    o.str("profilesDir", v.profiles_dir.string());
+    o.table();
+    for (std::size_t i = 0; i < v.group_profiles.size(); ++i) {
+        const auto& p = v.group_profiles[i];
+        o.table();
+        o.str("id", p.id);
+        o.str("name", p.name);
+        o.str("description", p.description);
+        o.str("sourcePath", p.source_path);
+        o.integer("slotCount", static_cast<lua_Integer>(p.slot_count));
+        o.close(i);
+    }
+    o.close("groupProfiles");
+    o.integer("groupSelected", v.group_selected >= 0 ? v.group_selected + 1 : 0);
+    o.integer("groupSlotSelected", v.group_slot_selected >= 0 ? v.group_slot_selected + 1 : 0);
+    o.table();
+    for (std::size_t i = 0; i < v.group_slots.size(); ++i) {
+        const auto& s = v.group_slots[i];
+        o.table();
+        o.integer("slotNumber", s.slot_number);
+        o.integer("launchOrder", s.launch_order);
+        o.boolean("enabled", s.enabled);
+        o.str("sessionId", s.session_id);
+        o.str("character", s.character);
+        o.str("account", s.account);
+        o.str("serverId", s.server_id);
+        o.str("world", s.world);
+        o.str("classRole", s.class_role);
+        o.str("settingsPath", s.settings_path);
+        o.boolean("autoLogin", s.auto_login);
+        o.boolean("headless", s.headless);
+        o.str("status", s.status);
+        o.str("zone", s.zone);
+        o.boolean("online", s.online);
+        o.close(i);
+    }
+    o.close("groupSlots");
 }
 
 // view = hs.LoginScreen([revision])   -- nil unless the client shows its login screen; reading it draws the screen
