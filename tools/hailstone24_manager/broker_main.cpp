@@ -412,6 +412,9 @@ int main(int argc, char** argv) {
             args.push_back(std::to_string(slot.bg_tick_hz));
             args.push_back("--gpu-mode");
             args.push_back(slot.gpu_mode);
+            // Group clients are monitored through the controller; never open
+            // an audio device for background or foreground group members.
+            args.push_back("--no-audio");
             if (slot.headless) args.push_back("--headless-bg");
 
             const pid_t cpid = spawn_process(args);
