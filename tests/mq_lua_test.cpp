@@ -781,14 +781,18 @@ mq.pickle('settings/test.lua', {a = 1, b = {'x', 'y'}, name = 'bob'})
 local t = dofile('settings/test.lua')
 print(t.a, t.b[2], t.name)
 print(pcall(mq.pickle, '../outside.lua', {}))
-print(load, io, os.execute)
+print(type(load), io, os.execute)
+print(select(2, load('\27LuaX', '=x', 'b')))
 )");
     REQUIRE(h.scripts->run("cfg", {}));
     h.pulses(1);
     CHECK(fs::exists(h.config_dir / "settings" / "test.lua"));
     CHECK(h.printed_line("1 y bob"));
     CHECK_FALSE(fs::exists(h.world.dir / "outside.lua"));
-    CHECK(h.printed_line("nil nil nil"));
+    // The script's globals are the sandbox's: load exists but compiles text only (mq/lua_mq.cpp l_load_text), io is
+    // not there, and os keeps only the clock. This line read "nil nil nil" before the text-only loader was added.
+    CHECK(h.printed_line("function nil nil"));
+    CHECK(h.printed_line("load: only text chunks are allowed"));
 }
 
 TEST_CASE("MQ Lua: loadfile and dofile give back only data, never a function a file made") {
