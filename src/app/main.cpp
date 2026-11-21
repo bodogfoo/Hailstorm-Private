@@ -854,6 +854,9 @@ int main(int argc, char** argv) {
     try {
         Options opts = parse_args(argc, argv);
         error_dialog = opts.frames == 0 && opts.screenshot.empty();
+        if (!opts.data_dir.empty()) {
+            platform::use_data_dir(opts.data_dir, "--data-dir");
+        }
         // The data folder (platform/paths.h) is the Hailstone folder itself. One that cannot hold the settings (a
         // read-only folder, an EverQuest folder) stops the start with a message: nothing is ever written elsewhere.
         if (std::string problem = platform::data_dir_problem(); !problem.empty()) {
