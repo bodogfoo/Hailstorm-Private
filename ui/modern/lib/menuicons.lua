@@ -429,7 +429,7 @@ local BY_TEXT = {
   ["Leadership"] = "leadership", ["Skills"] = "skills", ["Blocked Buffs"] = "blocked",
   ["Blocked Pet Buffs"] = "blockedpet", ["Auras"] = "auras", ["Character"] = "character",
   ["Inventory"] = "inventory", ["Advanced Inventory"] = "advinventory", ["Options"] = "options", ["Camp & Quit"] = "camp",
-  ["Report a Bug"] = "bug", ["Web Browser"] = "globe", ["Lua Scripts"] = "script", ["Combat Controller"] = "swords", ["Ability Book"] = "abilitybook", ["Aggro Meter"] = "aggro",
+  ["Report a Bug"] = "bug", ["Web Browser"] = "globe", ["Lua Scripts"] = "script", ["Combat Controller"] = "swords", ["RGMercs"] = "bolt", ["Special Functions"] = "compass", ["Ability Book"] = "abilitybook", ["Aggro Meter"] = "aggro",
   ["Help"] = "help", ["Everquest Help"] = "help", ["Mail"] = "mail", ["Mercenaries"] = "mercenary",
   ["NPC Journal"] = "npcjournal", ["PvP Stats"] = "pvp", ["Storyline"] = "story", ["Tribute"] = "tribute",
   ["Bazaar Search"] = "bazaar", ["Barter Search"] = "barter", ["Looking for Group"] = "lfgroup",

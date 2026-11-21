@@ -31,7 +31,7 @@ local DEFAULT_ON = {}
 for _, key in ipairs({
   "InventoryWindow", "AAWindow", "AbilityBookWnd", "SpellBookWnd", "MapViewWnd", "WorldContainer",
   "InspectWnd", "SkillsWindow", "TaskWnd", "GuildManagementWnd", "FriendsWindow", "BankWnd", "BigBankWnd",
-  "ScriptsWnd", "CombatWnd", "HelpWindow", "BookWindow", "NoteWindow", "TributeBenefitWnd", "TributeTrophyWnd",
+  "ScriptsWnd", "CombatWnd", "SpecialFunctionsWnd", "HelpWindow", "BookWindow", "NoteWindow", "TributeBenefitWnd", "TributeTrophyWnd",
   "LeadershipWindow", "TitleWnd", "TrackingWnd", "MailWindow", "GroupSearchWnd", "BazaarSearchWnd",
   "BarterSearchWnd",
 }) do DEFAULT_ON[key] = true end

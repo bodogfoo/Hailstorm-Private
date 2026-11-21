@@ -1076,6 +1076,7 @@ void add_misc_windows(std::vector<std::unique_ptr<StockWindow>>& out) {
     out.push_back(std::make_unique<StockWindow>("ScriptsWnd", false)); // the Lua scripts (app/lua_ui_scripts.cpp)
     out.push_back(std::make_unique<StockWindow>("CombatWnd", false));  // Native combat controller (app/lua_ui_combat.cpp)
     out.push_back(std::make_unique<StockWindow>("RGMercsWnd", false)); // Native RG Mercs window (app/lua_ui_rgmercs.cpp)
+    out.push_back(std::make_unique<StockWindow>("SpecialFunctionsWnd", false)); // Special Functions: Teleport & Porter (ALL)
 }
 
 } // namespace hailstone::app

@@ -2575,6 +2575,8 @@ int CascadeClick(lua_State* L) {
         if (StockWindow* w = m.window("CombatWnd")) w->set_shown(m.host, true);
     } else if (cmd && *cmd == kMenuRGMercs) {
         if (StockWindow* w = m.window("RGMercsWnd")) w->set_shown(m.host, true);
+    } else if (cmd && *cmd == kMenuSpecialFunctions) {
+        if (StockWindow* w = m.window("SpecialFunctionsWnd")) w->set_shown(m.host, true);
     } else if (cmd && *cmd == kMenuWebBrowser) {
         if (StockWindow* w = m.window("BrowserWnd")) w->set_shown(m.host, true);
     } else if (cmd && *cmd >= kMenuPluginFirst) { // a plugin's entry: its command line, as the plugin

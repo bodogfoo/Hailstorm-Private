@@ -38,6 +38,15 @@ std::string zone_long_name(std::uint32_t zone_id) {
     return z ? z->long_name : std::string();
 }
 
+std::vector<ZoneEntry> all_zones() {
+    std::vector<ZoneEntry> out;
+    out.reserve(std::size(kZones));
+    for (const auto& z : kZones) {
+        out.push_back(ZoneEntry{z.id, z.short_name, z.long_name, z.flags, z.expansion});
+    }
+    return out;
+}
+
 std::uint32_t zone_id_by_short_name(std::string_view short_name) {
     for (const auto& z : kZones) {
         std::string_view n = z.short_name;

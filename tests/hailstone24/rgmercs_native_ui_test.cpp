@@ -408,20 +408,29 @@ TEST_CASE("hs.RGMercs* & hs.Commander* Lua adapters, capability gating, CascadeM
     CHECK(app::ui_call_caps("RGMercsClearLogs") == std::optional<std::uint32_t>{0u});
     CHECK(app::ui_call_caps("RGMercsCommand") == std::optional<std::uint32_t>{plugin::kCapCommands});
     CHECK(app::ui_call_caps("CommanderStatus") == std::optional<std::uint32_t>{0u});
+    CHECK(app::ui_call_caps("CommanderZones") == std::optional<std::uint32_t>{0u});
     CHECK(app::ui_call_caps("CommanderDo") ==
           std::optional<std::uint32_t>{plugin::kCapActions | plugin::kCapCommands | plugin::kCapMove});
     CHECK(app::ui_call_caps("ScriptReload") == std::optional<std::uint32_t>{0u});
 
-    // CascadeMenu: "RGMercs" is offered only when the pack draws RGMercsWnd.
-    auto with_rgmercs = [](std::string_view screen) { return screen == "RGMercsWnd" || screen == "OptionsWindow"; };
+    // Verify CommanderZones returns compiled EverQuest zones including poknowledge.
+    CHECK(run_lua(L, "local zs = hs.CommanderZones() local ok = false "
+                     "for _, z in ipairs(zs) do if z.shortName == 'poknowledge' then ok = true break end end "
+                     "return tostring(#zs > 100 and ok)") == "true");
+
+    // CascadeMenu: "RGMercs" and "Special Functions" are present in Hailstone's top menu.
+    auto with_rgmercs = [](std::string_view screen) {
+        return screen == "RGMercsWnd" || screen == "SpecialFunctionsWnd" || screen == "OptionsWindow";
+    };
     app::CascadeMenu menu;
     menu.load_text(app::CascadeMenu::hailstone_layout(), 0xffffffffu, 1,
                    [&](int c) { return app::menu_command_offered(c, with_rgmercs); });
     const auto top = menu.row_texts(0);
     CHECK(std::find(top.begin(), top.end(), "RGMercs") != top.end());
+    CHECK(std::find(top.begin(), top.end(), "Special Functions") != top.end());
 
-    // Validate ui/modern/rgmercs.lua and ui/modern/combat.lua compile cleanly and use modern hs.UI APIs.
-    for (const char* rel : {"ui/modern/rgmercs.lua", "ui/modern/combat.lua", "ui/modern/scripts.lua"}) {
+    // Validate ui/modern/rgmercs.lua, combat.lua, special_functions.lua, and scripts.lua compile cleanly.
+    for (const char* rel : {"ui/modern/rgmercs.lua", "ui/modern/combat.lua", "ui/modern/special_functions.lua", "ui/modern/scripts.lua"}) {
         const fs::path ui_script = fs::path(HAILSTONE_SOURCE_DIR) / rel;
         REQUIRE(fs::exists(ui_script));
         CHECK(luaL_loadfile(L, ui_script.string().c_str()) == LUA_OK);
@@ -439,4 +448,10 @@ TEST_CASE("hs.RGMercs* & hs.Commander* Lua adapters, capability gating, CascadeM
     const std::string combat_src = read_file_bytes(fs::path(HAILSTONE_SOURCE_DIR) / "ui/modern/combat.lua");
     CHECK(combat_src.find("Players / Clients") != std::string::npos);
     CHECK(combat_src.find("API.commander") != std::string::npos);
+    CHECK(combat_src.find("SpecialFunctionsWnd") != std::string::npos);
+
+    const std::string sf_src = read_file_bytes(fs::path(HAILSTONE_SOURCE_DIR) / "ui/modern/special_functions.lua");
+    CHECK(sf_src.find("SpecialFunctionsWnd") != std::string::npos);
+    CHECK(sf_src.find("PORTER (ALL)") != std::string::npos);
+    CHECK(sf_src.find("API.commander.Zones") != std::string::npos);
 }

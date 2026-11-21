@@ -550,6 +550,21 @@ public:
         automation_->hooks().add_command(plugin::Hooks::kClient, "/rgmercs", [this](std::string_view) {
             if (ui_api_) ui_api_->toggle("RGMercsWnd");
         });
+        auto toggle_special_functions = [this](std::string_view) {
+            if (ui_api_) ui_api_->toggle("SpecialFunctionsWnd");
+        };
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/specialfunctions", toggle_special_functions);
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/special", toggle_special_functions);
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/porterall", [this](std::string_view args) {
+            std::string msg;
+            const bool ok = handle_commander_command("porter_all", "all", args, msg);
+            if (conn_ && !msg.empty()) conn_->show_chat(msg, ok ? 15 : 0xd);
+        });
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/porter", [this](std::string_view args) {
+            std::string msg;
+            const bool ok = handle_commander_command("porter", "", args, msg);
+            if (conn_ && !msg.empty()) conn_->show_chat(msg, ok ? 15 : 0xd);
+        });
         automation_->hooks().add_command(plugin::Hooks::kClient, "/switch", [this](std::string_view args) {
             while (!args.empty() && args.front() == ' ') args.remove_prefix(1);
             if (args.empty()) {

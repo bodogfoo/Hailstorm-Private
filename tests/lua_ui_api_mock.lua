@@ -76,6 +76,7 @@ local descriptors = {
   {"CombatStatus", "combat", "Status", "function", 0, false},
   {"CommanderDo", "commander", "Do", "function", 26, false},
   {"CommanderStatus", "commander", "Status", "function", 0, false},
+  {"CommanderZones", "commander", "Zones", "function", 0, false},
   {"CompareBagSlotItem", "compare", "BagSlotItem", "function", 0, false},
   {"CompareItem", "compare", "Item", "function", 0, false},
   {"CompareSlotItem", "compare", "SlotItem", "function", 0, false},

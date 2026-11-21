@@ -103,6 +103,7 @@ UI_METHOD("CombatStatus", "combat", "Status", 0)
 // commander
 UI_METHOD("CommanderDo", "commander", "Do", kCapActions | kCapCommands | kCapMove)
 UI_METHOD("CommanderStatus", "commander", "Status", 0)
+UI_METHOD("CommanderZones", "commander", "Zones", 0)
 
 // compare
 UI_METHOD("CompareBagSlotItem", "compare", "BagSlotItem", 0)

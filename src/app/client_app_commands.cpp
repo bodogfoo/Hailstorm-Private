@@ -7,7 +7,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <filesystem>
 #include <format>
+#include <limits>
 #include <sstream>
 
 #include <imgui.h>
@@ -24,6 +27,7 @@
 #include "game/slash_commands.h"
 #include "game/xtarget.h"
 #include "mq/rgmercs_bridge.h"
+#include "platform/paths.h"
 
 namespace hailstone::app {
 
@@ -1214,6 +1218,141 @@ ipc::CommandAckPacket ClientApp::handle_bus_command(const ipc::CommandPacket& cm
         return ack;
     }
 
+    if (verb == "/porter" || verb == "/porterall") {
+        if (!in_game) {
+            ack.ok = false;
+            ack.message = "cannot use porter while not in game";
+            return ack;
+        }
+        std::string_view prest = rest;
+        std::string zone = lower_str(game::next_cmd_arg(prest));
+        if (zone.empty()) {
+            ack.ok = false;
+            ack.message = "porter destination zone is required";
+            return ack;
+        }
+        std::string driver;
+        std::string mode = "auto";
+        std::string porter_npc = config_.get_string("commander.porter_npc", "Porter");
+        while (!prest.empty()) {
+            std::string tok = game::next_cmd_arg(prest);
+            if (tok.empty()) break;
+            const std::string low = lower_str(tok);
+            if (low.starts_with("driver=")) {
+                driver = tok.substr(7);
+            } else if (low.starts_with("mode=")) {
+                mode = lower_str(tok.substr(5));
+            } else if (low.starts_with("npc=")) {
+                porter_npc = tok.substr(4);
+            }
+        }
+        if (porter_npc.empty()) porter_npc = "Porter";
+
+        // Freeze active chase/follow before interacting with Porter (matches MQ Commander 5 porter_go flow).
+        conn_->stop_follow(false);
+        if (combat_engine_) {
+            if (combat_engine_->profile().movement_mode == combat::MovementMode::Follow)
+                combat_engine_->set_movement_mode(combat::MovementMode::None);
+            if (!driver.empty()) combat_engine_->set_follow_target(driver);
+        }
+
+        // 1) Delegate to scripts/porter_go.lua when installed (unless explicitly forced to native mode).
+        if (mode != "native" && automation_) {
+            std::error_code ec;
+            const auto scripts_root = platform::scripts_dir();
+            const bool has_porter_script =
+                std::filesystem::is_regular_file(scripts_root / "porter_go.lua", ec) ||
+                std::filesystem::is_regular_file(scripts_root / "porter_go" / "init.lua", ec);
+            if (has_porter_script) {
+                std::vector<std::string> script_args;
+                script_args.push_back(zone);
+                if (!driver.empty()) script_args.push_back("driver=" + driver);
+                std::string why;
+                if (automation_->scripts().run("porter_go", script_args, &why)) {
+                    ack.ok = true;
+                    ack.message = driver.empty()
+                                      ? std::format("PORTER_START: porter_go {}", zone)
+                                      : std::format("PORTER_START: porter_go {} driver={}", zone, driver);
+                    return ack;
+                }
+                if (mode == "script") {
+                    ack.ok = false;
+                    ack.message = why.empty() ? "failed to start porter_go" : why;
+                    return ack;
+                }
+            } else if (mode == "script") {
+                ack.ok = false;
+                ack.message = "porter_go.lua not found in scripts/ directory";
+                return ack;
+            }
+        }
+
+        // 2) Native Hailstone Porter execution: locate nearest Porter NPC, target it, and /say <zone>.
+        const game::Spawn* me = conn_->world().player();
+        const std::string want_low = lower_str(porter_npc);
+        std::uint32_t best_exact_id = 0;
+        std::string best_exact_name;
+        float best_exact_dist = std::numeric_limits<float>::max();
+        std::uint32_t best_partial_id = 0;
+        std::string best_partial_name;
+        float best_partial_dist = std::numeric_limits<float>::max();
+
+        for (const auto& [sid, sp] : conn_->world().spawns) {
+            if (!sp.is_npc || sp.is_corpse) continue;
+            const std::string disp = game::display_name(sp.name);
+            const std::string disp_low = lower_str(disp);
+            const std::string raw_low = lower_str(sp.name);
+            float dist = 0.0f;
+            if (me) {
+                const float dx = sp.position.x - me->position.x;
+                const float dy = sp.position.y - me->position.y;
+                const float dz = sp.position.z - me->position.z;
+                dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+            }
+            if (disp_low == want_low || raw_low == want_low) {
+                if (dist < best_exact_dist) {
+                    best_exact_dist = dist;
+                    best_exact_id = sid;
+                    best_exact_name = disp;
+                }
+            } else if (disp_low.find(want_low) != std::string::npos ||
+                       raw_low.find(want_low) != std::string::npos ||
+                       disp_low.find("teleporter") != std::string::npos) {
+                if (dist < best_partial_dist) {
+                    best_partial_dist = dist;
+                    best_partial_id = sid;
+                    best_partial_name = disp;
+                }
+            }
+        }
+
+        const std::uint32_t chosen_id = best_exact_id != 0 ? best_exact_id : best_partial_id;
+        const std::string& chosen_name = best_exact_id != 0 ? best_exact_name : best_partial_name;
+        const float chosen_dist = best_exact_id != 0 ? best_exact_dist : best_partial_dist;
+        if (chosen_id != 0) {
+            conn_->set_target(chosen_id);
+            conn_->send_command("/say " + zone);
+            ack.ok = true;
+            ack.message = std::format("PORTER_SAID: targeted {} ({:.0f}u) -> /say {}",
+                                      chosen_name, chosen_dist, zone);
+            return ack;
+        }
+
+        const std::string summon_cmd = config_.get_string("commander.summon_porter_cmd", "");
+        if (!summon_cmd.empty() && summon_cmd.front() == '/') {
+            conn_->send_command(summon_cmd);
+            ack.ok = true;
+            ack.message = std::format("PORTER_SUMMON: dispatched '{}'; retry /porter {} once Porter spawns",
+                                      summon_cmd, zone);
+            return ack;
+        }
+
+        ack.ok = false;
+        ack.message = std::format("PORTER_FAIL: no '{}' NPC found in zone (stand near Porter or install scripts/porter_go.lua)",
+                                  porter_npc);
+        return ack;
+    }
+
     if (automation_) {
         automation_->run_command(cmd.command);
         ack.ok = true;
@@ -1402,12 +1541,23 @@ bool ClientApp::handle_commander_command(std::string_view action, std::string_vi
         slash_cmd = who.empty() ? "/tptome" : ("/tptome " + who);
     } else if (act == "tp_here") {
         slash_cmd = arg.empty() ? "/tphere" : ("/tphere " + std::string(arg));
+    } else if (act == "porter_all" || act == "porter") {
+        std::string_view parg = arg;
+        while (!parg.empty() && (parg.front() == ' ' || parg.front() == '\t')) parg.remove_prefix(1);
+        while (!parg.empty() && (parg.back() == ' ' || parg.back() == '\t')) parg.remove_suffix(1);
+        if (parg.empty()) {
+            out_msg = "Porter destination zone is required";
+            return false;
+        }
+        slash_cmd = "/porter " + std::string(parg);
     } else {
         out_msg = std::format("Unknown commander action '{}'", action);
         return false;
     }
 
-    const std::string scope = target.empty() ? std::string("all") : std::string(target);
+    const std::string scope =
+        (act == "porter_all") ? std::string("all")
+                              : (target.empty() ? std::string("all") : std::string(target));
     bool local_ok = true;
     std::string local_msg;
 

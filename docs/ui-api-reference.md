@@ -10,7 +10,7 @@ does not bypass a function's own caller, screen or server-state checks.
 `API.version`, `API.Supports(module[, member])` and `API.Describe([module[, member]])`
 provide contract version and structural discovery. They confer no permissions.
 
-Coverage: **355/355 method implementation links**, **227/355 adjacent binding comment excerpts**, and **6/6 constant implementation links**. Excerpts below are verbatim binding comments; they preserve any documented signatures and results, and do not invent omitted arguments or results. **See binding** marks an author documentation gap.
+Coverage: **356/356 method implementation links**, **227/356 adjacent binding comment excerpts**, and **6/6 constant implementation links**. Excerpts below are verbatim binding comments; they preserve any documented signatures and results, and do not invent omitted arguments or results. **See binding** marks an author documentation gap.
 
 Unresolved method implementations: none.
 Unresolved constant implementations: none.
@@ -134,6 +134,7 @@ Unresolved constant implementations: none.
 | --- | --- | --- | --- | --- |
 | `API.commander.Do` | **See binding** | `hs.CommanderDo` · [source](../src/app/lua_ui_combat.cpp) | actions, commands, move | closed |
 | `API.commander.Status` | **See binding** | `hs.CommanderStatus` · [source](../src/app/lua_ui_combat.cpp) | none (outer gate) | closed |
+| `API.commander.Zones` | **See binding** | `hs.CommanderZones` · [source](../src/app/lua_ui_combat.cpp) | none (outer gate) | closed |
 
 ## compare
 

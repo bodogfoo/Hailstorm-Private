@@ -3,12 +3,23 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace hailstone::game {
+
+struct ZoneEntry {
+    std::uint32_t id = 0;
+    const char* short_name = "";
+    const char* long_name = "";
+    std::uint32_t flags = 0;
+    std::uint32_t expansion = 0;
+};
 
 // Names from the original client's zone table; empty for unknown ids.
 std::string zone_short_name(std::uint32_t zone_id);
 std::string zone_long_name(std::uint32_t zone_id);
+// All compiled zones from the client's zone table.
+std::vector<ZoneEntry> all_zones();
 // A zone's id by its short name (any case), 0 when unknown.
 std::uint32_t zone_id_by_short_name(std::string_view short_name);
 // The zone's flags (EQZoneInfo +0x198, the zone table's), 0 for unknown ids.

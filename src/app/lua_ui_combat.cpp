@@ -1,12 +1,20 @@
 #include "app/lua_ui_combat.h"
 
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
+#include <unordered_set>
+#include <vector>
 
 #include <lua.hpp>
 
 #include "app/lua_ui.h"
 #include "combat/combat_types.h"
+#include "game/zone_names.h"
+#include "platform/paths.h"
 #include "plugin/lua_keep.h"
 #include "ui/lua/lua_host.h"
 
@@ -330,6 +338,91 @@ int CommanderDo(lua_State* L) {
     return 1;
 }
 
+int CommanderZones(lua_State* L) {
+    UiHost& h = host_of(L);
+    struct ZoneRow {
+        std::uint32_t id = 0;
+        std::string short_name;
+        std::string long_name;
+        std::uint32_t expansion = 0;
+        const char* source = "builtin";
+    };
+
+    auto trim = [](std::string_view sv) {
+        while (!sv.empty() && (sv.front() == ' ' || sv.front() == '\t' || sv.front() == '\r' || sv.front() == '\n'))
+            sv.remove_prefix(1);
+        while (!sv.empty() && (sv.back() == ' ' || sv.back() == '\t' || sv.back() == '\r' || sv.back() == '\n'))
+            sv.remove_suffix(1);
+        return sv;
+    };
+    auto lower = [](std::string_view sv) {
+        std::string out(sv);
+        std::transform(out.begin(), out.end(), out.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return out;
+    };
+
+    std::vector<ZoneRow> rows;
+    std::unordered_set<std::string> seen;
+
+    auto load_zones_ini = [&](const std::filesystem::path& p) {
+        std::error_code ec;
+        if (p.empty() || !std::filesystem::is_regular_file(p, ec)) return;
+        std::ifstream in(p);
+        if (!in) return;
+        std::string line;
+        while (std::getline(in, line)) {
+            std::string_view sv = trim(line);
+            if (sv.empty() || sv.front() == '[' || sv.front() == ';' || sv.front() == '#') continue;
+            const auto eq = sv.find('=');
+            if (eq == std::string_view::npos) continue;
+            const std::string_view disp = trim(sv.substr(0, eq));
+            const std::string_view sn = trim(sv.substr(eq + 1));
+            if (sn.empty()) continue;
+            const std::string key = lower(sn);
+            if (!seen.insert(key).second) continue;
+            const std::uint32_t zid = game::zone_id_by_short_name(sn);
+            std::string long_name = disp.empty() ? (zid ? game::zone_long_name(zid) : std::string(sn))
+                                                 : std::string(disp);
+            rows.push_back(ZoneRow{zid, std::string(sn), std::move(long_name),
+                                   zid ? game::zone_expansion(zid) : 0u, "zones_ini"});
+        }
+    };
+
+    // Optional server/user Zones.ini overrides (compatible with MQ Commander 5 Zones.ini format).
+    if (!h.server_dir.empty()) load_zones_ini(h.server_dir / "Zones.ini");
+    load_zones_ini(platform::data_dir() / "Zones.ini");
+    load_zones_ini(platform::scripts_config_dir() / "Zones.ini");
+    load_zones_ini(platform::scripts_dir() / "Zones.ini");
+
+    // Append all built-in compiled EverQuest zones, sorted alphabetically by short name.
+    auto builtin = game::all_zones();
+    std::sort(builtin.begin(), builtin.end(), [&](const game::ZoneEntry& a, const game::ZoneEntry& b) {
+        return lower(a.short_name) < lower(b.short_name);
+    });
+    for (const auto& z : builtin) {
+        if (!z.short_name || !*z.short_name) continue;
+        const std::string key = lower(z.short_name);
+        if (!seen.insert(key).second) continue;
+        rows.push_back(ZoneRow{z.id, z.short_name,
+                               (z.long_name && *z.long_name) ? z.long_name : z.short_name,
+                               z.expansion, "builtin"});
+    }
+
+    lua_createtable(L, static_cast<int>(rows.size()), 0);
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        const auto& r = rows[i];
+        lua_createtable(L, 0, 5);
+        set_int(L, "id", static_cast<lua_Integer>(r.id));
+        set_str(L, "shortName", r.short_name);
+        set_str(L, "longName", r.long_name);
+        set_int(L, "expansion", static_cast<lua_Integer>(r.expansion));
+        set_str(L, "source", r.source);
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    return 1;
+}
+
 } // namespace
 
 void register_combat_api(lua_State* L, UiHost& host) {
@@ -338,6 +431,7 @@ void register_combat_api(lua_State* L, UiHost& host) {
              {"CombatDo", CombatDo},
              {"CommanderStatus", CommanderStatus},
              {"CommanderDo", CommanderDo},
+             {"CommanderZones", CommanderZones},
          }) {
         lua_pushlightuserdata(L, &host);
         lua_pushcclosure(L, fn, 1);

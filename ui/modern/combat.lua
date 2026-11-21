@@ -429,6 +429,9 @@ local function drawClientsTab(s)
   if ui.IsItemHovered() then ui.SetTooltip("Uses only existing server-authorized safe teleport commands (never forges position packets)") end
   ui.SameLine()
   if ui.SmallButton("Open RGMercs") then API.windows.Show("RGMercsWnd", true) end
+  ui.SameLine()
+  if ui.SmallButton("Special Functions") then API.windows.Show("SpecialFunctionsWnd", true) end
+  if ui.IsItemHovered() then ui.SetTooltip("Open Special Functions (Teleport zone dropdown & PORTER (ALL))") end
 
   -- Command Acknowledgements / Failure / Timeout Log
   ui.Spacing()
