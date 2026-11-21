@@ -429,7 +429,7 @@ local function groupProfilesCard(view, s, bh)
   local slots = view.groupSlots or {}
   if #slots > 0 then
     ui.Dummy(0, 3 * s)
-    local flags = ui.TableFlags.RowBg | ui.TableFlags.BordersOuter | ui.TableFlags.ScrollY
+    local flags = ui.TableFlags.RowBg | ui.TableFlags.Borders | ui.TableFlags.ScrollY
     local _, lh = ui.CalcTextSize("Ag")
     local h = math.min(#slots + 1.2, 8) * (lh + 8 * s)
     if ui.BeginTable("##groupslots", 6, flags, 0, h) then
