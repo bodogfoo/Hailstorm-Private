@@ -435,6 +435,12 @@ struct UiHost {
     CommanderBridge commander;
 };
 
+// The answer a ConfirmationDialogBox gives when its time runs out (app/lua_ui_player.cpp, OnProcessFrame). Only
+// question 3 (UiHost::confirm) may answer Yes on its owner's request; every other question answers No, as EQ does.
+inline bool confirmation_timeout_answer(const UiHost& host, int question) {
+    return question == 3 && host.confirm && host.confirm->timeout_answer;
+}
+
 // CQuantityWnd::Open (game/quantity_dialog.h) for a window: accepted at once calls `done`, else shows the dialog.
 void open_quantity(UiHost& host, const game::QuantityOpen& in, std::function<void(std::int32_t)> done,
                    std::function<bool()> owner_valid = {});

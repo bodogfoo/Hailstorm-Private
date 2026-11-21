@@ -484,6 +484,7 @@ add_library(hailstone_engine STATIC
   src/game/eq_strings.cpp
   src/game/combat.cpp
   src/game/inventory.cpp
+  src/game/companion_call.cpp
   src/game/bag_move.cpp
   src/game/item_preview.cpp
   src/game/item_moves.cpp
@@ -1358,6 +1359,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/appearance_vectors_test.cpp
     tests/combat_test.cpp
     tests/hailstone24/combat_controller_test.cpp
+    tests/hailstone24/companion_call_test.cpp
     tests/hailstone24/rgmercs_trusted_loader_test.cpp
     tests/hailstone24/rgmercs_native_ui_test.cpp
     tests/pet_combat_chat_test.cpp

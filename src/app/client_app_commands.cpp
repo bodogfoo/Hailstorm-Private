@@ -22,6 +22,7 @@
 #include "core/group_profile.h"
 #include "core/msvc_atoi.h"
 #include "game/chat_windows.h"
+#include "game/companion_call.h"
 #include "game/hotbuttons.h"
 #include "game/option_commands.h"
 #include "game/slash_commands.h"
@@ -1503,31 +1504,7 @@ bool ClientApp::handle_commander_command(std::string_view action, std::string_vi
             return false;
         }
 
-        net::ItemSlot horn = net::ItemSlot::invalid();
-        auto is_companion_call = [](std::string_view name) {
-            std::string low(name);
-            std::transform(low.begin(), low.end(), low.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            // EZ Server's actual reward item is "Call of the Companions".  Keep
-            // the generic form for older/custom item naming, but require the
-            // companion wording so unrelated summon items cannot be clicked.
-            return low.find("call of the companions") != std::string::npos ||
-                   low.find("summon companion") != std::string::npos;
-        };
-        for (const auto& [key, item] : conn_->inventory().items()) {
-            if (key.first != net::kInvPossessions) continue;
-            if (is_companion_call(item.name)) {
-                horn = net::ItemSlot::possessions(key.second);
-                break;
-            }
-            for (const auto& bag : item.contents) {
-                if (is_companion_call(bag.item.name)) {
-                    horn = net::ItemSlot::possessions(key.second, static_cast<std::int16_t>(bag.index));
-                    break;
-                }
-            }
-            if (horn.valid()) break;
-        }
+        const net::ItemSlot horn = game::find_companion_call_item(conn_->inventory());
         if (!horn.valid()) {
             out_msg = "Summon Companion was not found in carried inventory";
             return false;
