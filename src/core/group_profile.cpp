@@ -579,6 +579,18 @@ bool load_ini_profile(const fs::path& path, GroupProfile& out, std::string* erro
         ++seq;
     }
 
+    // A group profile's leader is the persistent follow authority.  Keep the
+    // leader itself free of a follow target, and default every other slot to
+    // following that leader unless the profile explicitly overrides it.
+    for (auto& slot : out.slots) {
+        if (slot.group_leader.empty()) continue;
+        if (ieq(slot.character, slot.group_leader)) {
+            slot.follow_target.clear();
+        } else if (slot.follow_target.empty()) {
+            slot.follow_target = slot.group_leader;
+        }
+    }
+
     finalize_profile(out, path);
     return true;
 }

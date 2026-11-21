@@ -408,3 +408,62 @@ TEST_CASE("GroupProfile: built-in MQ Commander presets, extended slot fields INI
     CHECK(imported.slots[1].headless);
 }
 
+
+TEST_CASE("GroupProfile: the named leader is the follow default for the other slots") {
+    test::ScratchDir dir("hs24_group_profile_leader_defaults");
+    const fs::path path = dir.path() / "leader.ini";
+    {
+        std::ofstream out(path);
+        out << "[profile]\n"
+            << "name=Leader Defaults\n"
+            << "\n[slot01]\n"
+            << "slot_number=1\n"
+            << "character=Tanker\n"
+            << "group_leader=Tanker\n"
+            << "follow_target=Someone\n"
+            << "\n[slot02]\n"
+            << "slot_number=2\n"
+            << "character=Healer\n"
+            << "group_leader=Tanker\n"
+            << "\n[slot03]\n"
+            << "slot_number=3\n"
+            << "character=Rogue\n"
+            << "group_leader=Tanker\n"
+            << "follow_target=Healer\n"
+            << "\n[slot04]\n"
+            << "slot_number=4\n"
+            << "character=Bard\n";
+    }
+
+    core::GroupProfile profile;
+    std::string err;
+    REQUIRE(core::load_group_profile(path, profile, &err));
+    REQUIRE(profile.slots.size() == 4);
+
+    auto slot_named = [&](std::string_view who) -> const core::GroupSlot* {
+        for (const auto& s : profile.slots) {
+            if (s.character == who) return &s;
+        }
+        return nullptr;
+    };
+
+    // The leader follows nobody, even when its file named a target.
+    const core::GroupSlot* tank = slot_named("Tanker");
+    REQUIRE(tank != nullptr);
+    CHECK(tank->follow_target.empty());
+
+    // A slot with a leader and no target of its own follows the leader.
+    const core::GroupSlot* healer = slot_named("Healer");
+    REQUIRE(healer != nullptr);
+    CHECK(healer->follow_target == "Tanker");
+
+    // An explicit target survives, even when it differs from the leader.
+    const core::GroupSlot* rogue = slot_named("Rogue");
+    REQUIRE(rogue != nullptr);
+    CHECK(rogue->follow_target == "Healer");
+
+    // No leader named: nothing is invented.
+    const core::GroupSlot* bard = slot_named("Bard");
+    REQUIRE(bard != nullptr);
+    CHECK(bard->follow_target.empty());
+}
