@@ -897,3 +897,46 @@ TEST_CASE("SpellManager & CombatEngine: level restriction, missing spell data, i
     CHECK(engine.status_snapshot(&snap).loadout_audit.failed_memorizations.empty());
 }
 
+
+TEST_CASE("MovementController: the melee stick is held on arrival, not force-stopped") {
+    MovementController nav;
+    RecordedActions actions;
+    CombatProfile profile = default_combat_profile_for_class("ROG");
+    profile.movement_mode = MovementMode::MeleeRange;
+    profile.melee_behind = false;
+    profile.melee_range = 4.0f;
+
+    CombatSnapshot snap = make_nec_snapshot(1000);
+    snap.me.position = {0.0f, 0.0f, 0.0f};
+    SpawnSnapshot mob = make_mob(200, "a_spite_golem", 40.0f, 0.0f);
+
+    // Out of reach: the stick is asked for once.
+    MovementStepResult step = nav.update(CombatState::Combat, snap, profile, &mob, nullptr, nullptr, actions, false);
+    CHECK(step.command == MovementCommandKind::MoveMelee);
+    CHECK(step.issued_to_actions);
+    REQUIRE(actions.move_melees.size() == 1);
+    CHECK(nav.controller_moving());
+
+    // In reach with the stick live: the controller holds it instead of stopping on arrival.
+    snap.nav_stick_spawn = mob.id;
+    mob.position = {3.0f, 0.0f, 0.0f};
+    snap.now_ms = 1100;
+    step = nav.update(CombatState::Combat, snap, profile, &mob, nullptr, nullptr, actions, false);
+    CHECK(step.command == MovementCommandKind::MoveMelee);
+    CHECK_FALSE(step.issued_to_actions);
+    CHECK(step.decision == "Holding melee stick on a_spite_golem");
+    CHECK(actions.stop_moves.empty());          // arrival must not release the stick
+    CHECK(actions.move_melees.size() == 1);     // and nothing is re-issued
+    CHECK(nav.controller_moving());
+    CHECK(nav.last_decision() == "Holding melee stick on a_spite_golem");
+
+    // Releasing it stays the caller's decision (disengage, /combatstick off, target loss): a disengage mode
+    // moves away on the next step rather than holding.
+    profile.movement_mode = MovementMode::DisengageDistance;
+    profile.disengage_distance = 40.0f;
+    snap.nav_stick_spawn = 0;
+    snap.now_ms = 1200;
+    step = nav.update(CombatState::Combat, snap, profile, &mob, nullptr, nullptr, actions, true);
+    CHECK(step.command == MovementCommandKind::MoveDisengage);
+    CHECK(nav.last_decision().find("Holding melee stick") == std::string::npos);
+}

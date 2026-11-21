@@ -350,7 +350,13 @@ MovementStepResult MovementController::update(CombatState state,
             }
             return res;
         }
-        return force_stop("In melee range", actions, dry_run, &snapshot);
+        // RGMercs transitions from approach navigation into a persistent
+        // stick.  Do not call force_stop here: that clears the active
+        // movement command and releases stick as soon as we arrive.
+        last_decision_ = "Holding melee stick on " + hostile_target->name;
+        res.command = MovementCommandKind::MoveMelee;
+        res.decision = last_decision_;
+        return res;
     }
 
     case MovementMode::RangedRange: {

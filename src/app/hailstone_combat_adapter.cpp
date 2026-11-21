@@ -415,6 +415,7 @@ void HailstoneCombatAdapter::set_stand_state(bool stand) {
 
 void HailstoneCombatAdapter::move_follow(std::uint32_t target_id, float distance) {
     if (nav_ && target_id != 0) {
+        if (conn_) conn_->set_running(true);
         nav_->go_to_spawn(target_id, std::max(2.0f, distance));
     }
 }
@@ -423,6 +424,7 @@ void HailstoneCombatAdapter::move_to_range(std::uint32_t target_id, float min_ra
     if (!nav_ || target_id == 0) {
         return;
     }
+    if (conn_) conn_->set_running(true);
     const float desired = std::max(min_range + 4.0f, max_range * 0.85f);
     nav_->go_to_spawn(target_id, desired);
 }
@@ -431,6 +433,7 @@ void HailstoneCombatAdapter::move_melee(std::uint32_t target_id, float distance,
     if (!nav_ || target_id == 0) {
         return;
     }
+    if (conn_) conn_->set_running(true);
     nav::StickOptions opt;
     opt.distance = std::max(0.0f, distance);
     opt.behind = behind;
@@ -441,6 +444,7 @@ void HailstoneCombatAdapter::move_disengage(const combat::Vec3& target_pos, floa
     if (!nav_ || !conn_) {
         return;
     }
+    conn_->set_running(true);
     const game::Spawn* me = conn_->world().player();
     if (!me) {
         return;
