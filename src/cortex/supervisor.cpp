@@ -294,7 +294,9 @@ std::string CortexSupervisor::build_system_prompt(const AgentState& agent) const
        << "Objective: " << agent.current_objective << ". "
        << "Respond ONLY with JSON: {\"action\":\"<intention>\",\"reason\":\"<short_code>\"}. "
        << "Allowed actions: hold_pull, resume_pull, recover_resources, request_assistance, "
-       << "regroup, follow_group, continue_current_task, report_problem, fight_to_location, clear_objective.";
+       << "regroup, follow_group, continue_current_task, report_problem, fight_to_location, clear_objective. "
+       << "Map objective support_group to follow_group; never use an objective name as the action. "
+       << "Use continue_current_task when no listed action is clearly indicated.";
     if (memory_ && memory_->is_open() && !agent.identity.character_name.empty()) {
         const auto memories = memory_->recent_memories(agent.identity.server_name,
                                                         agent.identity.character_name, 6);

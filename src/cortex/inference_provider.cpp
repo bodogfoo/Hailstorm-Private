@@ -199,6 +199,7 @@ std::string HttpInferenceProvider::request_body(const InferenceRequest& req) con
     body << "{\"model\":\"" << json_escape(model_) << "\","
          << "\"max_tokens\":" << budget << ","
          << "\"temperature\":0.1,"
+         << "\"chat_template_kwargs\":{\"enable_thinking\":false},"
          << "\"messages\":["
          << "{\"role\":\"system\",\"content\":\"" << json_escape(req.system_prompt) << "\"},"
          << "{\"role\":\"user\",\"content\":\"" << json_escape(req.user_prompt) << "\"}"
