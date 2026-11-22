@@ -273,3 +273,238 @@ TEST_UI_API_ATTACH(hs)
         CHECK(box_text() == "5");
     });
 }
+
+TEST_CASE("Modern UI: CombatWnd Cortex tab displays read-only status, counters, characters, and pending proposals") {
+    ModernPack pack("lua_ui_combat_cortex_test", "combat.lua");
+    if (!pack.ok) return;
+    pack.write("lib/hud.lua", kHud);
+    pack.write("a_eq.lua", R"lua(
+B = {
+  tabsSeen = {},
+  selectTab = nil,
+  inCombatTabs = false,
+  inCortexTab = false,
+  cortexLines = {},
+  cortexControls = {},
+  commanderCalls = {},
+  combatCalls = {},
+  commander = {
+    available = true,
+    busConnected = true,
+    characterName = "Tankone",
+    peers = {},
+    trackedCommands = {},
+    cortex = {
+      available = true,
+      running = true,
+      mode = "CORTEX_ASSISTED",
+      emergencyStop = false,
+      inferenceHealthy = true,
+      modelName = "cortex-mini",
+      endpoint = "http://127.0.0.1:8095",
+      pendingQueue = 2,
+      totalRequests = 9,
+      totalDecisions = 7,
+      totalErrors = 1,
+      observedMs = 12345,
+      rosterSize = 2,
+      onlineCount = 2,
+      characters = {
+        {
+          key = "ez-server:Tankone",
+          serverName = "ez-server",
+          characterName = "Tankone",
+          brainStatus = "DECISION READY",
+          mode = "CORTEX_ASSISTED",
+          objective = "hold_camp",
+          intention = "hold_pull",
+          decisionAction = "hold_pull",
+          lastError = "",
+          enabled = true,
+          hasDecision = true,
+          proposalPending = true,
+          consecutiveErrors = 0,
+        },
+        {
+          key = "ez-server:Healerone",
+          serverName = "ez-server",
+          characterName = "Healerone",
+          brainStatus = "THINKING",
+          mode = "CORTEX_ASSISTED",
+          objective = "keep_group_alive",
+          intention = "recover_resources",
+          decisionAction = "",
+          lastError = "timeout",
+          enabled = true,
+          hasDecision = false,
+          proposalPending = false,
+          consecutiveErrors = 1,
+        },
+      },
+      proposals = {
+        {
+          key = "ez-server:Tankone",
+          characterName = "Tankone",
+          action = "hold_pull",
+          reasonCode = "healer_mana_low",
+          explanation = "Healer mana is at 18%",
+          arbitrationOwner = "cortex",
+          arbitrationReason = "awaiting confirmation",
+          awaitingConfirmation = true,
+          executed = false,
+          decidedMs = 12300,
+        },
+      },
+    },
+  },
+}
+
+hs = {
+  InGame = function() return true end,
+  CombatStatus = function()
+    return {
+      available = true,
+      running = false,
+      state = "Idle",
+      characterName = "Tankone",
+      serverName = "ez-server",
+      classShort = "WAR",
+      zoneShort = "poknowledge",
+      role = "Main Tank",
+      assistTarget = "",
+      followTarget = "",
+      movementMode = "None",
+      rules = {},
+      loadout = {},
+      transitions = {},
+      actions = {},
+    }
+  end,
+  CombatDo = function(action, arg)
+    B.combatCalls[#B.combatCalls + 1] = tostring(action) .. ":" .. tostring(arg)
+    return true, "ok"
+  end,
+  CommanderStatus = function() return B.commander end,
+  CommanderDo = function(action, target, arg)
+    B.commanderCalls[#B.commanderCalls + 1] = tostring(action) .. ":" .. tostring(target) .. ":" .. tostring(arg)
+    return true, "ok"
+  end,
+  ShowWindow = function() end,
+}
+TEST_UI_API_ATTACH(hs)
+
+local beginTabBar, endTabBar = ui.BeginTabBar, ui.EndTabBar
+local beginTabItem, endTabItem = ui.BeginTabItem, ui.EndTabItem
+local textFn, textColFn, sepTextFn = ui.Text, ui.TextColored, ui.SeparatorText
+local buttonFn, smallButtonFn, checkboxFn = ui.Button, ui.SmallButton, ui.Checkbox
+
+local function recordLine(s)
+  if B.inCortexTab and s ~= nil then
+    B.cortexLines[#B.cortexLines + 1] = tostring(s)
+  end
+end
+
+ui.BeginTabBar = function(id, ...)
+  if id == "##combatTabs" then B.inCombatTabs = true end
+  return beginTabBar(id, ...)
+end
+ui.EndTabBar = function(...)
+  B.inCombatTabs = false
+  return endTabBar(...)
+end
+ui.BeginTabItem = function(name, flags, ...)
+  if B.inCombatTabs then B.tabsSeen[name] = true end
+  if name == B.selectTab then
+    flags = (flags or 0) | ui.TabItemFlags.SetSelected
+  end
+  local open = beginTabItem(name, flags, ...)
+  if B.inCombatTabs and name == "Cortex" and open then
+    B.inCortexTab = true
+  end
+  return open
+end
+ui.EndTabItem = function(...)
+  B.inCortexTab = false
+  return endTabItem(...)
+end
+ui.Text = function(t, ...) recordLine(t); return textFn(t, ...) end
+ui.TextColored = function(r, g, b, a, t, ...) recordLine(t); return textColFn(r, g, b, a, t, ...) end
+ui.SeparatorText = function(t, ...) recordLine(t); return sepTextFn(t, ...) end
+ui.Button = function(label, ...)
+  if B.inCortexTab then B.cortexControls[#B.cortexControls + 1] = tostring(label) end
+  return buttonFn(label, ...)
+end
+ui.SmallButton = function(label, ...)
+  if B.inCortexTab then B.cortexControls[#B.cortexControls + 1] = tostring(label) end
+  return smallButtonFn(label, ...)
+end
+ui.Checkbox = function(label, ...)
+  if B.inCortexTab then B.cortexControls[#B.cortexControls + 1] = tostring(label) end
+  return checkboxFn(label, ...)
+end
+)lua");
+
+    pack.run([](const auto& frames, const auto& eval, lua_State* L) {
+        frames(2);
+        CHECK(eval("tostring(B.tabsSeen['Cortex'] == true)") == "true");
+
+        // Assisted mode with active characters, counters, and pending proposal.
+        REQUIRE(luaL_dostring(L, "B.selectTab = 'Cortex'; B.cortexLines = {}; B.cortexControls = {}") == LUA_OK);
+        frames(2);
+        const std::string assisted = eval("table.concat(B.cortexLines, '\\n')");
+        CHECK(assisted.find("Enabled") != std::string::npos);
+        CHECK(assisted.find("Assist") != std::string::npos);
+        CHECK(assisted.find("Healthy") != std::string::npos);
+        CHECK(assisted.find("cortex-mini") != std::string::npos);
+        CHECK(assisted.find("http://127.0.0.1:8095") != std::string::npos);
+        CHECK(assisted.find("2") != std::string::npos); // queued
+        CHECK(assisted.find("1") != std::string::npos); // in-flight / errors
+        CHECK(assisted.find("7") != std::string::npos); // completed decisions
+        CHECK(assisted.find("Tankone") != std::string::npos);
+        CHECK(assisted.find("DECISION READY") != std::string::npos);
+        CHECK(assisted.find("Healerone") != std::string::npos);
+        CHECK(assisted.find("THINKING") != std::string::npos);
+        CHECK(assisted.find("hold_camp") != std::string::npos);
+        CHECK(assisted.find("timeout") != std::string::npos);
+        CHECK(assisted.find("hold_pull") != std::string::npos);
+        CHECK(assisted.find("healer_mana_low") != std::string::npos);
+        CHECK(assisted.find("Healer mana is at 18%") != std::string::npos);
+        CHECK(assisted.find("Pending confirmation") != std::string::npos);
+        CHECK(eval("#B.cortexControls") == "0");
+        CHECK(eval("#B.commanderCalls") == "0");
+        CHECK(eval("#B.combatCalls") == "0");
+
+        // Observe mode + unhealthy inference + Emergency Stop.
+        REQUIRE(luaL_dostring(L, R"lua(
+            B.cortexLines = {}
+            B.commander.cortex.mode = "CORTEX_OBSERVE"
+            B.commander.cortex.inferenceHealthy = false
+            B.commander.cortex.emergencyStop = true
+            B.commander.cortex.proposals = {}
+        )lua") == LUA_OK);
+        frames(1);
+        const std::string observe = eval("table.concat(B.cortexLines, '\\n')");
+        CHECK(observe.find("Observe") != std::string::npos);
+        CHECK(observe.find("Unhealthy") != std::string::npos);
+        CHECK(observe.find("EMERGENCY STOP") != std::string::npos);
+        CHECK(eval("#B.cortexControls") == "0");
+
+        // Disabled / unavailable Cortex state.
+        REQUIRE(luaL_dostring(L, R"lua(
+            B.cortexLines = {}
+            B.commander.cortex.available = false
+            B.commander.cortex.running = false
+            B.commander.cortex.mode = "DISABLED"
+            B.commander.cortex.emergencyStop = false
+            B.commander.cortex.characters = {}
+            B.commander.cortex.proposals = {}
+        )lua") == LUA_OK);
+        frames(1);
+        const std::string disabled = eval("table.concat(B.cortexLines, '\\n')");
+        CHECK(disabled.find("Unavailable") != std::string::npos);
+        CHECK(disabled.find("Disabled") != std::string::npos);
+        CHECK(eval("#B.cortexControls") == "0");
+        CHECK(eval("#B.commanderCalls") == "0");
+        CHECK(eval("#B.combatCalls") == "0");
+    });
+}

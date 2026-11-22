@@ -51,6 +51,23 @@ local ACK_COLORS = {
   TimedOut = "danger",
 }
 
+local CORTEX_MODE_LABELS = {
+  DISABLED = "Disabled",
+  CORTEX_OBSERVE = "Observe",
+  CORTEX_ASSISTED = "Assist",
+  CORTEX_AUTONOMOUS = "Autonomous (Gated)",
+}
+
+local CORTEX_STATUS_COLORS = {
+  DISABLED = "muted",
+  OBSERVING = "good",
+  QUEUED = "gold",
+  THINKING = "gold",
+  ["DECISION READY"] = "good",
+  WAITING = "gold",
+  ERROR = "danger",
+}
+
 local assistInput = ""
 local followInput = ""
 local syncedChar = ""
@@ -579,6 +596,164 @@ local function drawLogTab(st, s)
   end
 end
 
+local function drawCortexTab(s, h)
+  if not API.commander or not API.commander.Status then
+    colored(C.muted, "MQ Commander bridge unavailable.")
+    return
+  end
+  local cst = API.commander.Status()
+  if not cst or not cst.available then
+    colored(C.muted, "Session bus commander offline.")
+    return
+  end
+  local cx = cst.cortex
+  if not cx then
+    colored(C.muted, "Cortex status unavailable.")
+    return
+  end
+
+  local available = cx.available == true
+  local running = cx.running == true
+  local stateText = not available and "Unavailable" or (running and "Enabled (Running)" or "Disabled (Stopped)")
+  local stateColor = not available and C.muted or (running and C.good or C.gold)
+
+  local rawMode = cx.mode or "DISABLED"
+  local modeText = CORTEX_MODE_LABELS[rawMode] or rawMode
+  local modeColor = rawMode == "CORTEX_ASSISTED" and C.good
+    or (rawMode == "CORTEX_OBSERVE" and C.accent
+    or (rawMode == "CORTEX_AUTONOMOUS" and C.danger or C.muted))
+
+  local healthy = cx.inferenceHealthy == true
+  local healthText = healthy and "Healthy" or "Unhealthy"
+  local healthColor = healthy and C.good or C.danger
+  local modelText = (cx.modelName and cx.modelName ~= "") and cx.modelName or "(unset)"
+  local endpointText = (cx.endpoint and cx.endpoint ~= "") and cx.endpoint or "(unset)"
+
+  local chars = cx.characters or {}
+  local proposals = cx.proposals or {}
+  local inFlight = 0
+  for _, ch in ipairs(chars) do
+    if ch.brainStatus == "THINKING" then
+      inFlight = inFlight + 1
+    end
+  end
+
+  ui.Spacing()
+  colored(C.heading or C.accent, "Cortex Status (Read-Only)")
+  ui.SameLine()
+  colored(stateColor, "[" .. stateText .. "]")
+  ui.SameLine()
+  colored(modeColor, "Mode: " .. modeText)
+  ui.SameLine()
+  colored(healthColor, "Inference: " .. healthText)
+
+  if cx.emergencyStop then
+    colored(C.danger, "EMERGENCY STOP ACTIVE: Cortex inference paused and proposals held.")
+  end
+
+  colored(C.muted, string.format("Endpoint: %s  |  Model: %s", endpointText, modelText))
+  colored(C.muted, string.format(
+    "Counters — Queued: %d  |  In-Flight: %d  |  Completed: %d  |  Errors/Dropped: %d  |  Requests: %d  |  Roster: %d/%d",
+    cx.pendingQueue or 0,
+    inFlight,
+    cx.totalDecisions or 0,
+    cx.totalErrors or 0,
+    cx.totalRequests or 0,
+    cx.onlineCount or 0,
+    cx.rosterSize or 0))
+
+  ui.Spacing()
+  colored(C.heading or C.accent, string.format("Per-Character Cortex Status (%d)", #chars))
+  local tflags = ui.TableFlags.RowBg | ui.TableFlags.ScrollY | ui.TableFlags.SizingStretchProp | ui.TableFlags.BordersInnerV
+  local charH = math.max(95 * s, math.min(200 * s, (h or 680) * 0.25))
+  if #chars == 0 then
+    colored(C.faint, "No characters observed by Cortex.")
+  elseif ui.BeginTable("##cortexCharacters", 7, tflags, 0, charH) then
+    ui.TableSetupColumn("Character", ui.TableColumnFlags.WidthStretch, 1.0)
+    ui.TableSetupColumn("State", ui.TableColumnFlags.WidthFixed, 68 * s)
+    ui.TableSetupColumn("Brain", ui.TableColumnFlags.WidthFixed, 108 * s)
+    ui.TableSetupColumn("Mode", ui.TableColumnFlags.WidthFixed, 68 * s)
+    ui.TableSetupColumn("Objective", ui.TableColumnFlags.WidthStretch, 1.0)
+    ui.TableSetupColumn("Decision / Intention", ui.TableColumnFlags.WidthStretch, 1.0)
+    ui.TableSetupColumn("Proposal / Error", ui.TableColumnFlags.WidthStretch, 1.1)
+    ui.TableHeadersRow()
+    for idx, ch in ipairs(chars) do
+      ui.PushID("cxchar_" .. tostring(idx))
+      ui.TableNextRow()
+      ui.TableNextColumn()
+      local charLabel = (ch.characterName and ch.characterName ~= "") and ch.characterName or (ch.key or "")
+      colored(C.text, charLabel)
+      ui.TableNextColumn()
+      colored(ch.enabled and C.good or C.muted, ch.enabled and "Enabled" or "Disabled")
+      ui.TableNextColumn()
+      local bStatus = ch.brainStatus or "DISABLED"
+      colored(colorByName(CORTEX_STATUS_COLORS[bStatus] or "muted"), bStatus)
+      ui.TableNextColumn()
+      colored(C.muted, CORTEX_MODE_LABELS[ch.mode or ""] or (ch.mode or ""))
+      ui.TableNextColumn()
+      colored(C.text, (ch.objective and ch.objective ~= "") and ch.objective or "-")
+      ui.TableNextColumn()
+      local decText = (ch.hasDecision and ch.decisionAction and ch.decisionAction ~= "")
+        and ch.decisionAction
+        or ((ch.intention and ch.intention ~= "" and ch.intention ~= "none") and ch.intention or "-")
+      colored(ch.hasDecision and C.good or C.muted, decText)
+      ui.TableNextColumn()
+      if ch.lastError and ch.lastError ~= "" then
+        colored(C.danger, string.format("Err(%d): %s", ch.consecutiveErrors or 0, ch.lastError))
+      elseif ch.proposalPending then
+        colored(C.gold, "Pending confirmation")
+      else
+        colored(C.faint, "-")
+      end
+      ui.PopID()
+    end
+    ui.EndTable()
+  end
+
+  ui.Spacing()
+  colored(C.heading or C.accent, string.format("Pending Assisted Proposals (%d)", #proposals))
+  ui.SameLine()
+  colored(C.gold, "Pending confirmation only — read-only, not auto-executed")
+  if cx.emergencyStop then
+    colored(C.danger, "Emergency stop active: all pending proposals are suppressed.")
+  elseif #proposals == 0 then
+    colored(C.faint, "No pending proposals awaiting confirmation.")
+  elseif ui.BeginTable("##cortexProposals", 6, tflags, 0, 0) then
+    ui.TableSetupColumn("Character", ui.TableColumnFlags.WidthFixed, 100 * s)
+    ui.TableSetupColumn("Proposed Action", ui.TableColumnFlags.WidthFixed, 120 * s)
+    ui.TableSetupColumn("Status", ui.TableColumnFlags.WidthFixed, 130 * s)
+    ui.TableSetupColumn("Reason Code", ui.TableColumnFlags.WidthFixed, 120 * s)
+    ui.TableSetupColumn("Explanation", ui.TableColumnFlags.WidthStretch, 1.3)
+    ui.TableSetupColumn("Arbitration", ui.TableColumnFlags.WidthStretch, 1.0)
+    ui.TableHeadersRow()
+    for idx, p in ipairs(proposals) do
+      ui.PushID("cxprop_" .. tostring(idx))
+      ui.TableNextRow()
+      ui.TableNextColumn()
+      colored(C.text, (p.characterName and p.characterName ~= "") and p.characterName or (p.key or ""))
+      ui.TableNextColumn()
+      colored(C.accent, p.action or "none")
+      ui.TableNextColumn()
+      local confText = (p.awaitingConfirmation ~= false and not p.executed)
+        and "Pending confirmation"
+        or (p.executed and "Executed" or "Held")
+      colored(C.gold, confText)
+      ui.TableNextColumn()
+      colored(C.muted, p.reasonCode or "")
+      ui.TableNextColumn()
+      colored(C.text, p.explanation or "")
+      ui.TableNextColumn()
+      local arb = p.arbitrationOwner or ""
+      if p.arbitrationReason and p.arbitrationReason ~= "" then
+        arb = arb ~= "" and (arb .. ": " .. p.arbitrationReason) or p.arbitrationReason
+      end
+      colored(C.muted, arb)
+      ui.PopID()
+    end
+    ui.EndTable()
+  end
+end
+
 local function drawWindow(x, y, w, h, s)
   local st = API.combat.Status()
   if not st or not st.available then
@@ -719,6 +894,10 @@ local function drawWindow(x, y, w, h, s)
     end
     if ui.BeginTabItem("Transitions & Log") then
       drawLogTab(st, s)
+      ui.EndTabItem()
+    end
+    if ui.BeginTabItem("Cortex") then
+      drawCortexTab(s, h)
       ui.EndTabItem()
     end
     ui.EndTabBar()

@@ -564,8 +564,9 @@ character decision -> persistent memory -> Commander visibility -> validated RGM
   for each pair (agent vs RGMercs, agent vs human input, agent vs agent).
 - [ ] Tactical action validation for agent intentions, separate from the client's own command checks.
 - [ ] The Commander Cortex tab: per-agent state, last decision, cost, mode, and one fleet-wide stop.
-  The data it shows is already exposed read-only by `hs.CommanderStatus().cortex`; the tab itself, its
-  rendering and the confirm step are still to build.
+  The read-only `Cortex` tab is now rendered in `ui/modern/combat.lua` (`drawCortexTab`, tested in
+  `tests/lua_ui_modern_windows_test.cpp`) from `hs.CommanderStatus().cortex`; the human confirmation
+  step and fleet-wide stop control remain to be wired.
 - [ ] Observation-only, assisted and autonomous modes, each gated on the tests above.
   Observation-only and assisted run in `src/cortex/runtime.{h,cpp}` (proposals are exposed,
   never sent) and now reach the UI through `hs.CommanderStatus().cortex`; what is missing is
