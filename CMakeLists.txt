@@ -1177,6 +1177,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/cortex_health_test.cpp
     tests/cortex_runtime_test.cpp
     tests/cortex_commander_view_test.cpp
+    tests/cortex_endpoint_config_test.cpp
     tests/hailstone24/mq_login_import_test.cpp
     tests/hailstone24/group_profile_test.cpp
     tests/hailstone24/login_autoselect_test.cpp

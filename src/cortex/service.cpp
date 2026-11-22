@@ -12,6 +12,12 @@ CortexService::CortexService(std::shared_ptr<InferenceProvider> provider,
     view_.available = true;
 }
 
+CortexService::CortexService(InferenceEndpointConfig endpoint,
+                             std::shared_ptr<MemoryStore> memory,
+                             SupervisorConfig cfg)
+    : CortexService(std::make_shared<HttpInferenceProvider>(std::move(endpoint)),
+                    std::move(memory), std::move(cfg)) {}
+
 CortexService::~CortexService() { stop(); }
 
 void CortexService::start() {

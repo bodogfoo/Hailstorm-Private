@@ -1,4 +1,5 @@
 #include "cortex/inference_provider.h"
+#include "core/env.h"
 
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -6,13 +7,25 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <sstream>
 
 namespace hailstone::cortex {
 
 namespace {
+
+// The floor and ceiling the wire budget lives between: below kMinOutputTokens
+// the reasoning model's thinking can spend the whole reply (finding #6 of the
+// scale report), above kMaxOutputTokens it does not fit the provisioned
+// 8192-token context the six slots share.
+std::uint32_t clamp_output_tokens(std::uint32_t tokens) {
+    if (tokens < InferenceEndpointConfig::kMinOutputTokens) return InferenceEndpointConfig::kMinOutputTokens;
+    if (tokens > InferenceEndpointConfig::kMaxOutputTokens) return InferenceEndpointConfig::kMaxOutputTokens;
+    return tokens;
+}
 
 std::string json_escape(const std::string& s) {
     std::string out;
@@ -110,10 +123,44 @@ InferenceResponse MockInferenceProvider::complete(const InferenceRequest& req) {
     return resp;
 }
 
+InferenceEndpointConfig InferenceEndpointConfig::from_env() {
+    InferenceEndpointConfig cfg;
+    if (const char* v = core::env("CORTEX_HOST"); v && *v) cfg.host = v;
+    if (const char* v = core::env("CORTEX_PORT"); v && *v) {
+        char* end = nullptr;
+        const unsigned long p = std::strtoul(v, &end, 10);
+        if (end != v && *end == '\0' && p > 0 && p <= 65535) {
+            cfg.port = static_cast<std::uint16_t>(p);
+        }
+    }
+    if (const char* v = core::env("CORTEX_MODEL"); v && *v) cfg.model = v;
+    // The output budget: a positive token count, held to the provisioned
+    // context here and floored by the provider where it is sent.
+    if (const char* v = core::env("CORTEX_MAX_TOKENS"); v && *v && v[0] != '-') {
+        char* end = nullptr;
+        const unsigned long n = std::strtoul(v, &end, 10);
+        if (end != v && *end == '\0' && n > 0) {
+            const unsigned long capped =
+                std::min(n, static_cast<unsigned long>(InferenceEndpointConfig::kMaxOutputTokens));
+            cfg.output_tokens = static_cast<std::uint32_t>(capped);
+        }
+    }
+    return cfg;
+}
+
 HttpInferenceProvider::HttpInferenceProvider(std::string host,
                                              std::uint16_t port,
                                              std::string model)
-    : host_(std::move(host)), port_(port), model_(std::move(model)) {}
+    : host_(std::move(host)),
+      port_(port),
+      model_(std::move(model)),
+      output_tokens_(InferenceEndpointConfig::kDefaultOutputTokens) {}
+
+HttpInferenceProvider::HttpInferenceProvider(InferenceEndpointConfig cfg)
+    : host_(std::move(cfg.host)),
+      port_(cfg.port),
+      model_(std::move(cfg.model)),
+      output_tokens_(clamp_output_tokens(cfg.output_tokens)) {}
 
 std::string HttpInferenceProvider::endpoint() const {
     return "http://" + host_ + ":" + std::to_string(port_);
@@ -138,6 +185,25 @@ bool HttpInferenceProvider::health_check() {
     bool ok = (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
     ::close(fd);
     return ok;
+}
+
+std::string HttpInferenceProvider::request_body(const InferenceRequest& req) const {
+    // The budget that goes on the wire: the larger of what the caller asked
+    // for and this provider's configured budget, so a caller that asks for
+    // 64 (the number the supervisor used to hardcode) is raised to the
+    // configured budget, while a caller that asks for more still gets more.
+    // Nothing leaves below InferenceEndpointConfig::kMinOutputTokens.
+    const int budget = std::max(req.max_tokens, static_cast<int>(output_tokens_));
+
+    std::ostringstream body;
+    body << "{\"model\":\"" << json_escape(model_) << "\","
+         << "\"max_tokens\":" << budget << ","
+         << "\"temperature\":0.1,"
+         << "\"messages\":["
+         << "{\"role\":\"system\",\"content\":\"" << json_escape(req.system_prompt) << "\"},"
+         << "{\"role\":\"user\",\"content\":\"" << json_escape(req.user_prompt) << "\"}"
+         << "]}";
+    return body.str();
 }
 
 InferenceResponse HttpInferenceProvider::complete(const InferenceRequest& req) {
@@ -170,15 +236,7 @@ InferenceResponse HttpInferenceProvider::complete(const InferenceRequest& req) {
         return resp;
     }
 
-    std::ostringstream body;
-    body << "{\"model\":\"" << json_escape(model_) << "\","
-         << "\"max_tokens\":" << req.max_tokens << ","
-         << "\"temperature\":0.1,"
-         << "\"messages\":["
-         << "{\"role\":\"system\",\"content\":\"" << json_escape(req.system_prompt) << "\"},"
-         << "{\"role\":\"user\",\"content\":\"" << json_escape(req.user_prompt) << "\"}"
-         << "]}";
-    std::string body_str = body.str();
+    const std::string body_str = request_body(req);
 
     std::ostringstream http;
     http << "POST /v1/chat/completions HTTP/1.1\r\n"

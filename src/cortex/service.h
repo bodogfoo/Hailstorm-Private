@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "cortex/commander_view.h"
+#include "cortex/inference_provider.h"
 #include "cortex/runtime.h"
 #include "cortex/supervisor.h"
 #include "ipc/session_bus.h"
@@ -25,6 +26,13 @@ public:
     // `provider` is the inference backend behind the supervisor; `cfg` the
     // supervisor's queue, cooldown and circuit-breaker settings.
     explicit CortexService(std::shared_ptr<InferenceProvider> provider,
+                           std::shared_ptr<MemoryStore> memory = nullptr,
+                           SupervisorConfig cfg = {});
+    // The same service built from an endpoint instead of a provider: the
+    // provisioned assisted-mode server when nothing is configured, or the
+    // host/port/model the caller names. The provider is HttpInferenceProvider
+    // either way, so the view reports the endpoint actually in use.
+    explicit CortexService(InferenceEndpointConfig endpoint,
                            std::shared_ptr<MemoryStore> memory = nullptr,
                            SupervisorConfig cfg = {});
     ~CortexService();

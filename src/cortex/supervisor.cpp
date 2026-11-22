@@ -349,7 +349,10 @@ void CortexSupervisor::worker_loop() {
         req.character_key = task.key;
         req.system_prompt = std::move(sys_prompt);
         req.user_prompt = std::move(usr_prompt);
-        req.max_tokens = 64;
+        // No max_tokens here: the endpoint's configured output budget is
+        // what goes on the wire. The 64 this used to hardcode was all spent
+        // on the reasoning model's thinking, leaving an empty reply
+        // (bench-results/SCALE_TEST_REPORT.md finding #6).
         req.timeout_ms = static_cast<int>(cfg_.inference_timeout_ms);
         req.cancelled = task.cancelled;
 
