@@ -24,6 +24,9 @@ struct SupervisorConfig {
     std::size_t worker_threads = 2;
     std::size_t max_queue_size = 48;
     std::uint32_t per_char_cooldown_ms = 2000;
+    // Cadence of the background inference-health refresh. snapshot() reports
+    // this cached answer; it never runs the provider's probe itself.
+    std::uint32_t health_refresh_ms = 500;
     std::uint32_t inference_timeout_ms = 5000;
     std::uint32_t circuit_breaker_failures = 5;
     std::uint64_t circuit_breaker_cooldown_ms = 10000;
@@ -128,12 +131,18 @@ private:
     std::string build_system_prompt(const AgentState& agent) const;
     std::string build_user_prompt(const AgentState& agent, const CharacterObservation& obs) const;
     void worker_loop();
+    // Runs the provider's health probe on this thread and publishes the answer
+    // to health_cached_; snapshot() reads that cache and never probes itself.
+    void health_loop();
     // mu_ held: the profile behind the agent at `key` - written the first time its identity is
     // seen, and loaded back (objective and all) when an earlier run already left one behind.
     void remember_profile(const std::string& key);
 
     mutable std::mutex mu_;
     std::condition_variable cv_;
+    // Wakes the health refresh early when the supervisor stops, so shutdown
+    // does not wait out a whole refresh period.
+    std::condition_variable health_cv_;
     std::shared_ptr<InferenceProvider> provider_;
     std::shared_ptr<MemoryStore> memory_;
     SupervisorConfig cfg_;
@@ -141,6 +150,7 @@ private:
     std::unordered_map<std::string, AgentState> agents_;
     std::deque<QueuedTask> queue_;
     std::vector<std::thread> workers_;
+    std::thread health_thread_;
     bool running_ = false;
     bool emergency_stop_ = false;
     OperatingMode global_mode_ = OperatingMode::Observe;
@@ -151,6 +161,9 @@ private:
     std::atomic<std::uint64_t> total_errors_{0};
     std::uint32_t cb_failures_ = 0;
     std::uint64_t cb_open_until_ms_ = 0;
+    // Last answer published by the refresh thread. false before the first
+    // probe completes: an unfilled cache reports "not yet known" as unhealthy.
+    bool health_cached_ = false;
 };
 
 } // namespace hailstone::cortex

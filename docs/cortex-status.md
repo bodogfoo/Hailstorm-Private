@@ -80,7 +80,12 @@ Three more pieces exist now, all read-only towards the game:
   agents (identity, mode, enabled flag, last observation, latest decision), runs a worker
   pool over an inference queue, and applies `set_agent_enabled()`, `set_mode()` and the
   emergency stop. `submit_observation()` queues inference only for an enabled agent and only
-  on a significant event.
+  on a significant event. Inference health is a cached answer: a refresh thread probes the
+  provider every `health_refresh_ms` (500 ms default) and publishes the result, and
+  `snapshot()` reads that cache. The provider's `health_check()` is a connect to the model
+  endpoint, which can stall a caller for seconds against an endpoint that never answers, so
+  no snapshot or tick runs it — until the first refresh lands (at most one period after
+  `start()`) the cache still holds `false`.
 - `src/cortex/validator.{h,cpp}` — `validate_decision_json()` turns raw model output into a
   `Decision` (or a rejection reason), and `arbitrate()` decides, per mode, who owns an
   action: in Observe and Assisted mode it never authorizes Cortex execution.
@@ -98,7 +103,11 @@ enabled, observed on the current tick, in `Assisted` mode, outside the emergency
 a valid decision whose action resolves to an allowlisted intention and which arbitration
 refuses to run on Cortex's behalf.
 
-Tests: `tests/cortex_supervisor_test.cpp` (8 cases) and `tests/cortex_runtime_test.cpp`
+Tests: `tests/cortex_supervisor_test.cpp` (8 cases), `tests/cortex_health_test.cpp`
+(4 cases: a snapshot stays inside a 250 ms budget while the provider's probe parks for
+1.5 s, snapshots add no probes of their own, the cached answer tracks the provider, and
+`stop()` returns within the in-flight probe rather than a refresh period) and
+`tests/cortex_runtime_test.cpp`
 (4 cases: observation feeding and agent registration, Observe mode, the assisted proposal
 gates including emergency stop and a roster departure, and a rejected non-allowlisted
 action).

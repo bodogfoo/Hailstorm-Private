@@ -30,9 +30,14 @@ void CortexSupervisor::start() {
     std::lock_guard<std::mutex> lock(mu_);
     if (running_) return;
     running_ = true;
+    // The cache starts empty: the first answer is the refresh thread's.
+    health_cached_ = false;
     std::size_t n = std::max<std::size_t>(1, cfg_.worker_threads);
     for (std::size_t i = 0; i < n; ++i) {
         workers_.emplace_back(&CortexSupervisor::worker_loop, this);
+    }
+    if (provider_ && !health_thread_.joinable()) {
+        health_thread_ = std::thread(&CortexSupervisor::health_loop, this);
     }
 }
 
@@ -47,15 +52,22 @@ void CortexSupervisor::stop() {
         queue_.clear();
     }
     cv_.notify_all();
+    health_cv_.notify_all();
     for (auto& w : workers_) {
         if (w.joinable()) w.join();
     }
     workers_.clear();
+    // Joins only after the in-flight probe returns, so shutdown waits at most
+    // one probe, never a refresh period.
+    if (health_thread_.joinable()) health_thread_.join();
 }
 
 void CortexSupervisor::set_provider(std::shared_ptr<InferenceProvider> provider) {
     std::lock_guard<std::mutex> lock(mu_);
     provider_ = std::move(provider);
+    if (running_ && provider_ && !health_thread_.joinable()) {
+        health_thread_ = std::thread(&CortexSupervisor::health_loop, this);
+    }
 }
 
 void CortexSupervisor::set_mode(OperatingMode mode) {
@@ -400,6 +412,32 @@ void CortexSupervisor::worker_loop() {
     }
 }
 
+// Runs on health_thread_ only. The provider's health_check() is a connect to
+// the model endpoint and may block for seconds against one that never answers,
+// so it runs here - off mu_ - and publishes its answer to health_cached_ for
+// snapshot() to read. stop() joins this thread, so shutdown waits out at most
+// the one probe in flight.
+void CortexSupervisor::health_loop() {
+    for (;;) {
+        std::shared_ptr<InferenceProvider> provider;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (!running_) return;
+            provider = provider_;
+        }
+
+        const bool healthy = provider && provider->health_check();
+
+        std::unique_lock<std::mutex> lock(mu_);
+        if (!running_) return;
+        health_cached_ = healthy;
+        if (health_cv_.wait_for(lock, std::chrono::milliseconds(cfg_.health_refresh_ms),
+                                [this] { return !running_; })) {
+            return;
+        }
+    }
+}
+
 SupervisorSnapshot CortexSupervisor::snapshot() const {
     std::lock_guard<std::mutex> lock(mu_);
     SupervisorSnapshot snap;
@@ -412,7 +450,9 @@ SupervisorSnapshot CortexSupervisor::snapshot() const {
     if (provider_) {
         snap.model_name = provider_->model_name();
         snap.endpoint = provider_->endpoint();
-        snap.inference_healthy = provider_->health_check();
+        // The cached answer the refresh thread published. Probing here would
+        // run a TCP connect while holding mu_, stalling every other caller.
+        snap.inference_healthy = health_cached_;
     }
     for (const auto& [k, a] : agents_) {
         AgentSnapshot as;
