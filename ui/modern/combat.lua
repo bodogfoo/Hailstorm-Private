@@ -673,15 +673,39 @@ local function drawCortexTab(s, h)
   cortexActionInput = actionText
   ui.SameLine()
   ui.SetNextItemWidth(150 * s)
-  local targetText = ui.InputTextWithHint("##cortexTarget", "Target/session (optional)", cortexTargetInput, 96)
-  cortexTargetInput = targetText
+  local targetLabel = cortexTargetInput == "" and "(self)" or cortexTargetInput
+  if ui.BeginCombo("##cortexTarget", targetLabel) then
+    if ui.Selectable("(self)", cortexTargetInput == "") then cortexTargetInput = "" end
+    for _, ch in ipairs(chars) do
+      local name = ch.characterName or ch.key or ""
+      if name ~= "" and ui.Selectable(name, name == cortexTargetInput) then cortexTargetInput = name end
+    end
+    ui.EndCombo()
+  end
   ui.SameLine()
   ui.SetNextItemWidth(180 * s)
-  local argText, argEnter = ui.InputTextWithHint("##cortexArg", "Argument (name/profile)", cortexArgInput, 128,
-    ui.InputTextFlags.EnterReturnsTrue)
-  cortexArgInput = argText
+  local argOptions = { "" }
+  if cortexActionInput == "follow" or cortexActionInput == "assist" then
+    argOptions = { "" }
+    for _, ch in ipairs(chars) do
+      local name = ch.characterName or ch.key or ""
+      if name ~= "" then table.insert(argOptions, name) end
+    end
+  elseif cortexActionInput == "reload_profile" then
+    argOptions = cst.availableProfiles or { "Main Tank", "Caster Group", "Melee Group", "Raid", "Solo" }
+  elseif cortexActionInput == "pause_script" or cortexActionInput == "resume_script" or cortexActionInput == "restart_script" then
+    argOptions = { "rgmercs", "heartbeat" }
+  end
+  local argLabel = cortexArgInput == "" and "(none)" or cortexArgInput
+  if ui.BeginCombo("##cortexArg", argLabel) then
+    for _, option in ipairs(argOptions) do
+      local label = option == "" and "(none)" or option
+      if ui.Selectable(label, option == cortexArgInput) then cortexArgInput = option end
+    end
+    ui.EndCombo()
+  end
   ui.SameLine()
-  if ui.SmallButton("Send Cortex Command") or actionEnter or argEnter then
+  if ui.SmallButton("Send Cortex Command") then
     runCommander(cortexActionInput, cortexTargetInput, cortexArgInput)
   end
   if lastMsg ~= "" then
