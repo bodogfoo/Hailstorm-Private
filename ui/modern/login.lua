@@ -457,7 +457,7 @@ local function groupProfilesCard(view, s, bh)
           sl.headless and "Headless BG" or "Foreground"))
         ui.TableNextColumn()
         local chName = sl.character ~= "" and sl.character or "-"
-        if not sl.enabled then P.Muted(chName) else ui.TextUnformatted(chName) end
+        if not sl.enabled then P.Muted(chName) else ui.Text(chName) end
         ui.TableNextColumn()
         P.Muted(sl.classRole ~= "" and sl.classRole or "-")
         ui.TableNextColumn()

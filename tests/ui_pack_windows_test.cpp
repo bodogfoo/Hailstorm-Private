@@ -1675,6 +1675,84 @@ end
     }
 }
 
+// The modern login's Group profiles card (ui/modern/login.lua, hs.LoginScreen's groupProfiles/groupSlots): a profile
+// with an enabled character and a disabled slot draws its slot table, and a script error there does not take the
+// whole login screen down with it (a card that raises is re-raised after the cards, so the screen draws nothing).
+TEST_CASE("UI packs (modern): the login screen's Group profiles card draws a profile's slots without a script error") {
+    const fs::path src = fs::path(__FILE__).parent_path().parent_path() / "ui" / "modern";
+    hailstone::test::ScratchDir dir_scratch("ui_pack_login_groups_test");
+    fs::path dir = dir_scratch.path();
+    fs::create_directories(dir / "game");
+    fs::copy(src, dir / "modern", fs::copy_options::recursive);
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::GetIO().IniFilename = nullptr;
+    unsigned char* px = nullptr;
+    int w = 0, h = 0;
+    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    {
+        Session s(dir, "modern");
+        s.host.in_game = s.host.ui_ready = false;
+        REQUIRE(luaL_dostring(s.lua.state(),
+                              "hs.InGame = function() return false end; hs.UI.session.InGame = hs.InGame") == LUA_OK);
+
+        ui::LoginView login;
+        login.servers_dir = dir / "servers";
+        login.ui_packs = {{"modern", "Modern", "", "mouse", false, {}}};
+        login.ui = login.default_ui = "modern";
+        ServerProfile p;
+        p.id = "alpha";
+        p.name = "Alpha";
+        p.host = "127.0.0.1";
+        p.username = "first";
+        login.profiles = {p};
+        ui::select_profile(login, 0);
+        // One profile with two slots: an enabled character (drawn with its name) and a disabled one (muted).
+        ui::LoginView::GroupProfileSummaryView gp;
+        gp.id = "ezsix";
+        gp.name = "EZ Six";
+        gp.description = "Six boxes";
+        gp.source_path = (dir / "profiles/ezsix.ini").string();
+        gp.slot_count = 2;
+        login.group_profiles = {gp};
+        login.group_selected = 0;
+        ui::LoginView::GroupSlotView on;
+        on.slot_number = 1;
+        on.launch_order = 1;
+        on.enabled = true;
+        on.session_id = "mq-group1-1";
+        on.character = "Bob";
+        on.account = "first";
+        on.server_id = "alpha";
+        on.world = "Alpha";
+        on.class_role = "WAR";
+        on.settings_path = "/x/eqclient.ini";
+        on.auto_login = true;
+        on.headless = true;
+        on.status = "Online";
+        on.online = true;
+        ui::LoginView::GroupSlotView off = on;
+        off.slot_number = 2;
+        off.launch_order = 2;
+        off.enabled = false;
+        off.session_id = "mq-group1-2";
+        off.character.clear();
+        off.status = "Offline";
+        off.online = false;
+        login.group_slots = {on, off};
+        login.group_slot_selected = 0;
+        s.host.login = &login;
+        // the card open from the first frame (test.login = groups), as the toggle opens it
+        REQUIRE(luaL_dostring(s.lua.state(), "ui.SetSetting('test.login', 'groups')") == LUA_OK);
+        s.frames(3);
+        CHECK(s.api.replaces("LoginScreen"));
+        CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+        CHECK(ImGui::FindWindowByName("###modern.pregame.login.groups") != nullptr);
+        CHECK(ImGui::FindWindowByName("###modern.pregame.login") != nullptr);
+        s.host.login = nullptr;
+    }
+    ImGui::DestroyContext(ctx);
+}
+
 TEST_CASE("UI packs: the login screen's More options pick the texture pack (hs.Option texture_pack)") {
     for (const char* pack : {"modern", "gamepad"}) {
         INFO(pack);
