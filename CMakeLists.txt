@@ -154,6 +154,8 @@ add_library(hailstone_engine STATIC
   src/cortex/memory.cpp
   src/cortex/supervisor.cpp
   src/cortex/runtime.cpp
+  src/cortex/commander_view.cpp
+  src/cortex/service.cpp
   src/plugin/native_plugins.cpp
   src/plugin/world_geometry.cpp
   src/render/world_geometry_renderer.cpp
@@ -1173,6 +1175,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/cortex_observation_test.cpp
     tests/cortex_supervisor_test.cpp
     tests/cortex_runtime_test.cpp
+    tests/cortex_commander_view_test.cpp
     tests/hailstone24/mq_login_import_test.cpp
     tests/hailstone24/group_profile_test.cpp
     tests/hailstone24/login_autoselect_test.cpp

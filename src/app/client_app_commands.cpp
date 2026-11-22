@@ -1472,6 +1472,11 @@ UiHost::CommanderStatusSnapshot ClientApp::commander_status() {
         if (combat_engine_) self.follow_target = combat_engine_->profile().follow_target;
         out.peers.insert(out.peers.begin(), std::move(self));
     }
+    // The Cortex slice: the shared supervisor's health and mode, its
+    // per-character state and the proposals awaiting a human, straight from
+    // the service this process owns. Read-only display data (no execution
+    // lives in this class's path either).
+    out.cortex = cortex_service_ ? cortex_service_->view() : cortex::CortexStatusView{};
     return out;
 }
 

@@ -15,7 +15,8 @@ character game state -> agent observation -> shared local miniature model
 
 Status as written: **2026-11-21**, branch `codex/hailstone-unified-review`,
 commit `ef765c22`; updated on branch `feature/hailstone-cortex` with the shared
-supervisor and the telemetry runtime below. This document is the durable record; the
+supervisor, the telemetry runtime, the application-owned service and the Commander
+status surface below. This document is the durable record; the
 audit that produced it is in `CORTEX_STATUS_REPORT.md` at the repository root.
 
 ## What exists, and what does not
@@ -30,7 +31,7 @@ source file, no branch, no commit.
 | Component | Status | Evidence | Outstanding |
 |---|---|---|---|
 | Structured game-state observations | PARTIAL | `src/ipc/session_bus.h:58` `SessionSnapshot` (identity, zone, target, HP/mana/endurance %, group leader, combat state, script state, RSS/VRAM); published every 250 ms by `src/app/client_app.cpp:1330` `publish_bus_telemetry()`. The observation record itself is `src/cortex/observation.h`, added with this document. | Observation is built from bus telemetry only; no spawn list, inventory, buffs, spell gems or positions. Needs a wider snapshot before decisions can be tactical. |
-| Native C++ agent runtime | PARTIAL | One shared `CortexSupervisor` (`src/cortex/supervisor.{h,cpp}`): a worker pool over an inference queue with per-character cooldown, priority, backpressure, a circuit breaker, per-agent enable and a mode switch. `src/cortex/runtime.{h,cpp}` drives it from the session bus. Tests: `tests/cortex_supervisor_test.cpp`, `tests/cortex_runtime_test.cpp`. | Nothing is wired into `client_app.cpp` yet, no per-agent task cancellation when a character leaves the roster, no Commander surface. |
+| Native C++ agent runtime | PARTIAL | One shared `CortexSupervisor` (`src/cortex/supervisor.{h,cpp}`): a worker pool over an inference queue with per-character cooldown, priority, backpressure, a circuit breaker, per-agent enable and a mode switch. `src/cortex/runtime.{h,cpp}` drives it from the session bus. Now owned by the application: `src/cortex/service.{h,cpp}` `CortexService` is created in the `ClientApp` constructor, started in Observe mode, ticked from `publish_bus_telemetry()` (`src/app/client_app.cpp:1330`) on the cached roster, and read by `commander_status()` (`src/app/client_app_commands.cpp`). Tests: `tests/cortex_supervisor_test.cpp`, `tests/cortex_runtime_test.cpp`, `tests/cortex_commander_view_test.cpp`. | No per-agent task cancellation when a character leaves the roster; the service is created with the default HTTP provider, so no endpoint/model is configured yet. |
 | RGMercs user-module integration | COMPLETE | `src/mq/rgmercs_bridge.h` (typed settings, module toggles, bounded logs, SQLite/Lua import, adapter queue), `src/mq/lua_hailstone.cpp` (`rgmercs.*` bindings), `ui/modern/rgmercs.lua`. Tests: `tests/hailstone24/rgmercs_trusted_loader_test.cpp`, `tests/hailstone24/rgmercs_native_ui_test.cpp`. Runtime scripts are separate from this repository (`~/.local/share/hailstone24/scripts/rgmercs/`). | Nothing for Cortex; this is the interface an intention has to end in. |
 | Shared miniature model inference | PARTIAL | `src/cortex/inference_provider.{h,cpp}`: the `InferenceProvider` interface, an HTTP JSON client with timeouts and a mock used by tests. The supervisor runs its queue against any provider. | No default endpoint in the client, no prompt builder beyond the supervisor's, no token accounting, no fallback path that returns control to RGMercs. |
 | Individual character identities | PARTIAL | Per-process identity: `session_id`, character, server, class and level are published (`SessionSnapshot`); each client has its own data folder. No agent identity, persona or per-agent prompt state. | An agent identity that survives a zone or a relog, and is distinct from the game character's name. |
@@ -43,11 +44,11 @@ source file, no branch, no commit.
 | Tactical action validation | PARTIAL | The client validates its own commands (target existence, nav reachability, `move_melee` range, combat preconditions in `src/combat/`). | A validator for *agent intentions*: what an agent may propose, what is refused, and what is refused silently. |
 | Action ownership and arbitration | PARTIAL | Manual input takes the movement decision away from the controller for a cooldown (`src/combat/movement_controller.cpp`, `manual_override_active`/`manual_override_remaining_ms` in `src/combat/combat_types.h:398`), and `/estop` latches the combat engine. No arbitration between an agent and RGMercs. | An explicit owner per action class (movement, targeting, casting, looting) with a stated precedence order and a test for each. |
 | Natural-language objectives | NOT STARTED | Nothing parses an objective; `/` commands are the only input. | Objective intake, decomposition, and a plan representation that maps to valid intentions. |
-| Commander Cortex tab | NOT STARTED | The Combat/Commander window has four tabs: `Players / Clients`, `Overview & Rules`, `Spell Loadout`, `Transitions & Log` (`ui/modern/combat.lua:708`). | The tab itself: per-agent state, last decision, token use, mode, kill switch. |
+| Commander Cortex tab | PARTIAL | The Combat/Commander window has four tabs: `Players / Clients`, `Overview & Rules`, `Spell Loadout`, `Transitions & Log` (`ui/modern/combat.lua:708`). The status data the tab needs is now exposed read-only: `hs.CommanderStatus().cortex` (`src/app/lua_ui_combat.cpp` `push_cortex_view`, fed from `UiHost::CommanderStatusSnapshot.cortex`). | The tab itself: rendering the per-agent state, last decision, token use, mode and kill switch, plus a confirm step for a proposal. |
 | Manual override | PARTIAL | Human commands and native controls work; the combat controller yields to manual movement for a cooldown. There is nothing to override yet. | Manual override that is explicit, visible, and tested against a live agent. |
 | Global emergency stop | PARTIAL | `/estop` latches `EmergencyStop` per client (`src/app/client_app_commands.cpp:699`, `:944`), the Combat window exposes it (`ui/modern/combat.lua:606`), and the bus can dispatch a command to every session (`CommandScope::AllIncludingSelf`). Tested at the combat-engine level. | One control that stops every agent *and* every character, fails closed if the bus is down, and is tested as a fleet action. |
-| Observation-only mode | PARTIAL | `CortexRuntime::tick()` runs observe -> submit -> decision with the supervisor in `Observe` mode, where arbitration always refuses Cortex execution (`observation mode: proposals only`) and the runtime reports no proposal. Tests: `tests/cortex_runtime_test.cpp` ("Observe mode ..."). | Nothing logs or displays the observation/decision stream yet. |
-| Assisted mode | PARTIAL | The same tick in `Assisted` mode yields `cortex::AssistedProposal` records: the character, the allowlisted intention and action, the reason and the arbitration result (`assisted mode: awaiting confirmation`), read-only, `executed` always false. Tests: `tests/cortex_runtime_test.cpp` ("Assisted mode ...", "Assisted proposals ..."). | A Commander window that shows them and a human confirmation step; the runtime never sends a command. |
+| Observation-only mode | PARTIAL | `CortexRuntime::tick()` runs observe -> submit -> decision with the supervisor in `Observe` mode, where arbitration always refuses Cortex execution (`observation mode: proposals only`) and the runtime reports no proposal. The client starts its service in this mode. Tests: `tests/cortex_runtime_test.cpp` ("Observe mode ..."), `tests/cortex_commander_view_test.cpp` (the view reports `CORTEX_OBSERVE` and no proposal). | Nothing logs the observation/decision stream yet; the view shows state only. |
+| Assisted mode | PARTIAL | The same tick in `Assisted` mode yields `cortex::AssistedProposal` records: the character, the allowlisted intention and action, the reason and the arbitration result (`assisted mode: awaiting confirmation`), read-only, `executed` always false. They now reach the UI as `hs.CommanderStatus().cortex.proposals[]` (and each waiting character as `characters[].proposalPending`), still read-only. Tests: `tests/cortex_runtime_test.cpp` ("Assisted mode ...", "Assisted proposals ..."), `tests/cortex_commander_view_test.cpp`. | A human confirmation step and the window that shows them; the runtime and the view never send a command. |
 | Autonomous mode | NOT STARTED | Deliberately: `CortexRuntime` exposes no path to it, and `arbitrate()` is the only code that could ever authorize it. | Gated behind arbitration, validation and the safety tests above. |
 | Headless background client compatibility | COMPLETE | `ExecutionState::BackgroundHeadless` (`src/app/execution_state.h`), entered by `ClientApp::enter_background_headless()` (`src/app/client_app.cpp:1303`), telemetry keeps publishing. Tests: `tests/hailstone24/execution_state_test.cpp`. | Nothing for Cortex; an agent must not assume a rendered frame. |
 | 24 simultaneous clients | PARTIAL | The bus is written for 24 (peer table, roster, 250 ms telemetry, bounded 1 MiB frames) and a 24-box harness exists (`hailstone24/scripts/bench_24box.sh`), but no 24-agent run is recorded, and no 24-*agent* capacity exists because there are no agents. | A recorded 24-client run with per-client latency, RSS and VRAM. |
@@ -102,6 +103,49 @@ Tests: `tests/cortex_supervisor_test.cpp` (8 cases) and `tests/cortex_runtime_te
 gates including emergency stop and a roster departure, and a rejected non-allowlisted
 action).
 
+## The application-owned service and the Commander status path
+
+Two more pieces wire that runtime into the client:
+
+- `src/cortex/service.{h,cpp}` — `cortex::CortexService` is the process's owner of the shared
+  supervisor and its `CortexRuntime`: created and started by the `ClientApp` constructor
+  (`src/app/client_app_internal.h`), ticked from `publish_bus_telemetry()` on the roster the
+  session bus caches, and stopped with the app. It starts in `Observe` mode. Its API is
+  `start/stop/running/tick/view/supervisor` — there is no method that runs, confirms or
+  dispatches anything, which the test states as a compile-time assertion.
+- `src/cortex/commander_view.{h,cpp}` — `CortexStatusView` and `to_commander_view(report,
+  running)` copy a `RuntimeReport` into display fields: the supervisor's health, mode and
+  counters, the tick's roster numbers, one `CortexCharacterView` per agent and one
+  `CortexProposalView` per proposal. A proposal carries the allowlisted action, the untrusted
+  reason and explanation text, the arbitration owner and reason, `awaiting_confirmation` and
+  `executed` — always false. There is no command field.
+
+The client reads it in `ClientApp::commander_status()` and the Lua binding
+`hs.CommanderStatus()` adds one table, `cortex`, beside the keys it already returned
+(`available`, `busConnected`, `peers`, `trackedCommands`, `sessionId`, `characterName`,
+`executionState`, `activeProfile`, ... — all unchanged, and present with the same shapes in
+the unavailable branch):
+
+```
+cortex = { available, running, mode, emergencyStop, inferenceHealthy, modelName, endpoint,
+           pendingQueue, totalRequests, totalDecisions, totalErrors, observedMs,
+           rosterSize, onlineCount,
+           characters[] = { key, serverName, characterName, brainStatus, mode, objective,
+                            intention, decisionAction, lastError, enabled, hasDecision,
+                            proposalPending, consecutiveErrors },
+           proposals[]  = { key, characterName, action, reasonCode, explanation,
+                            arbitrationOwner, arbitrationReason, awaitingConfirmation,
+                            executed, decidedMs } }
+```
+
+Nothing on this path sends a command: the view is data, the service has no execution method,
+and the Lua table has no field a script could hand to the game. A proposal leaves as display
+data; a human confirming it is a later slice.
+
+Tests: `tests/cortex_commander_view_test.cpp` (3 cases: the report-to-view mapping, the
+service lifecycle and its gates including emergency stop, and the Lua table with the
+pre-existing schema).
+
 ## Safety stance
 
 - No autonomous live action is enabled. Nothing in `src/cortex/` can send a command.
@@ -115,6 +159,7 @@ action).
 cmake --build build -j8                  # Release, Ninja
 build/hailstone_tests -tc="cortex observation*"
 build/hailstone_tests -tc="*cortex*,*Cortex*"
+build/hailstone_tests -tc="*Commander*"  # the Commander status path (Cortex view + Lua table)
 build/hailstone_tests                    # whole suite; TMPDIR must be short (docs/ci.md)
 python3 tools/sync_wiki.py --check
 ```

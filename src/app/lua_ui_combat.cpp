@@ -58,6 +58,69 @@ void push_string_array(lua_State* L, const char* key, const std::vector<std::str
     lua_setfield(L, -2, key);
 }
 
+// The Cortex slice of hs.CommanderStatus(): supervisor health and mode, the
+// per-character state, and the assisted proposals awaiting a human. State to
+// display and nothing else - there is no command field here and none of it is
+// executable, so a pack cannot turn this table into an action
+// (cortex/commander_view.h).
+void push_cortex_view(lua_State* L, const cortex::CortexStatusView& cx) {
+    lua_createtable(L, 0, 14);
+    set_bool(L, "available", cx.available);
+    set_bool(L, "running", cx.running);
+    set_str(L, "mode", cortex::to_string(cx.mode));
+    set_bool(L, "emergencyStop", cx.emergency_stop);
+    set_bool(L, "inferenceHealthy", cx.inference_healthy);
+    set_str(L, "modelName", cx.model_name);
+    set_str(L, "endpoint", cx.endpoint);
+    set_int(L, "pendingQueue", static_cast<lua_Integer>(cx.pending_queue_size));
+    set_int(L, "totalRequests", static_cast<lua_Integer>(cx.total_requests));
+    set_int(L, "totalDecisions", static_cast<lua_Integer>(cx.total_decisions));
+    set_int(L, "totalErrors", static_cast<lua_Integer>(cx.total_errors));
+    set_int(L, "observedMs", static_cast<lua_Integer>(cx.observed_ms));
+    set_int(L, "rosterSize", static_cast<lua_Integer>(cx.roster_size));
+    set_int(L, "onlineCount", static_cast<lua_Integer>(cx.online_count));
+
+    lua_createtable(L, static_cast<int>(cx.characters.size()), 0);
+    for (std::size_t i = 0; i < cx.characters.size(); ++i) {
+        const auto& ch = cx.characters[i];
+        lua_createtable(L, 0, 13);
+        set_str(L, "key", ch.key);
+        set_str(L, "serverName", ch.server_name);
+        set_str(L, "characterName", ch.character_name);
+        set_str(L, "brainStatus", cortex::to_string(ch.status));
+        set_str(L, "mode", cortex::to_string(ch.mode));
+        set_str(L, "objective", ch.objective);
+        set_str(L, "intention", cortex::to_string(ch.intention));
+        set_str(L, "decisionAction", ch.decision_action);
+        set_str(L, "lastError", ch.last_error);
+        set_bool(L, "enabled", ch.enabled);
+        set_bool(L, "hasDecision", ch.has_decision);
+        set_bool(L, "proposalPending", ch.proposal_pending);
+        set_int(L, "consecutiveErrors", static_cast<lua_Integer>(ch.consecutive_errors));
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "characters");
+
+    lua_createtable(L, static_cast<int>(cx.proposals.size()), 0);
+    for (std::size_t i = 0; i < cx.proposals.size(); ++i) {
+        const auto& p = cx.proposals[i];
+        lua_createtable(L, 0, 11);
+        set_str(L, "key", p.key);
+        set_str(L, "characterName", p.character_name);
+        set_str(L, "action", p.action);
+        set_str(L, "reasonCode", p.reason_code);
+        set_str(L, "explanation", p.explanation);
+        set_str(L, "arbitrationOwner", p.arbitration_owner);
+        set_str(L, "arbitrationReason", p.arbitration_reason);
+        set_bool(L, "awaitingConfirmation", p.awaiting_confirmation);
+        set_bool(L, "executed", p.executed);
+        set_int(L, "decidedMs", static_cast<lua_Integer>(p.decided_ms));
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "proposals");
+    lua_setfield(L, -2, "cortex");
+}
+
 int CombatStatus(lua_State* L) {
     UiHost& h = host_of(L);
     if (plugin_code() || !h.combat.status || !h.combat.profile) {
@@ -229,7 +292,7 @@ int CombatDo(lua_State* L) {
 int CommanderStatus(lua_State* L) {
     UiHost& h = host_of(L);
     if (plugin_code() || !h.commander.status) {
-        lua_createtable(L, 0, 5);
+        lua_createtable(L, 0, 6);
         set_bool(L, "available", false);
         set_bool(L, "busConnected", false);
         set_bool(L, "autoHeadlessOthers", true);
@@ -237,13 +300,14 @@ int CommanderStatus(lua_State* L) {
         lua_setfield(L, -2, "peers");
         lua_newtable(L);
         lua_setfield(L, -2, "trackedCommands");
+        push_cortex_view(L, cortex::CortexStatusView{});
         return 1;
     }
 
     auto& snap = plugin::lua_keep<UiHost::CommanderStatusSnapshot>(L);
     plugin::cxx_guard(L, [&] { snap = h.commander.status(); });
 
-    lua_createtable(L, 0, 10);
+    lua_createtable(L, 0, 11);
     set_bool(L, "available", true);
     set_str(L, "sessionId", snap.session_id);
     set_str(L, "characterName", snap.character_name);
@@ -302,6 +366,8 @@ int CommanderStatus(lua_State* L) {
         lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
     }
     lua_setfield(L, -2, "trackedCommands");
+
+    push_cortex_view(L, snap.cortex);
 
     return 1;
 }

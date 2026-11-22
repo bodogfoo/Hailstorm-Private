@@ -47,6 +47,10 @@ struct AgentSnapshot {
 
 struct SupervisorSnapshot {
     bool emergency_stop = false;
+    // The global mode every agent's mode is stamped from: nothing runs on its
+    // own in Observe, Assisted proposes for a human, Autonomous is off unless
+    // a gate turns it on (types.h).
+    OperatingMode mode = OperatingMode::Observe;
     bool inference_healthy = false;
     std::string model_name;
     std::string endpoint;

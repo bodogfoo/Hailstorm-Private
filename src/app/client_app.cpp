@@ -1333,6 +1333,16 @@ void ClientApp::publish_bus_telemetry() {
     if (last_telemetry_at_ != Clock::time_point{} && now - last_telemetry_at_ < std::chrono::milliseconds(250)) return;
     last_telemetry_at_ = now;
 
+    // The shared Cortex runtime observes the roster on this same rhythm: one
+    // observation pass per telemetry tick, so the state and the proposals
+    // commander_status() hands to the pack are never older than a tick. The
+    // runtime only observes and reports - nothing is executed here.
+    if (cortex_service_) {
+        const auto now_ms = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
+        cortex_service_->tick(bus_, now_ms);
+    }
+
     std::uint64_t rss_bytes = platform::resident_memory().value_or(0);
     std::uint64_t vram_bytes = 0;
     for (const auto& h : vk_.heap_use()) {

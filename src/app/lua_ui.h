@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "app/bug_report.h"
+#include "cortex/commander_view.h"
 #include "game/ability_book.h"
 #include "game/char_select_camera.h"
 #include "game/hotbuttons.h"
@@ -426,6 +427,10 @@ struct UiHost {
         std::vector<std::string> available_profiles;
         std::vector<ipc::SessionSnapshot> peers;
         std::vector<ipc::TrackedCommand> tracked_commands;
+        // The Cortex slice (cortex/commander_view.h): supervisor health and
+        // mode, per-character state and the proposals awaiting a human. State
+        // to display, never a command: CommanderStatus only reads it.
+        cortex::CortexStatusView cortex;
     };
     struct CommanderBridge {
         std::function<CommanderStatusSnapshot()> status;

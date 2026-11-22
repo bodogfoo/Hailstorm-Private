@@ -548,6 +548,12 @@ character decision -> persistent memory -> Commander visibility -> validated RGM
 
 - [x] The observation layer (`src/cortex/observation.*`): one character's published state plus its group from
   the session-bus roster, as JSON and as one line of prompt text; read-only; unit tests.
+- [x] The application-owned runtime service (`src/cortex/service.{h,cpp}`) and the Commander status path
+  (`src/cortex/commander_view.{h,cpp}`): one `CortexService` per process, created with the client, ticked from
+  `publish_bus_telemetry()` on the roster the bus caches, and read by `commander_status()` into
+  `hs.CommanderStatus().cortex` - supervisor health and mode, per-character state, and the proposals awaiting a
+  human. Display data only; there is no execution or dispatch anywhere on the path.
+  Tests: `tests/cortex_commander_view_test.cpp`.
 - [ ] A wider observation: spawns, buffs, spell gems, inventory, positions, quest state.
 - [ ] One shared local model endpoint for the box, with a request timeout and a fallback that returns control
   to RGMercs when the model fails.
@@ -558,9 +564,12 @@ character decision -> persistent memory -> Commander visibility -> validated RGM
   for each pair (agent vs RGMercs, agent vs human input, agent vs agent).
 - [ ] Tactical action validation for agent intentions, separate from the client's own command checks.
 - [ ] The Commander Cortex tab: per-agent state, last decision, cost, mode, and one fleet-wide stop.
+  The data it shows is already exposed read-only by `hs.CommanderStatus().cortex`; the tab itself, its
+  rendering and the confirm step are still to build.
 - [ ] Observation-only, assisted and autonomous modes, each gated on the tests above.
   Observation-only and assisted run in `src/cortex/runtime.{h,cpp}` (proposals are exposed,
-  never sent); what is missing is the Commander surface that displays and confirms them.
+  never sent) and now reach the UI through `hs.CommanderStatus().cortex`; what is missing is
+  the confirmation step a human performs before anything may be sent.
   Autonomous mode is not started on purpose.
 - [ ] A recorded 1 / 6 / 12 / 24 agent benchmark: latency, throughput, RSS and VRAM per client, and the
   effect on client frame time.

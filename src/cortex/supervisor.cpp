@@ -388,6 +388,7 @@ SupervisorSnapshot CortexSupervisor::snapshot() const {
     std::lock_guard<std::mutex> lock(mu_);
     SupervisorSnapshot snap;
     snap.emergency_stop = emergency_stop_;
+    snap.mode = global_mode_;
     snap.pending_queue_size = queue_.size();
     snap.total_requests = total_requests_.load();
     snap.total_decisions = total_decisions_.load();

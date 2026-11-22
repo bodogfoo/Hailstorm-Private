@@ -14,6 +14,7 @@
 #include "app/frame_pace.h"
 #include "core/group_profile.h"
 #include "ipc/session_bus.h"
+#include "cortex/service.h"
 #include "platform/process.h"
 #include "core/step_clock.h"
 #include "core/worker_pool.h"
@@ -544,6 +545,13 @@ public:
                 bus_.connect(bus_sock.empty() ? ipc::default_bus_socket_path() : bus_sock, session_id_);
             }
         }
+        // The one shared Cortex supervisor for this process, next to the bus it
+        // observes (cortex/service.h): started in Observe mode, so it collects
+        // state and later - once a mode is set - proposals for a human to
+        // confirm. It executes nothing and dispatches no command.
+        cortex_service_ = std::make_unique<cortex::CortexService>(
+            std::make_shared<cortex::HttpInferenceProvider>(), nullptr, cortex::SupervisorConfig{});
+        cortex_service_->start();
         ui_host_.nameplates = &automation_->nameplates();
         lua_ui_->add_ui_api([this](lua_State* L) { register_ui_api(L); });
         automation_->hooks().add_command(plugin::Hooks::kClient, "/lighting",
@@ -1220,6 +1228,11 @@ private:
     render::VkContext vk_;
     ExecutionController execution_;
     ipc::SessionBusClient bus_;
+    // The application-owned shared Cortex runtime (cortex/service.h): the one
+    // supervisor this process drives, observed from publish_bus_telemetry and
+    // read by commander_status(). It reports state and proposals to the UI and
+    // executes nothing - the mode it starts in is Observe.
+    std::unique_ptr<cortex::CortexService> cortex_service_;
     std::string session_id_;
     bool auto_headless_others_ = true;
     std::string active_commander_profile_;
