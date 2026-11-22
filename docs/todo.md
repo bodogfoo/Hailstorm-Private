@@ -559,6 +559,9 @@ character decision -> persistent memory -> Commander visibility -> validated RGM
 - [ ] Tactical action validation for agent intentions, separate from the client's own command checks.
 - [ ] The Commander Cortex tab: per-agent state, last decision, cost, mode, and one fleet-wide stop.
 - [ ] Observation-only, assisted and autonomous modes, each gated on the tests above.
+  Observation-only and assisted run in `src/cortex/runtime.{h,cpp}` (proposals are exposed,
+  never sent); what is missing is the Commander surface that displays and confirms them.
+  Autonomous mode is not started on purpose.
 - [ ] A recorded 1 / 6 / 12 / 24 agent benchmark: latency, throughput, RSS and VRAM per client, and the
   effect on client frame time.
 
