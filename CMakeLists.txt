@@ -148,6 +148,7 @@ add_library(hailstone_engine STATIC
   src/mq/lua_compat_modules.cpp
   src/mq/rgmercs_bridge.cpp
   src/ipc/session_bus.cpp
+  src/cortex/observation.cpp
   src/plugin/native_plugins.cpp
   src/plugin/world_geometry.cpp
   src/render/world_geometry_renderer.cpp
@@ -1164,6 +1165,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/mq_script_path_test.cpp
     tests/hailstone24/execution_state_test.cpp
     tests/hailstone24/session_bus_test.cpp
+    tests/cortex_observation_test.cpp
     tests/hailstone24/mq_login_import_test.cpp
     tests/hailstone24/group_profile_test.cpp
     tests/hailstone24/login_autoselect_test.cpp

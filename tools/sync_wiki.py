@@ -58,6 +58,7 @@ PAGES = [
     ("Project", [
         ("docs/plan.md", "Plan"),
         ("docs/code-overview.md", "Code-Overview"),
+        ("docs/cortex-status.md", "Cortex-Status"),
         ("docs/todo.md", "To-Do"),
         ("docs/unknowns.md", "Known-Gaps"),
         ("CONTRIBUTING.md", "Contributing"),

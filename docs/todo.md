@@ -540,3 +540,25 @@ Voice macros and audio triggers, the commercial-service windows (the marketplace
   readers and transient world geometry services to the SDK, preserving stock fallback.
 - [ ] Complete live acceptance for enhanced follow/mounts, controller input, private sales, raid actor selection,
   item metadata/loot prompts, instance labels and world overlay presentation; see unknowns.md.
+
+## Hailstone Cortex (agent layer, docs/cortex-status.md)
+
+The pipeline is: character game state -> agent observation -> shared local miniature model -> independent
+character decision -> persistent memory -> Commander visibility -> validated RGMercs intention.
+
+- [x] The observation layer (`src/cortex/observation.*`): one character's published state plus its group from
+  the session-bus roster, as JSON and as one line of prompt text; read-only; unit tests.
+- [ ] A wider observation: spawns, buffs, spell gems, inventory, positions, quest state.
+- [ ] One shared local model endpoint for the box, with a request timeout and a fallback that returns control
+  to RGMercs when the model fails.
+- [ ] Per-agent context and identity that survive a zone change and a relog.
+- [ ] Persistent character memory, keyed by character identity, with retention rules.
+- [ ] Event-driven scheduling: which events wake an agent, how often, and at what token cost.
+- [ ] Action ownership and arbitration: one owner per action class, an explicit precedence order, and a test
+  for each pair (agent vs RGMercs, agent vs human input, agent vs agent).
+- [ ] Tactical action validation for agent intentions, separate from the client's own command checks.
+- [ ] The Commander Cortex tab: per-agent state, last decision, cost, mode, and one fleet-wide stop.
+- [ ] Observation-only, assisted and autonomous modes, each gated on the tests above.
+- [ ] A recorded 1 / 6 / 12 / 24 agent benchmark: latency, throughput, RSS and VRAM per client, and the
+  effect on client frame time.
+
