@@ -470,7 +470,8 @@ end
         CHECK(assisted.find("healer_mana_low") != std::string::npos);
         CHECK(assisted.find("Healer mana is at 18%") != std::string::npos);
         CHECK(assisted.find("Pending confirmation") != std::string::npos);
-        CHECK(eval("#B.cortexControls") == "0");
+        CHECK(assisted.find("Cortex Command") != std::string::npos);
+        CHECK(assisted.find("Allowed:") != std::string::npos);
         CHECK(eval("#B.commanderCalls") == "0");
         CHECK(eval("#B.combatCalls") == "0");
 
@@ -487,7 +488,6 @@ end
         CHECK(observe.find("Observe") != std::string::npos);
         CHECK(observe.find("Unhealthy") != std::string::npos);
         CHECK(observe.find("EMERGENCY STOP") != std::string::npos);
-        CHECK(eval("#B.cortexControls") == "0");
 
         // Disabled / unavailable Cortex state.
         REQUIRE(luaL_dostring(L, R"lua(
@@ -503,7 +503,6 @@ end
         const std::string disabled = eval("table.concat(B.cortexLines, '\\n')");
         CHECK(disabled.find("Unavailable") != std::string::npos);
         CHECK(disabled.find("Disabled") != std::string::npos);
-        CHECK(eval("#B.cortexControls") == "0");
         CHECK(eval("#B.commanderCalls") == "0");
         CHECK(eval("#B.combatCalls") == "0");
     });

@@ -78,6 +78,9 @@ local cmdScope = "all"
 local selectedProfile = "Main Tank"
 local scriptArgInput = "rgmercs"
 local selectedGroup = 0
+local cortexActionInput = "follow"
+local cortexTargetInput = ""
+local cortexArgInput = ""
 
 local function colored(c, text)
   local col = c or C.text
@@ -661,6 +664,29 @@ local function drawCortexTab(s, h)
     cx.totalRequests or 0,
     cx.onlineCount or 0,
     cx.rosterSize or 0))
+
+  colored(C.heading or C.accent, "Cortex Command (validated, not autonomous)")
+  colored(C.faint, "Allowed: follow, assist, stop, attack_on, attack_off, pause_script, resume_script, restart_script, reload_profile, camp")
+  ui.SetNextItemWidth(150 * s)
+  local actionText, actionEnter = ui.InputTextWithHint("##cortexAction", "Action (e.g. follow)", cortexActionInput, 64,
+    ui.InputTextFlags.EnterReturnsTrue)
+  cortexActionInput = actionText
+  ui.SameLine()
+  ui.SetNextItemWidth(150 * s)
+  local targetText = ui.InputTextWithHint("##cortexTarget", "Target/session (optional)", cortexTargetInput, 96)
+  cortexTargetInput = targetText
+  ui.SameLine()
+  ui.SetNextItemWidth(180 * s)
+  local argText, argEnter = ui.InputTextWithHint("##cortexArg", "Argument (name/profile)", cortexArgInput, 128,
+    ui.InputTextFlags.EnterReturnsTrue)
+  cortexArgInput = argText
+  ui.SameLine()
+  if ui.SmallButton("Send Cortex Command") or actionEnter or argEnter then
+    runCommander(cortexActionInput, cortexTargetInput, cortexArgInput)
+  end
+  if lastMsg ~= "" then
+    colored(lastOk and C.good or C.danger, lastMsg)
+  end
 
   ui.Spacing()
   colored(C.heading or C.accent, string.format("Per-Character Cortex Status (%d)", #chars))
