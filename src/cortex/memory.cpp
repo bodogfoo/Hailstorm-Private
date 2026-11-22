@@ -1,5 +1,8 @@
 #include "cortex/memory.h"
 
+#include <filesystem>
+#include <system_error>
+
 #include <sqlite3.h>
 
 namespace hailstone::cortex {
@@ -318,6 +321,20 @@ std::vector<MemoryEntry> MemoryStore::recent_group_memories(const std::string& s
     }
     sqlite3_finalize(stmt);
     return out;
+}
+
+std::shared_ptr<MemoryStore> open_memory_store(const std::filesystem::path& db_file) {
+    // The folders above the file are this writer's job: paths.h creates only the roots it knows.
+    if (!db_file.parent_path().empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(db_file.parent_path(), ec);
+        if (ec) return nullptr;
+    }
+    auto store = std::make_shared<MemoryStore>();
+    // A path that is not a database (a folder, a file without write access) refuses here: the
+    // caller falls back to running without persistence rather than failing to start.
+    if (!store->open(db_file.string())) return nullptr;
+    return store;
 }
 
 } // namespace hailstone::cortex

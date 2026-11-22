@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -91,5 +93,10 @@ private:
     std::size_t max_memories_per_char_ = 200;
     std::size_t max_decisions_per_char_ = 100;
 };
+
+// Opens a store on `db_file`, creating the folders above it when they are missing (paths.h leaves
+// folder creation to each writer). Returns nullptr when the database cannot be opened, so a caller
+// can fall back to running without persistence instead of failing to start.
+std::shared_ptr<MemoryStore> open_memory_store(const std::filesystem::path& db_file);
 
 } // namespace hailstone::cortex

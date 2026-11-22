@@ -123,14 +123,23 @@ void CortexSupervisor::set_identity(const CharacterIdentity& id) {
     std::string key = id.key();
     auto& a = agents_[key];
     a.identity = id;
-    if (memory_ && memory_->is_open()) {
-        StoredProfile prof;
-        if (memory_->load_profile(id.server_name, id.character_name, prof) &&
-            !prof.current_objective.empty()) {
-            a.current_objective = prof.current_objective;
-        } else {
-            memory_->upsert_profile(id, a.current_objective);
-        }
+    remember_profile(key);
+}
+
+// mu_ held. The first time a character's identity is seen its profile is written, so the store
+// knows who this agent is; a profile an earlier run left behind is loaded back instead, because
+// this run's objective is empty until set_objective() is called and an empty one would wipe it.
+void CortexSupervisor::remember_profile(const std::string& key) {
+    if (!memory_ || !memory_->is_open()) return;
+    auto it = agents_.find(key);
+    if (it == agents_.end() || it->second.identity.character_name.empty()) return;
+    auto& a = it->second;
+    StoredProfile prof;
+    if (memory_->load_profile(a.identity.server_name, a.identity.character_name, prof) &&
+        !prof.current_objective.empty()) {
+        a.current_objective = prof.current_objective;
+    } else {
+        memory_->upsert_profile(a.identity, a.current_objective);
     }
 }
 
@@ -183,6 +192,9 @@ void CortexSupervisor::submit_observation(const CharacterObservation& obs, bool 
         a.identity.character_name = obs.character_name;
         a.identity.class_short = obs.class_short;
         a.identity.level = obs.level;
+        // Once per character per process: the profile is written the first time this agent is
+        // seen, or the one an earlier run left behind is loaded back.
+        remember_profile(key);
     }
     a.group_leader = obs.group_leader;
 
@@ -377,6 +389,10 @@ void CortexSupervisor::worker_loop() {
         if (memory_ && memory_->is_open() && !char_name.empty()) {
             memory_->add_decision(server_name, char_name, d);
             if (d.valid) {
+                // The bounded context the decision was made on, as the prompt saw it (one line),
+                // written before the decision so the newest entry stays the decision itself.
+                memory_->add_memory(server_name, char_name, "observation",
+                                    to_prompt_context(task.obs), now);
                 memory_->add_memory(server_name, char_name, "decision",
                                     d.action_raw + ":" + d.reason_code, now);
             }

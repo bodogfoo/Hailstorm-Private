@@ -1,14 +1,24 @@
 #include "doctest.h"
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <thread>
 
 #include "cortex/inference_provider.h"
 #include "cortex/memory.h"
 #include "cortex/observation.h"
+#include "cortex/service.h"
 #include "cortex/supervisor.h"
 #include "cortex/validator.h"
+
+// The service tick takes a clock reading in milliseconds; there is no
+// platform helper for one, so this test reads its own steady clock.
+std::uint64_t now_ms() {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+}
 
 using namespace hailstone::cortex;
 using namespace hailstone::ipc;
@@ -114,6 +124,162 @@ TEST_CASE("Cortex memory: SQLite namespace isolation and restart persistence") {
         CHECK(m2[0].content == "low_mana_warning");
     }
     std::filesystem::remove(db_path);
+}
+
+namespace {
+
+// The client's wait for a decision the mock provider answers immediately: the queue is drained by
+// the supervisor's own worker thread.
+template <typename Done>
+void wait_for_decision(Done done) {
+    for (int i = 0; i < 300; ++i) {
+        if (done()) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
+} // namespace
+
+TEST_CASE("Cortex memory: open_memory_store makes the folders above the file and refuses a path that is not a database") {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "hailstone_cortex_open_store";
+    std::filesystem::remove_all(dir);
+
+    // The client's seam: a nested path under the data folder is created on the way (paths.h leaves
+    // folder creation to each writer).
+    auto store = open_memory_store(dir / "cortex" / "memory.db");
+    REQUIRE(store != nullptr);
+    CHECK(store->is_open());
+    CHECK(std::filesystem::is_directory(dir / "cortex"));
+    store->close();
+
+    // A folder is not a database: open_memory_store() refuses it, so the client can fall back to
+    // running without persistence instead of failing to start.
+    CHECK(open_memory_store(dir) == nullptr);
+
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("Cortex supervisor: a completed validated decision persists a bounded memory entry visible via recent_memories()") {
+    auto db_path = std::filesystem::temp_directory_path() / "hailstone_cortex_mem_slice_test.db";
+    std::filesystem::remove(db_path);
+
+    auto prov = std::make_shared<MockInferenceProvider>();
+    auto mem = std::make_shared<MemoryStore>();
+    REQUIRE(mem->open(db_path.string()));
+
+    SupervisorConfig cfg;
+    cfg.worker_threads = 1;
+    cfg.per_char_cooldown_ms = 0;
+    CortexSupervisor sup(prov, mem, cfg);
+    sup.set_mode(OperatingMode::Observe);
+    sup.set_agent_enabled("ez-server:Tankone", true);
+    sup.start();
+
+    SessionSnapshot s = make_snap("Tankone", "WAR", 90, 90);
+    std::vector<SessionSnapshot> roster{s};
+    sup.submit_observation(observe(s, roster, 5000), true);
+
+    for (int i = 0; i < 100; ++i) {
+        if (sup.snapshot().total_decisions >= 1) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    REQUIRE(sup.snapshot().total_decisions == 1);
+
+    // The validated decision must be readable back through the supervisor, with the bounded
+    // context it was made on behind it (newest first).
+    auto memories = sup.recent_memories("ez-server:Tankone", 8);
+    REQUIRE(memories.size() == 2);
+    CHECK(memories[0].server_name == "ez-server");
+    CHECK(memories[0].character_name == "Tankone");
+    CHECK(memories[0].kind == "decision");
+    // Bounded decision context only: the validated action and reason code.
+    CHECK(memories[0].content == "continue_current_task:nominal");
+    CHECK(memories[1].kind == "observation");
+    CHECK(memories[1].content.find("Tankone") != std::string::npos);
+
+    // It is a real SQLite row, not just in-process state: a fresh store on the
+    // same file sees the same entries.
+    sup.stop();
+    MemoryStore reopened;
+    REQUIRE(reopened.open(db_path.string()));
+    auto persisted = reopened.recent_memories("ez-server", "Tankone", 8);
+    REQUIRE(persisted.size() == 2);
+    CHECK(persisted[0].kind == "decision");
+    CHECK(persisted[0].content == "continue_current_task:nominal");
+
+    std::filesystem::remove(db_path);
+}
+
+TEST_CASE("Cortex service: a roster tick persists the decision, its observation context and the profile") {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "hailstone_cortex_svc_mem";
+    std::filesystem::remove_all(dir);
+
+    auto prov = std::make_shared<MockInferenceProvider>();
+    // The store and path the client owns (client_app_internal.h), opened through the same seam.
+    auto mem = open_memory_store(dir / "cortex" / "memory.db");
+    REQUIRE(mem != nullptr);
+    REQUIRE(mem->is_open());
+
+    SupervisorConfig cfg;
+    cfg.worker_threads = 1;
+    cfg.per_char_cooldown_ms = 0;
+    CortexService svc(prov, mem, cfg);
+    svc.start();
+
+    // The production path: a roster tick, not a forced think.
+    SessionSnapshot s = make_snap("Tankone", "WAR", 90, 90);
+    svc.tick(std::vector<SessionSnapshot>{s}, now_ms());
+
+    wait_for_decision([&] { return svc.supervisor().snapshot().total_decisions >= 1; });
+    REQUIRE(svc.supervisor().snapshot().total_decisions == 1);
+
+    // The bounded decision context, newest first.
+    auto memories = mem->recent_memories("ez-server", "Tankone", 8);
+    REQUIRE(memories.size() >= 2);
+    REQUIRE(memories[0].kind == "decision");
+    CHECK(memories[0].content == "continue_current_task:nominal");
+
+    // The observation the decision was made on: one bounded line, what the prompt saw.
+    bool saw_observation = false;
+    for (const auto& m : memories) {
+        if (m.kind != "observation") continue;
+        saw_observation = true;
+        CHECK(m.content.find("Tankone") != std::string::npos);
+        CHECK(m.content.find("qrg") != std::string::npos);
+    }
+    CHECK(saw_observation);
+
+    // The profile, written the first time this character's identity was seen.
+    StoredProfile prof;
+    REQUIRE(mem->load_profile("ez-server", "Tankone", prof));
+    CHECK(prof.class_short == "WAR");
+
+    svc.stop();
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("Cortex service: a profile an earlier run left behind keeps its objective") {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "hailstone_cortex_profile_keep";
+    std::filesystem::remove_all(dir);
+
+    auto mem = open_memory_store(dir / "cortex" / "memory.db");
+    REQUIRE(mem != nullptr);
+    CharacterIdentity id{"ez-server", "Tankone", "WAR", 70, "tank", "steady"};
+    REQUIRE(mem->upsert_profile(id, "farm gnolls"));
+
+    CortexService svc(std::make_shared<MockInferenceProvider>(), mem, SupervisorConfig{});
+    svc.start();
+    svc.tick(std::vector<SessionSnapshot>{make_snap("Tankone", "WAR", 90, 90)}, now_ms());
+    wait_for_decision([&] { return svc.supervisor().snapshot().total_decisions >= 1; });
+
+    StoredProfile prof;
+    REQUIRE(mem->load_profile("ez-server", "Tankone", prof));
+    // This run's objective is empty (set_objective() is never called), so the new observation must
+    // load the stored one back instead of wiping it.
+    CHECK(prof.current_objective == "farm gnolls");
+
+    svc.stop();
+    std::filesystem::remove_all(dir);
 }
 
 TEST_CASE("Cortex supervisor: 24 independent agents, messaging, emergency stop, and fault tolerance") {

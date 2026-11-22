@@ -14,6 +14,7 @@
 #include "app/frame_pace.h"
 #include "core/group_profile.h"
 #include "ipc/session_bus.h"
+#include "cortex/memory.h"
 #include "cortex/service.h"
 #include "platform/process.h"
 #include "core/step_clock.h"
@@ -548,9 +549,17 @@ public:
         // The one shared Cortex supervisor for this process, next to the bus it
         // observes (cortex/service.h): started in Observe mode, so it collects
         // state and later - once a mode is set - proposals for a human to
-        // confirm. It executes nothing and dispatches no command.
+        // confirm. It executes nothing and dispatches no command. Its memory lives in this
+        // client's own store (cortex/memory.h): data_dir()/cortex/memory.db, with the folders
+        // above it made here because paths.h creates only the roots. A store that will not
+        // open is not fatal - the session then simply persists nothing.
+        const auto memory_db = platform::data_dir() / "cortex" / "memory.db";
+        cortex_memory_ = cortex::open_memory_store(memory_db);
+        if (!cortex_memory_) {
+            log::warn("cortex: no memory store at {}; this session persists no memory", memory_db.string());
+        }
         cortex_service_ = std::make_unique<cortex::CortexService>(
-            std::make_shared<cortex::HttpInferenceProvider>(), nullptr, cortex::SupervisorConfig{});
+            std::make_shared<cortex::HttpInferenceProvider>(), cortex_memory_, cortex::SupervisorConfig{});
         cortex_service_->start();
         ui_host_.nameplates = &automation_->nameplates();
         lua_ui_->add_ui_api([this](lua_State* L) { register_ui_api(L); });
@@ -1231,7 +1240,10 @@ private:
     // The application-owned shared Cortex runtime (cortex/service.h): the one
     // supervisor this process drives, observed from publish_bus_telemetry and
     // read by commander_status(). It reports state and proposals to the UI and
-    // executes nothing - the mode it starts in is Observe.
+    // executes nothing - the mode it starts in is Observe. The store it writes
+    // memory to is owned here too (cortex/memory.h), and is declared first so
+    // it outlives the service that holds it.
+    std::shared_ptr<cortex::MemoryStore> cortex_memory_;
     std::unique_ptr<cortex::CortexService> cortex_service_;
     std::string session_id_;
     bool auto_headless_others_ = true;

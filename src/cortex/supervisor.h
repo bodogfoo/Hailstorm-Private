@@ -128,6 +128,9 @@ private:
     std::string build_system_prompt(const AgentState& agent) const;
     std::string build_user_prompt(const AgentState& agent, const CharacterObservation& obs) const;
     void worker_loop();
+    // mu_ held: the profile behind the agent at `key` - written the first time its identity is
+    // seen, and loaded back (objective and all) when an earlier run already left one behind.
+    void remember_profile(const std::string& key);
 
     mutable std::mutex mu_;
     std::condition_variable cv_;
