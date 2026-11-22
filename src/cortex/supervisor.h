@@ -27,7 +27,7 @@ struct SupervisorConfig {
     // Cadence of the background inference-health refresh. snapshot() reports
     // this cached answer; it never runs the provider's probe itself.
     std::uint32_t health_refresh_ms = 500;
-    std::uint32_t inference_timeout_ms = 5000;
+    std::uint32_t inference_timeout_ms = 30000;
     std::uint32_t circuit_breaker_failures = 5;
     std::uint64_t circuit_breaker_cooldown_ms = 10000;
     ValidationConfig validation;
