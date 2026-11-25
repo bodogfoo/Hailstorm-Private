@@ -896,7 +896,7 @@ void CombatEngine::tick(const CombatSnapshot& snapshot, ICombatActions& actions)
     float desired_combat_range = 200.0f;
     switch (profile_.movement_mode) {
     case MovementMode::MeleeRange:
-        desired_combat_range = std::max(4.0f, profile_.melee_range) + 4.0f;
+        desired_combat_range = std::max(3.0f, profile_.melee_range) + 4.0f;
         break;
     case MovementMode::RangedRange:
         desired_combat_range = std::max(20.0f, profile_.ranged_max_range);
@@ -945,7 +945,7 @@ void CombatEngine::tick(const CombatSnapshot& snapshot, ICombatActions& actions)
 
     // Melee auto-attack control.
     const bool want_melee = profile_.allow_melee_attack &&
-                            (target_dist <= std::max(6.0f, profile_.melee_range) + 2.0f);
+                            (target_dist <= std::max(3.0f, profile_.melee_range) + 2.0f);
     if (want_melee && !auto_attack_commanded_) {
         if (!profile_.dry_run) {
             actions.set_auto_attack(true);
@@ -953,7 +953,14 @@ void CombatEngine::tick(const CombatSnapshot& snapshot, ICombatActions& actions)
         auto_attack_commanded_ = true;
         append_action(snapshot.now_ms, profile_.dry_run, "melee",
                       "Auto-attack ON -> " + hostile->name, &actions);
-    } else if (!want_melee && (auto_attack_commanded_ || snapshot.auto_attack_on)) {
+    } else if (!want_melee && (auto_attack_commanded_ || snapshot.auto_attack_on) &&
+               // Leave auto-attack enabled while a melee character is
+               // actively closing on its target.  RGMercs may enable it
+               // before the target is inside the final melee distance; the
+               // previous logic immediately disabled it, creating an
+               // on/off loop that prevented reliable engagement.
+               !(profile_.movement_mode == MovementMode::MeleeRange &&
+                 snapshot.nav_stick_spawn == hostile->id)) {
         if (!profile_.dry_run) {
             actions.set_auto_attack(false);
         }
