@@ -1156,6 +1156,12 @@ MapMarkers map_markers(const UiHost& h, bool show_group, bool show_custom,
                 return !name.empty() && iequals(name, sp.name);
             });
         };
+        auto raid_member = [&](const game::Spawn& sp) {
+            return c.raid().active && !sp.is_npc && !sp.is_corpse &&
+                   std::any_of(c.raid().members.begin(), c.raid().members.end(), [&](const game::RaidMember& m) {
+                       return iequals(m.name, sp.name);
+                   });
+        };
         std::vector<net::GameConnection::ActorRef> actors;
         for (const auto& [id, sp] : c.world().spawns) {
             (void)sp;
@@ -1183,6 +1189,7 @@ MapMarkers map_markers(const UiHost& h, bool show_group, bool show_custom,
             const bool group = std::any_of(group_actors.begin(), group_actors.end(), [&](const auto& candidate) {
                 return candidate && *candidate == actor;
             });
+            const bool raid = raid_member(*sp);
             const bool custom = show_custom && (!in_view || in_view(spawn_map(*sp)));
             if (!group && !custom) continue;
             const bool allowed = c.server_ext().map_visible(c, *sp, 0); // HAILSTONE_MAP_VISIBLE_MARKER
@@ -1198,17 +1205,17 @@ MapMarkers map_markers(const UiHost& h, bool show_group, bool show_custom,
                 sp = copy(actor);
                 if (!sp) continue;
             }
-            if (group && same_group() && member(*sp)) out.group.push_back({actor, *sp});
+            if ((group && same_group() && member(*sp)) || raid) out.group.push_back({actor, *sp});
             if (mark && (!in_view || in_view(spawn_map(*sp))))
                 out.custom.push_back({actor, std::move(*mark), spawn_map(*sp)});
         }
         // The final source query can itself reenter. Validate context, actors and roster after it, without any
         // further provider calls, so a later member's callback cannot leave an earlier member's stale snapshot.
         if (!current() || source() != stamp || !current()) return {};
-        if (!same_group()) out.group.clear();
+        if (!same_group() && !c.raid().active) out.group.clear();
         std::erase_if(out.group, [&](GroupSpawn& g) {
             auto sp = copy(g.actor);
-            if (!sp || !member(*sp)) return true;
+            if (!sp || (!member(*sp) && !raid_member(*sp))) return true;
             g.spawn = std::move(*sp);
             return false;
         });

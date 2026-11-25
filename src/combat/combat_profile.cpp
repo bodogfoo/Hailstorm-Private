@@ -239,7 +239,7 @@ CombatProfile make_nec_profile() {
 
     p.movement_mode = MovementMode::RangedRange;
     p.assist_range = 90.0f;
-    p.melee_range = 12.0f;
+    p.melee_range = 3.0f;
     p.ranged_min_range = 25.0f;
     p.ranged_max_range = 135.0f;
     p.disengage_distance = 185.0f;
@@ -398,7 +398,7 @@ CombatProfile make_rog_profile() {
     p.assist_target = "main_assist";
     p.movement_mode = MovementMode::MeleeRange;
     p.assist_range = 85.0f;
-    p.melee_range = 12.0f;
+    p.melee_range = 3.0f;
     p.melee_behind = true;
     p.disengage_distance = 150.0f;
     p.retreat_hp_pct = 18;
@@ -568,7 +568,7 @@ CombatProfile make_war_profile() {
 
     p.movement_mode = MovementMode::MeleeRange;
     p.assist_range = 85.0f;
-    p.melee_range = 12.0f;
+    p.melee_range = 3.0f;
     p.melee_behind = false;
     p.disengage_distance = 140.0f;
     p.retreat_hp_pct = 12;

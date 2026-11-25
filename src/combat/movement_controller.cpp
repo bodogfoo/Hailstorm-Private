@@ -322,7 +322,7 @@ MovementStepResult MovementController::update(CombatState state,
     }
 
     case MovementMode::MeleeRange: {
-        const float melee_dist = std::max(4.0f, profile.melee_range);
+        const float melee_dist = std::max(3.0f, profile.melee_range);
         const bool already_sticking_same = (active_command_ == MovementCommandKind::MoveMelee &&
                                             active_target_id_ == hostile_target->id &&
                                             active_behind_ == profile.melee_behind &&

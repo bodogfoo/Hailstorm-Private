@@ -1083,6 +1083,31 @@ ipc::CommandAckPacket ClientApp::handle_bus_command(const ipc::CommandPacket& cm
         return ack;
     }
 
+    if (verb == "/hail_target") {
+        if (!in_game || rest.empty()) {
+            ack.ok = false;
+            ack.message = "target name is required while in game";
+            return ack;
+        }
+        conn_->send_command("/target " + std::string(rest));
+        conn_->send_command("/hail");
+        ack.ok = true;
+        ack.message = "hailed " + std::string(rest);
+        return ack;
+    }
+
+    if (verb == "/hotbutton_all_clients") {
+        if (!in_game || rest.empty()) {
+            ack.ok = false;
+            ack.message = "hotbutton definition is required while in game";
+            return ack;
+        }
+        conn_->send_command("/hotbutton " + std::string(rest));
+        ack.ok = true;
+        ack.message = "hotbutton created";
+        return ack;
+    }
+
     if (verb == "/script") {
         if (!automation_) {
             ack.ok = false;
@@ -1527,6 +1552,56 @@ bool ClientApp::handle_commander_command(std::string_view action, std::string_vi
         return true;
     }
 
+    if (act == "hail_all") {
+        if (!conn_ || screen_ != Screen::InGame || !player_ready_) {
+            out_msg = "cannot hail while not in game";
+            return false;
+        }
+        std::string hail_target(arg);
+        if (hail_target.empty()) {
+            const auto target_id = conn_->world().target_id;
+            const auto it = conn_->world().spawns.find(target_id);
+            if (it != conn_->world().spawns.end()) hail_target = it->second.name;
+        }
+        if (hail_target.empty()) {
+            out_msg = "target the buff bot first";
+            return false;
+        }
+        const std::string command = "/target " + hail_target;
+        conn_->send_command(command);
+        conn_->send_command("/hail");
+        if (bus_.connected()) {
+            ipc::CommandPacket pkt;
+            pkt.scope = ipc::CommandScope::AllExceptSelf;
+            pkt.command = "/hail_target " + hail_target;
+            bus_.send_command(std::move(pkt));
+        }
+        out_msg = std::format("All connected clients hailed {}", hail_target);
+        return true;
+    }
+
+    if (act == "corpse_hotbuttons_all") {
+        if (!conn_ || screen_ != Screen::InGame || !player_ready_) {
+            out_msg = "cannot create hotbuttons while not in game";
+            return false;
+        }
+        const std::array<std::string, 2> commands{
+            "/hotbutton HideLooted 1 /hidecorpse looted",
+            "/hotbutton ShowCorpses 1 /hidecorpse none",
+        };
+        for (const auto& command : commands) conn_->send_command(command);
+        if (bus_.connected()) {
+            for (const auto& command : commands) {
+                ipc::CommandPacket pkt;
+                pkt.scope = ipc::CommandScope::AllExceptSelf;
+                pkt.command = "/hotbutton_all_clients " + command.substr(11);
+                bus_.send_command(std::move(pkt));
+            }
+        }
+        out_msg = "Added HideLooted and ShowCorpses hotbuttons to all connected clients";
+        return true;
+    }
+
     if (act == "clear_acks") {
         bus_.clear_tracked_commands();
         out_msg = "Cleared command acknowledgements";
@@ -1558,6 +1633,56 @@ bool ClientApp::handle_commander_command(std::string_view action, std::string_vi
         }
         bus_.request_state_control(std::string(target), ExecutionState::ForegroundFull, auto_headless_others_);
         out_msg = std::format("Activated client tab '{}'", target);
+        return true;
+    }
+
+    // RGMercs owns its persistent assist settings.  Apply the change through
+    // its supported binds on every connected client, then reload the script so
+    // the new main assist is effective immediately.
+    if (act == "all_assist_me" || act == "reload_all") {
+        if (!bus_.connected() && !targets_self) {
+            out_msg = "Session bus disconnected; cannot update all clients";
+            return false;
+        }
+        std::vector<std::string> commands;
+        if (act == "all_assist_me") {
+            if (local_char.empty()) {
+                out_msg = "current character is unavailable";
+                return false;
+            }
+            commands = {
+                // RGMercs registers its bind as /rglua (the older /rgl
+                // spelling is only used in some of its help text).
+                "/rglua assistclear",
+                "/rglua set UseAssistList true",
+                "/rglua assistadd " + local_char,
+                // /rgmercs is the native window toggle.  Use the script
+                // router for a real reload so the button never opens UI.
+                "/script reload rgmercs",
+            };
+        } else {
+            commands = {"/script reload rgmercs"};
+        }
+        std::uint64_t last_seq = 0;
+        for (const auto& command : commands) {
+            ipc::CommandPacket local_pkt;
+            local_pkt.target = session_id_;
+            local_pkt.command = command;
+            const auto local_ack = handle_bus_command(local_pkt);
+            if (!local_ack.ok) {
+                out_msg = std::format("{} failed locally: {}", command, local_ack.message);
+                return false;
+            }
+            if (bus_.connected()) {
+                ipc::CommandPacket pkt;
+                pkt.scope = ipc::CommandScope::AllExceptSelf;
+                pkt.command = command;
+                last_seq = bus_.send_command(std::move(pkt));
+            }
+        }
+        out_msg = act == "all_assist_me"
+                      ? std::format("All clients now assist {} and RGMercs was reloaded (seq #{})", local_char, last_seq)
+                      : std::format("RGMercs reload sent to all clients (seq #{})", last_seq);
         return true;
     }
 

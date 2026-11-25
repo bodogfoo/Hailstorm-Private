@@ -400,6 +400,10 @@ local function drawWindow()
   end
   ui.SameLine()
   if ui.SmallButton("Stop Follow (All)") then runCommander("stop_follow", "all", "") end
+  ui.SameLine()
+  if ui.SmallButton("Hail Target (All)") then runCommander("hail_all", "", "") end
+  ui.SameLine()
+  if ui.SmallButton("Corpse Hotbuttons (All)") then runCommander("corpse_hotbuttons_all", "", "") end
 
   ui.Separator()
 

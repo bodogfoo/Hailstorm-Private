@@ -435,9 +435,14 @@ void HailstoneCombatAdapter::move_melee(std::uint32_t target_id, float distance,
     }
     if (conn_) conn_->set_running(true);
     nav::StickOptions opt;
-    opt.distance = std::max(0.0f, distance);
+    // Keep melee followers genuinely on top of the target.  The previous
+    // profile-derived 12u stop point was loose enough that followers could
+    // enter Combat without ever reaching a usable attack position.
+    opt.distance = std::min(6.0f, std::max(0.0f, distance));
     opt.behind = behind;
-    nav_->stick(target_id, opt);
+    const std::string result = nav_->stick(target_id, opt);
+    log::info("combat [movement]: stick target={} distance={:.1f} behind={} result={}",
+              target_id, opt.distance, behind ? "yes" : "no", result);
 }
 
 void HailstoneCombatAdapter::move_disengage(const combat::Vec3& target_pos, float disengage_distance) {

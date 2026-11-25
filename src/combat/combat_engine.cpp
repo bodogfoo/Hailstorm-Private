@@ -946,7 +946,7 @@ void CombatEngine::tick(const CombatSnapshot& snapshot, ICombatActions& actions)
     // Melee auto-attack control.
     const bool want_melee = profile_.allow_melee_attack &&
                             (target_dist <= std::max(3.0f, profile_.melee_range) + 2.0f);
-    if (want_melee && !auto_attack_commanded_) {
+    if (want_melee && (!auto_attack_commanded_ || !snapshot.auto_attack_on)) {
         if (!profile_.dry_run) {
             actions.set_auto_attack(true);
         }
@@ -954,13 +954,13 @@ void CombatEngine::tick(const CombatSnapshot& snapshot, ICombatActions& actions)
         append_action(snapshot.now_ms, profile_.dry_run, "melee",
                       "Auto-attack ON -> " + hostile->name, &actions);
     } else if (!want_melee && (auto_attack_commanded_ || snapshot.auto_attack_on) &&
-               // Leave auto-attack enabled while a melee character is
-               // actively closing on its target.  RGMercs may enable it
-               // before the target is inside the final melee distance; the
-               // previous logic immediately disabled it, creating an
-               // on/off loop that prevented reliable engagement.
-               !(profile_.movement_mode == MovementMode::MeleeRange &&
-                 snapshot.nav_stick_spawn == hostile->id)) {
+               // Leave auto-attack enabled for the entire melee engage.
+               // The game can report a target at 13-16 units while native
+               // stick is still closing. Turning attack off here creates an
+               // on/off loop with RGMercs and prevents the warrior from ever
+               // reaching reliable engagement range. Disengage/retreat and
+               // invalid-target paths turn it off separately.
+               profile_.movement_mode != MovementMode::MeleeRange) {
         if (!profile_.dry_run) {
             actions.set_auto_attack(false);
         }

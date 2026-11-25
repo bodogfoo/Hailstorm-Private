@@ -461,6 +461,8 @@ local function drawClientsTab(s, h)
   ui.SameLine()
   if ui.SmallButton("Assist Me") then runCommander("assist", cmdScope, cst.characterName or "") end
   ui.SameLine()
+  if ui.SmallButton("All Assist Me") then runCommander("all_assist_me", "all", "") end
+  ui.SameLine()
   if ui.SmallButton("Attack On") then runCommander("attack_on", cmdScope, "") end
   ui.SameLine()
   if ui.SmallButton("Attack Off") then runCommander("attack_off", cmdScope, "") end
@@ -471,6 +473,8 @@ local function drawClientsTab(s, h)
 
   -- Group action buttons row 2
   if ui.SmallButton("Reload Spells") then runCommander("reload_spells", cmdScope, "") end
+  ui.SameLine()
+  if ui.SmallButton("Reload All RGMercs") then runCommander("reload_all", "all", "") end
   ui.SameLine()
   if ui.SmallButton("Camp") then runCommander("camp", cmdScope, "") end
   ui.SameLine()
