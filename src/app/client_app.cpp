@@ -98,6 +98,21 @@ int ClientApp::run() {
                     steps->push_back(conn_now - std::max<std::int64_t>(0, real_ms - static_cast<std::int64_t>(st.ms)));
             }
             conn_->set_game_steps(std::move(steps));
+
+            // Accept only server offers that are intended for the multibox
+            // group: resurrection and translocation. Keep loot, trade,
+            // purchases, destruction, and task dialogs manual.
+            const bool auto_rez = config_.get_bool("login.auto_accept_rez", true);
+            const bool auto_translocate = config_.get_bool("login.auto_accept_translocate", true);
+            if (auto_rez || auto_translocate) {
+                const auto confirmation = conn_->confirmation();
+                const bool accept = confirmation &&
+                    ((auto_rez && confirmation->id == net::kConfirmRezz) ||
+                     (auto_translocate && confirmation->id == net::kConfirmTranslocate));
+                if (accept) {
+                    conn_->answer_confirmation(true);
+                }
+            }
         }
 
         // The Update phase's sections, for the hitch log: a zone's load runs in update_connection, a new race's

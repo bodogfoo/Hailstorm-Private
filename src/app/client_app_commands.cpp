@@ -34,6 +34,25 @@ namespace hailstone::app {
 
 namespace client_internal {
 
+static net::ItemSlot find_bridle_item(const game::Inventory& inventory) {
+    auto is_bridle = [](std::string_view name) {
+        std::string low(name);
+        std::transform(low.begin(), low.end(), low.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return low.find("bridle") != std::string::npos;
+    };
+    for (const auto& [key, item] : inventory.items()) {
+        if (key.first != net::kInvPossessions) continue;
+        if (is_bridle(item.name)) return net::ItemSlot::possessions(key.second);
+        for (const auto& bag : item.contents) {
+            if (is_bridle(bag.item.name))
+                return net::ItemSlot::possessions(key.second, static_cast<std::int16_t>(bag.index));
+        }
+    }
+    return net::ItemSlot::invalid();
+}
+
 // Cmd_xtarget @0x4e4780 (the usage: Cmd_xtarget_PrintUsage @0x4e3530). Up to three
 // words (GetNextCmdArg). A first word starting with a digit targets that slot (1-based); "show" (any prefix of it)
 // shows the window with "on", hides it with "off", else toggles it; "target <n>" targets slot n; "add" puts the
@@ -1083,6 +1102,35 @@ ipc::CommandAckPacket ClientApp::handle_bus_command(const ipc::CommandPacket& cm
         return ack;
     }
 
+    if (verb == "/mount_bridle") {
+        if (!in_game) {
+            ack.ok = false;
+            ack.message = "cannot mount while not in game";
+            return ack;
+        }
+        const auto bridle = client_internal::find_bridle_item(conn_->inventory());
+        if (!bridle.valid()) {
+            ack.ok = false;
+            ack.message = "no bridle found in carried inventory";
+            return ack;
+        }
+        ack.ok = conn_->use_item(bridle);
+        ack.message = ack.ok ? "bridle activated" : "bridle could not be activated";
+        return ack;
+    }
+
+    if (verb == "/unmount") {
+        if (!in_game) {
+            ack.ok = false;
+            ack.message = "cannot dismount while not in game";
+            return ack;
+        }
+        conn_->dismount_command();
+        ack.ok = true;
+        ack.message = "dismount requested";
+        return ack;
+    }
+
     if (verb == "/hail_target") {
         if (!in_game || rest.empty()) {
             ack.ok = false;
@@ -1580,6 +1628,28 @@ bool ClientApp::handle_commander_command(std::string_view action, std::string_vi
         return true;
     }
 
+    if (act == "mount_all" || act == "unmount_all") {
+        if (!conn_ || screen_ != Screen::InGame || !player_ready_) {
+            out_msg = "cannot change mount state while not in game";
+            return false;
+        }
+        const std::string verb = act == "mount_all" ? "/mount_bridle" : "/unmount";
+        ipc::CommandPacket local_pkt;
+        local_pkt.command = verb;
+        const auto local_ack = handle_bus_command(local_pkt);
+        if (bus_.connected()) {
+            ipc::CommandPacket pkt;
+            pkt.scope = ipc::CommandScope::AllExceptSelf;
+            pkt.command = verb;
+            bus_.send_command(std::move(pkt));
+        }
+        out_msg = act == "mount_all"
+                      ? "Mount requested for all connected characters (bridles only)"
+                      : "Unmount requested for all connected characters";
+        if (!local_ack.ok && act == "mount_all") out_msg += "; this character has no bridle";
+        return true;
+    }
+
     if (act == "corpse_hotbuttons_all") {
         if (!conn_ || screen_ != Screen::InGame || !player_ready_) {
             out_msg = "cannot create hotbuttons while not in game";
@@ -1729,9 +1799,13 @@ bool ClientApp::handle_commander_command(std::string_view action, std::string_vi
         const std::string who = arg.empty() ? local_char : std::string(arg);
         slash_cmd = who.empty() ? "/assist" : ("/assist " + who);
     } else if (act == "attack_on") {
-        slash_cmd = "/attack on";
+        // The Combat GUI button means "enable the combat controller". Do
+        // not turn native melee auto-attack on for casters or idle clients;
+        // the combat engine enables melee attack only once its class profile
+        // has a valid target and wants melee engagement.
+        slash_cmd = "/combat start";
     } else if (act == "attack_off") {
-        slash_cmd = "/attack off";
+        slash_cmd = "/combat stop";
     } else if (act == "pause_script") {
         slash_cmd = arg.empty() ? "/script pause" : ("/script pause " + std::string(arg));
     } else if (act == "resume_script") {

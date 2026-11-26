@@ -404,6 +404,10 @@ local function drawWindow()
   if ui.SmallButton("Hail Target (All)") then runCommander("hail_all", "", "") end
   ui.SameLine()
   if ui.SmallButton("Corpse Hotbuttons (All)") then runCommander("corpse_hotbuttons_all", "", "") end
+  ui.SameLine()
+  if ui.SmallButton("Mount (All)") then runCommander("mount_all", "", "") end
+  ui.SameLine()
+  if ui.SmallButton("Unmount (All)") then runCommander("unmount_all", "", "") end
 
   ui.Separator()
 
