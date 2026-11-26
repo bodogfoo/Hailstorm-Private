@@ -1,0 +1,59 @@
+name: CI
+
+# Checks only. Builds and tests run on the developers' machines, Linux natively and Windows with MSVC under Wine, and
+# so do releases (docs/ci.md). The build legs that ran here (linux-gcc, windows-msvc and older ones) are in this file's
+# history.
+
+on:
+  push:
+    branches: [main, 'cloud/**', 'claude/**']
+  pull_request:
+    branches: [main]
+
+# The checks only read the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # A server's client changes are a plugin (docs/plugins.md): the client's own sources must not name NMS outside
+  # comments.
+  core-names:
+    name: no server code in the client
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check src/, sdk/ and ui/
+        run: python3 tools/check_core_names.py
+
+  # The wiki is built from docs/ (docs/wiki.md): every document has a page and no link points at a missing file.
+  wiki:
+    name: docs build into the wiki
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check docs/, CONTRIBUTING.md and server/README.md
+        run: python3 tools/sync_wiki.py --check
+
+  ui-api:
+    name: shared UI contract artifacts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check shipped interface migration
+        run: python3 tools/migrate_ui_api.py --check
+      - name: Check descriptor-generated fixtures and reference
+        run: |
+          python3 tools/migrate_ui_api.py --mock-adapter --check
+          python3 tools/gen_ui_api_docs.py --check
+      - name: Check UI tooling
+        run: |
+          python3 -m unittest discover -s tests -p 'test_migrate_ui_api.py' -v
+          python3 -m unittest discover -s tests -p 'test_gen_ui_api_docs.py' -v
+      - name: Check the add-on packer's UI and autoload packages
+        run: |
+          python3 -m unittest discover -s tests -p 'test_make_addon_ui.py' -v
+          python3 -m unittest discover -s tests -p 'test_make_addon_autoload.py' -v

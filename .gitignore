@@ -1,6 +1,20 @@
-node_modules/
 build/
-dist/
+build-*/
+.local/
+.claude/worktrees/
+build.log
+/plugins/nms
+/plugins/projecttriune
+__pycache__/
+# What a local release writes in the checkout (docs/updater.md "Making a release", docs/addons.md "For authors").
+/dist/
+/release/
+# Container builds (compose.yaml, tools/docker/build.sh): ccache, MSVC, the Wine home
+/.docker/
+# luac -p writes this in the folder it runs in
+luac.out
+# Hailstone 24 Workbench (the Vite app that came in with main's history)
+node_modules/
 coverage/
 .DS_Store
 *.log

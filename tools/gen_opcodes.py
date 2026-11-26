@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""Generates src/net/opcodes_rof2.inc from an EQEmu patch_RoF2.conf.
+
+Usage: tools/gen_opcodes.py path/to/patch_RoF2.conf [output.inc]
+
+Use stock EQEmu's conf (an unmodified checkout's utils/patches/). A custom
+server's own opcodes belong to its plugin, not to this table.
+
+The conf lists `OP_Name=0xNNNN` lines (a trailing `# comment` is allowed).
+Each becomes `HAILSTONE_OP(Name, 0xNNNN)` in file order; the OP_ prefix is
+dropped. Values of 0x0000 mean "not used by RoF2". Names are unique in the
+conf; when several names share one wire value, net::from_wire() returns the
+first in file order. The output is checked in; this script is not run by the
+build.
+"""
+
+import re
+import sys
+from pathlib import Path
+
+DEFAULT_OUT = Path(__file__).resolve().parent.parent / "src/net/opcodes_rof2.inc"
+
+LINE = re.compile(r"^OP_([A-Za-z0-9_]+)\s*=\s*0x([0-9A-Fa-f]{1,4})\b")
+
+# RoF2 opcodes absent from EQEmu's current conf; keep the original conf's order and append only gaps.
+# Confirmed in the original client: 0x6411 and 0x6471 (PendingRewardMgr's two instances; receive dispatches
+# 0x4656e0/0x465a90, sends of kinds 4/5/6/8), 0x47cb (Cmd_achievements, the window request 0x4edb00, byte 0x30),
+# 0x1665 (Send_AchievementCompareRequest @0x51fb90) and 0x17f8 (a HandleWorldMessage receive, @0x4c1760).
+# Taken from the server side of EQEmu#5119 and not yet traced in the original (docs/unknowns.md "Achievements"):
+# 0xdab0, 0x618f, 0x2b42, 0x059d, 0x28e0, 0x171e and 0x675d. src/net/achievement_packets.h and reward_packets.h
+# repeat these values as constants for switch labels; tests/achievement_packets_test.cpp checks they agree.
+# Native fellowship routes were independently checked at CFellowshipWnd sends
+# 0x669440/0x6688e0 and receive routes 0x4c5733/0x4c55cd/0x6691d0/0x4cd4d3.
+# UpdateAltResponse is the campsite kit list, not an alternate roster.
+# Native guild banner sends: 0x684ad0 (kit and status requests), 0x6833a0 (save),
+# 0x54e340 (plant), 0x683870 (remove). Receive routes: 0x4d19ab and 0x4d1970.
+# Shrouding and Shroud Bank use the stock manager routes, also mapped in the EQEmu draft.
+# The stock task manager at 0x482080 uses separate Monster Mission messages.
+STOCK_ROF2_ADDITIONS = (
+    ("AchievementReward", 0x6411), ("RewardSelection", 0x6471),
+    ("AchievementDefinitions", 0xDAB0), ("AchievementUpdate", 0x618F),
+    ("AchievementProgress", 0x2B42), ("AchievementState", 0x059D),
+    ("AchievementComparisonReply", 0x28E0), ("AchievementEarned", 0x17F8),
+    ("AchievementWindow", 0x171E), ("AchievementRequest", 0x47CB),
+    ("AchievementLinkRequest", 0x675D), ("AchievementCompareRequest", 0x1665),
+    ("FellowshipUpdate", 0x7121), ("FellowshipCampRefresh", 0x0C12),
+    ("FellowshipInvite", 0x62AB), ("FellowshipUpdateResponse", 0x6E4D),
+    ("FellowshipUpdateAltResponse", 0x074D), ("FellowshipVitalityUpdate", 0x2CC6),
+    ("GuildBannerKitRequest", 0x0D92), ("GuildBannerKitList", 0x0001),
+    ("GuildBannerStatusRequest", 0x4924), ("GuildBannerStatus", 0x56C9),
+    ("GuildBannerModificationToken", 0x1E50),
+    ("GuildBannerSave", 0x4377), ("GuildBannerPlant", 0x765B), ("GuildBannerRemove", 0x9E18),
+    ("GuildBannerAppearance", 0x4683),
+    ("AltStorage", 0x7B71), ("AltStorageList", 0x1115), ("AltStorageNoItems", 0x0728),
+    ("Shroud", 0x6562), ("ShroudRemove", 0x67E8), ("ShroudSelectionWindow", 0x2EC3),
+    ("ShroudRequestStats", 0x2B37), ("ShroudRespondStats", 0x6C04), ("ShroudSelect", 0x1CD0),
+    ("ShroudSelectCancel", 0x79DA), ("ShroudProgress", 0x541D), ("ShroudProgress2", 0x3823),
+    ("ShroudRequestAbility", 0x3ACC), ("ShroudRespondAbility", 0x006E),
+    ("ShroudRequestItem", 0x4B25), ("ShroudRespondItem", 0x2507),
+    ("MonsterMissionCatalog", 0x3C54), ("MonsterMissionStats", 0x3D20),
+    ("MonsterMissionAbility", 0x34F4), ("MonsterMissionItem", 0x5F08),
+    ("MonsterMissionSelect", 0x4EEA), ("MonsterMissionAssignment", 0x2E8D), ("MonsterMissionResult", 0x5A67),
+)
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        raise SystemExit(__doc__)
+    conf = Path(sys.argv[1])
+    out = Path(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_OUT
+
+    entries = []
+    seen = set()
+    for raw in conf.read_text(encoding="latin-1").splitlines():
+        m = LINE.match(raw.strip())
+        if not m:
+            continue
+        name, value = m.group(1), int(m.group(2), 16)
+        if name in seen:
+            raise SystemExit(f"duplicate opcode name OP_{name}")
+        seen.add(name)
+        entries.append((name, value))
+
+    if not entries or entries[0][0] != "Unknown":
+        raise SystemExit("expected OP_Unknown as the first entry")
+
+    for name, value in STOCK_ROF2_ADDITIONS:
+        if name in seen:
+            if dict(entries)[name] != value:
+                raise SystemExit(f"stock RoF2 mapping conflicts with OP_{name}")
+        else:
+            if any(old_value == value for _, old_value in entries):
+                raise SystemExit(f"stock RoF2 mapping 0x{value:04x} already names another opcode")
+            entries.append((name, value))
+            seen.add(name)
+
+    lines = [
+        "// Generated by tools/gen_opcodes.py from EQEmu's utils/patches/patch_RoF2.conf",
+        "// (stock EQEmu's), plus verified missing stock RoF2 manager mappings. Do not edit by hand.",
+        f"// {len(entries)} opcodes; 0x0000 means the name has no RoF2 wire value.",
+        "",
+    ]
+    lines += [f"HAILSTONE_OP({name}, 0x{value:04x})" for name, value in entries]
+    out.write_text("\n".join(lines) + "\n", encoding="ascii")
+    print(f"wrote {len(entries)} opcodes to {out}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
