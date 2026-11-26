@@ -23,6 +23,7 @@
 #include <ctime>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <imgui.h>
@@ -1482,6 +1483,47 @@ int l_right_click_item(lua_State* L) {
     return 0;
 }
 
+// hailstone.memorize_spell(name, gem): memorize a scribed spell into a 1-based gem.
+// This is the script-side equivalent of the native spellbook UI operation; unlike the
+// MacroQuest compatibility command, it does not pass through Hailstone's command router.
+int l_memorize_spell(lua_State* L) {
+    net::GameConnection* c = acting(L, "hailstone.memorize_spell");
+    const char* wanted = luaL_checkstring(L, 1);
+    const int gem = static_cast<int>(luaL_checkinteger(L, 2)) - 1;
+    if (!c || gem < 0 || gem >= game::kSpellGems) {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+    auto equal_name = [](std::string_view a, std::string_view b) {
+        if (a.size() != b.size()) return false;
+        for (std::size_t i = 0; i < a.size(); ++i)
+            if (static_cast<unsigned char>(a[i]) != static_cast<unsigned char>(b[i]) &&
+                std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i])))
+                return false;
+        return true;
+    };
+    const auto& state = c->spell_state();
+    for (int book = 0; book < game::kSpellBookSize; ++book) {
+        const auto id = state.book[static_cast<std::size_t>(book)];
+        if (id == game::kNoSpell || id == 0) continue;
+        const auto* spell = c->spell_table().get(id);
+        if (!spell || !equal_name(spell->name, wanted)) continue;
+        // The stock spellbook requires sitting and an open book before the
+        // memorization timer can be started.  RGMercs normally handles this
+        // through MacroQuest's command layer, which Hailstone does not have.
+        if (!c->sitting()) c->set_sitting(true);
+        if (!c->sitting() || !c->can_start_memming(book)) {
+            lua_pushboolean(L, false);
+            return 1;
+        }
+        c->memorize(book, gem);
+        lua_pushboolean(L, true);
+        return 1;
+    }
+    lua_pushboolean(L, false);
+    return 1;
+}
+
 int l_close_spell_book(lua_State* L) {
     if (net::GameConnection* c = acting(L, "hailstone.close_spell_book")) c->close_spell_book();
     return 0;
@@ -1793,6 +1835,7 @@ void register_hailstone(lua_State* L) {
              {"use_ability", l_use_ability},
              {"character_dir", l_character_dir},
              {"right_click_item", l_right_click_item},
+             {"memorize_spell", l_memorize_spell},
              {"close_spell_book", l_close_spell_book},
              {"clear_spell_recovery", l_clear_spell_recovery},
              {"set_window_pet", l_set_window_pet},
