@@ -617,10 +617,11 @@ const SpawnSnapshot* CombatEngine::resolve_hostile_target(const CombatSnapshot& 
                 reject_reason = "Assisted target out of engage distance";
                 return nullptr;
             }
-            if (assisted_mob->hp_pct > profile_.engage_at_hp_pct) {
-                reject_reason = "Assisted target above engage HP threshold";
-                return nullptr;
-            }
+            // No engage-HP gate here. The assist source named this spawn, and a
+            // fresh pull is always at 100% HP, so gating on hp_pct <= 99 made the
+            // assist path reject every undamaged mob forever (observed: followers
+            // sat in "Assisting <MA>" and never engaged). engage_at_hp_pct stays
+            // available for profiles/UI but must not veto an assisted target.
             return assisted_mob;
         }
         // Neither source named a spawn this zone holds: the adapter validates

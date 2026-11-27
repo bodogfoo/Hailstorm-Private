@@ -999,13 +999,16 @@ TEST_CASE("CombatEngine: stick stops at profile melee_range while attack reach c
         engine.start();
         engine.tick(snap, actions);
 
-        // Inside the spawns' reach: fighting, and the stick is asked to close to 3.
+        // Inside the spawns' reach: fighting, and the stick is asked to stop at
+        // 0.75 * reach (the Navigator's own melee share), not at 3u: a stop point
+        // inside the target's collision is what made melee run through the mob.
         CHECK(engine.state() == CombatState::Combat);
         CHECK(actions.auto_attacks == std::vector<bool>{true});
         REQUIRE_FALSE(actions.move_melees.empty());
         CHECK(actions.move_melees.back().first == 401);
         REQUIRE_FALSE(actions.melee_distances.empty());
-        CHECK(actions.melee_distances.back() == doctest::Approx(3.0f));
+        CHECK(actions.melee_distances.back() == doctest::Approx(reach * 0.75f));
+        CHECK(actions.melee_distances.back() > 3.0f);
 
         // Back-away override wins: paused, attack off, no re-close while paused.
         actions.reset_counts();
@@ -1160,4 +1163,48 @@ TEST_CASE("CombatEngine: an invalid assist id explains both sources it was offer
     const std::string reason = engine.status_snapshot(&snap).idle_reason;
     CHECK(reason.find("group MA id 999") != std::string::npos);
     CHECK(reason.find("peer target 0") != std::string::npos);
+}
+
+TEST_CASE("CombatEngine: an assisted target at full HP is engaged, not vetoed") {
+    // The other half of the same live failure: the followers had a valid assist
+    // id and still never engaged, because the assist path rejected any mob above
+    // engage_at_hp_pct (99). Every fresh pull sits at 100%, so no assist could
+    // ever fire. The assist source naming the spawn is the authority on whether
+    // the group is fighting it; hp must not veto that.
+    CombatProfile profile = default_combat_profile_for_class("WAR");
+    profile.assist_target = "Yavaha";
+    REQUIRE(profile.engage_at_hp_pct == 99);
+
+    CombatSnapshot snap;
+    snap.now_ms = 1000;
+    snap.in_zone = true;
+    snap.character_name = "Shesstabbinyah";
+    snap.me.id = 9;
+    snap.me.position = {0.0f, 0.0f, 0.0f};
+
+    SpawnSnapshot leader;
+    leader.id = 7;
+    leader.name = "Yavaha";
+    leader.is_npc = false;
+    leader.position = {1.0f, 0.0f, 0.0f};
+    snap.spawns.push_back(leader);
+
+    SpawnSnapshot mob = make_mob(401, "a_froglok", 9.0f, 0.0f, 100);
+    REQUIRE(mob.hp_pct == 100);
+    snap.spawns.push_back(mob);
+
+    snap.assist_target_name = "Yavaha";
+    snap.assist_target_id = 401;
+    snap.has_assist_target = true;
+    snap.melee_reach = native_melee_reach(6.0f);
+
+    RecordedActions actions;
+    CombatEngine engine;
+    engine.set_profile(profile);
+    engine.start();
+    engine.tick(snap, actions);
+
+    CHECK(engine.state() == CombatState::Combat);
+    CHECK(actions.auto_attacks == std::vector<bool>{true});
+    CHECK(engine.status_snapshot(&snap).target_id == 401);
 }

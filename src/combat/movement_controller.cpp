@@ -322,7 +322,16 @@ MovementStepResult MovementController::update(CombatState state,
     }
 
     case MovementMode::MeleeRange: {
-        const float melee_dist = std::max(3.0f, profile.melee_range);
+        // Stop at attack reach, not the profile's 3u floor. A stick point inside
+        // the target's collision makes the client push into the model forever
+        // (seen in game as "running through the monster" while fighting). The
+        // Navigator's own default is melee_reach * kStickMeleeShare, so use that
+        // when the app layer published a reach and keep the profile floor only as
+        // a fallback for snapshots with no spawn pair to measure.
+        const float reach = snapshot.melee_reach;
+        const float melee_dist = reach > 0.0f
+                                     ? std::max(profile.melee_range, reach * 0.75f)
+                                     : std::max(3.0f, profile.melee_range);
         const bool already_sticking_same = (active_command_ == MovementCommandKind::MoveMelee &&
                                             active_target_id_ == hostile_target->id &&
                                             active_behind_ == profile.melee_behind &&

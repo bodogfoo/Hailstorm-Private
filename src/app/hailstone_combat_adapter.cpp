@@ -505,10 +505,10 @@ void HailstoneCombatAdapter::move_melee(std::uint32_t target_id, float distance,
     }
     if (conn_) conn_->set_running(true);
     nav::StickOptions opt;
-    // Keep melee followers genuinely on top of the target.  The previous
-    // profile-derived 12u stop point was loose enough that followers could
-    // enter Combat without ever reaching a usable attack position.
-    opt.distance = std::min(6.0f, std::max(0.0f, distance));
+    // Pass the engine's reach-derived stop point through. Clamping it to 6u (the
+    // old behaviour) forced the stick inside the target's collision, so melee
+    // characters never stopped and appeared to run through the mob.
+    opt.distance = std::clamp(distance, 0.0f, 20.0f);
     opt.behind = behind;
     const std::string result = nav_->stick(target_id, opt);
     log::info("combat [movement]: stick target={} distance={:.1f} behind={} result={}",
