@@ -98,6 +98,12 @@ std::string_view support_category(SupportActionKind kind) {
 // engine then attacks only at the stick distance, never at an invented one.
 float melee_attack_reach(const CombatSnapshot& snapshot, const CombatProfile& profile) {
     if (snapshot.melee_reach > 0.0f) {
+        // Never swing from outside the two bodies. The reach above carries the
+        // height gap, which for a tall target puts the gate well past the
+        // server's own range check ("Your target is too far away").
+        if (snapshot.melee_contact > 0.0f) {
+            return std::min(snapshot.melee_reach, snapshot.melee_contact);
+        }
         return snapshot.melee_reach;
     }
     return std::max(0.0f, profile.melee_range);
@@ -255,11 +261,12 @@ void CombatEngine::set_assist_target(std::string assist_target) {
 
 void CombatEngine::set_follow_target(std::string follow_target) {
     profile_.follow_target = std::move(follow_target);
-    if (profile_.follow_target.empty()) {
-        if (profile_.movement_mode == MovementMode::Follow) profile_.movement_mode = MovementMode::None;
-    } else {
-        profile_.movement_mode = MovementMode::Follow;
-    }
+    // Following is an out-of-combat instruction, not a combat movement mode.
+    // Switching movement_mode here is what silently turned every follower into
+    // Follow (the group profile carries a follow target for each character), and
+    // Follow never issues a melee stick: the melee stood at follow distance while
+    // the tank fought. movement_mode stays as configured; /follow still sets it
+    // explicitly when someone asks for it.
     append_action(last_tick_ms_, profile_.dry_run, "config",
                   "Follow target set to '" + profile_.follow_target + "'", nullptr);
 }

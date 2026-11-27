@@ -820,25 +820,76 @@ TEST_CASE("CombatProfile: INI persistence, secret rejection, confinement, group 
 }
 
 
-TEST_CASE("CombatEngine: set_follow_target toggles Follow movement mode safely") {
+TEST_CASE("CombatEngine: set_follow_target leaves the combat movement mode alone") {
+    // Follow used to be forced on whenever a follow target was set, and the group
+    // profile sets one for every follower: melee profiles silently became Follow
+    // and never closed on a target. The follow target is now only what the
+    // character trails out of combat.
     CombatEngine engine;
     CombatProfile prof = default_combat_profile_for_class("NEC");
     prof.movement_mode = MovementMode::RangedRange;
     engine.set_profile(prof);
 
-    // Clearing follow_target when not in Follow preserves RangedRange.
     engine.set_follow_target("");
     CHECK(engine.profile().movement_mode == MovementMode::RangedRange);
 
-    // Setting a follow_target automatically switches movement_mode to Follow.
     engine.set_follow_target("Tanker");
     CHECK(engine.profile().follow_target == "Tanker");
-    CHECK(engine.profile().movement_mode == MovementMode::Follow);
+    CHECK(engine.profile().movement_mode == MovementMode::RangedRange);
 
-    // Clearing follow_target while in Follow returns movement_mode to None.
     engine.set_follow_target("");
     CHECK(engine.profile().follow_target.empty());
-    CHECK(engine.profile().movement_mode == MovementMode::None);
+    CHECK(engine.profile().movement_mode == MovementMode::RangedRange);
+
+    // A melee profile keeps its melee mode even with a follow target set.
+    CombatEngine melee;
+    CombatProfile mnk = default_combat_profile_for_class("MNK");
+    melee.set_profile(mnk);
+    melee.set_follow_target("Tanker");
+    CHECK(melee.profile().movement_mode == MovementMode::MeleeRange);
+}
+
+TEST_CASE("CombatEngine: a follower with a follow target still closes on the assisted target") {
+    // The live failure: the tank fought, the melee stood at follow distance and
+    // sent auto-attack from outside melee reach ("Your target is too far away").
+    // Inside combat the movement mode decides, not the follow target.
+    CombatProfile profile = default_combat_profile_for_class("MNK");
+    profile.melee_behind = false;
+    profile.assist_target.clear();
+    profile.follow_target = "Tanker";
+    profile.follow_distance = 15.0f;
+
+    CombatSnapshot snap;
+    snap.now_ms = 1000;
+    snap.in_zone = true;
+    snap.class_short = "MNK";
+    snap.me.id = 2;
+    snap.me.name = "Kickster";
+    snap.me.position = {0.0f, 0.0f, 0.0f};
+
+    SpawnSnapshot leader = make_mob(500, "Tanker", 4.0f, 0.0f);
+    leader.is_npc = false;
+    SpawnSnapshot mob = make_mob(501, "a_froglok", 29.0f, 0.0f);
+    snap.spawns.push_back(leader);
+    snap.spawns.push_back(mob);
+    snap.has_target = true;
+    snap.target = mob;
+    snap.allowed_to_attack_target = true;
+    snap.melee_reach = native_melee_reach(6.0f);
+    snap.melee_contact = 12.0f;
+
+    RecordedActions actions;
+    CombatEngine engine;
+    engine.set_profile(profile);
+    engine.start();
+    engine.tick(snap, actions);
+
+    CHECK(engine.profile().movement_mode == MovementMode::MeleeRange);
+    REQUIRE_FALSE(actions.move_melees.empty());
+    CHECK(actions.move_melees.back().first == 501);
+    CHECK(actions.move_follows.empty());
+    // 29 units out is past the bodies, so no swing is asked for yet.
+    CHECK(actions.auto_attacks.empty());
 }
 
 TEST_CASE("SpellManager & CombatEngine: level restriction, missing spell data, idle-only auto-restore, and truthful failed memorization") {
@@ -1067,6 +1118,63 @@ TEST_CASE("CombatEngine: a snapshot without spawn reach does not invent one") {
     // Movement still closes to the configured stick distance.
     REQUIRE_FALSE(actions.melee_distances.empty());
     CHECK(actions.melee_distances.back() == doctest::Approx(3.0f));
+}
+
+TEST_CASE("CombatEngine: a tall target is closed to body contact, not to its height-extended reach") {
+    // The practice dummy shape: same collision radius as a small mob but tall.
+    // __get_melee_range adds |AvatarHeight difference|, so the original client
+    // turns auto-attack on from ~30 units and the server answers "Your target is
+    // too far away, get closer!". The reach stays the engage gate, but both the
+    // stick distance and the attack latch are capped at the bodies' contact.
+    const hailstone::game::mechanics::melee::RangeSpawn me{6.0f, 1.0f, 3.75f};
+    const hailstone::game::mechanics::melee::RangeSpawn tall{6.0f, 1.0f, 20.0f};
+    const float reach = hailstone::game::mechanics::melee::melee_range(&me, &tall, {});
+    CHECK(reach > 20.0f);
+
+    CombatProfile profile = default_combat_profile_for_class("MNK");
+    profile.movement_mode = MovementMode::MeleeRange;
+    profile.melee_behind = false;
+    profile.melee_range = 3.0f;
+    profile.assist_target.clear();
+
+    CombatSnapshot snap;
+    snap.now_ms = 1000;
+    snap.in_zone = true;
+    snap.class_short = "MNK";
+    snap.me.id = 2;
+    snap.me.name = "Kickster";
+    snap.me.position = {0.0f, 0.0f, 0.0f};
+    SpawnSnapshot mob = make_mob(403, "a_practice_dummy", 18.0f, 0.0f);
+    snap.spawns.push_back(mob);
+    snap.has_target = true;
+    snap.target = mob;
+    snap.allowed_to_attack_target = true;
+    snap.melee_reach = reach;
+    snap.melee_contact = 12.0f;
+
+    RecordedActions actions;
+    CombatEngine engine;
+    engine.set_profile(profile);
+    engine.start();
+    engine.tick(snap, actions);
+
+    // Still outside the bodies: closing, and no swing yet.
+    CHECK(engine.state() == CombatState::Engage);
+    CHECK(actions.auto_attacks.empty());
+    REQUIRE_FALSE(actions.melee_distances.empty());
+    CHECK(actions.melee_distances.back() == doctest::Approx(12.0f));
+    CHECK(actions.melee_distances.back() < reach * 0.75f);
+
+    // At the bodies: fighting, auto-attack asked for.
+    actions.reset_counts();
+    snap.now_ms = 2000;
+    mob.position = {10.0f, 0.0f, 0.0f};
+    snap.spawns.clear();
+    snap.spawns.push_back(mob);
+    snap.target = mob;
+    engine.tick(snap, actions);
+    CHECK(engine.state() == CombatState::Combat);
+    CHECK(actions.auto_attacks == std::vector<bool>{true});
 }
 
 TEST_CASE("CombatEngine: a crouched character stands first and attacks once the pose reads back") {

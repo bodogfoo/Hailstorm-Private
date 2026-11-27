@@ -239,6 +239,13 @@ struct CombatSnapshot {
     // snapshot carries no spawn pair. This is the attack reach; the profile's
     // melee_range is only the distance the melee stick closes to (positioning).
     float melee_reach = 0.0f;
+    // Distance between the two bodies: (radius*scale)_me + (radius*scale)_target,
+    // out of the same spawn pair. melee_reach above adds 2 units and the height
+    // gap, so a tall target reports a reach far beyond its body: the original
+    // client turns auto-attack on from that distance, the server then answers
+    // "Your target is too far away, get closer!". This is the hard ceiling on
+    // both the stick distance and the attack gate. 0 means no spawn pair.
+    float melee_contact = 0.0f;
 
     std::uint32_t assist_target_id = 0;
     std::string assist_target_name;

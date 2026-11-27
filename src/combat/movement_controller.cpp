@@ -167,7 +167,12 @@ MovementStepResult MovementController::update(CombatState state,
 
     // Idle state: either optional Follow, or stopped.
     if (state == CombatState::Idle || state == CombatState::Assist) {
-        if (profile.movement_mode == MovementMode::Follow && follow_spawn && follow_spawn->id != 0 &&
+        // A follow target is an out-of-combat instruction: whoever has one trails
+        // it, whatever the combat movement mode is. Following used to hang on
+        // movement_mode == Follow, and since set_follow_target() forced that mode,
+        // every follower profile ended up in Follow and its melee never closed on
+        // a target: the tank fought, the melee stood at follow distance.
+        if (!profile.follow_target.empty() && follow_spawn && follow_spawn->id != 0 &&
             !follow_spawn->dead) {
             const float dist = snapshot.me.position.distance_2d(follow_spawn->position);
             if (dist > profile.follow_distance) {
@@ -329,9 +334,15 @@ MovementStepResult MovementController::update(CombatState state,
         // when the app layer published a reach and keep the profile floor only as
         // a fallback for snapshots with no spawn pair to measure.
         const float reach = snapshot.melee_reach;
-        const float melee_dist = reach > 0.0f
-                                     ? std::max(profile.melee_range, reach * 0.75f)
-                                     : std::max(3.0f, profile.melee_range);
+        const float contact = snapshot.melee_contact;
+        float melee_dist = reach > 0.0f
+                               ? std::max(profile.melee_range, reach * 0.75f)
+                               : std::max(3.0f, profile.melee_range);
+        // A tall target's reach carries the height gap and lands outside its
+        // body, where the server refuses the swing. Close to the bodies instead.
+        if (contact > 0.0f && melee_dist > contact) {
+            melee_dist = std::max(profile.melee_range, contact);
+        }
         const bool already_sticking_same = (active_command_ == MovementCommandKind::MoveMelee &&
                                             active_target_id_ == hostile_target->id &&
                                             active_behind_ == profile.melee_behind &&

@@ -208,6 +208,9 @@ combat::CombatSnapshot build_combat_snapshot(const net::GameConnection& conn,
                 const game::mechanics::melee::RangeSpawn b{
                     tgt.melee_radius, tgt.heights.model_scale, tgt.heights.avatar_height};
                 snap.melee_reach = game::mechanics::melee::melee_range(&a, &b, game::mechanics::Fpu{});
+                // The bodies' touching distance, without the height gap that
+                // makes a tall target report an unusable reach.
+                snap.melee_contact = a.melee_radius * a.scale + b.melee_radius * b.scale;
             }
         }
     }
