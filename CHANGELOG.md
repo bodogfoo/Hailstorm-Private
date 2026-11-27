@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Automation: RG Mercs is retired. The client used to write the `rgmercs` auto-start entry into every character's `scripts.ini` at each zone entry and then run the add-on; it no longer starts it. `<data>/lua/rgmercs` and `<data>/scripts/rgmercs` (with `rgmercs_config.db`) moved to `<data>/retired-rgmercs-<date>/` beside a `rollback.sh`, and the imported auto-start entries are now `rgmercs=0`. The native controller owns fighting, healing, buffing and movement
 - Combat: a target named by the assist source (group main assist, leader, tank, an explicitly named character, or a peer's target) is engaged even at full HP. The profile's `engage_at_hp_pct` used to veto it, which rejected every fresh pull, since a mob that has just been acquired is at 100%
 - Combat: the melee stick stops at 75% of the spawn's published melee reach (~12 units on a normal-sized mob) instead of 3 units against the mob's centre. Arrival at a point inside the collision was never satisfied, so a character kept moving forward and walked through its target; `/hcombat status` still reports the stick distance
 - Combat: the native controller can now be chosen per group or per character with the `combat.native.*` settings (`native_combat` is the master switch; `native_class_profiles` uses the class table). Nothing changes unless a key is set. When it is, the client pauses the RGMercs script (rather than stopping it) so the two never act on one character, `/hcombat status` names the engine, and `/hcombat start` says why it refuses while another engine owns the character
