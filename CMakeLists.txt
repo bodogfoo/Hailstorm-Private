@@ -353,6 +353,7 @@ add_library(hailstone_engine STATIC
   src/app/actions_ui.cpp
   src/app/actions_ui_sets.cpp
   src/app/group_ui.cpp
+  src/app/group_launch_plan.cpp
   src/app/social_ui.cpp
   src/ui/social_windows.cpp
   src/app/player_movement.cpp
@@ -591,6 +592,12 @@ add_library(hailstone_engine STATIC
   src/combat/spell_manager.cpp
   src/combat/movement_controller.cpp
   src/combat/combat_engine.cpp
+  src/combat/engine_selection.cpp
+  src/combat/class_profiles.cpp
+  src/combat/diagnostics.cpp
+  src/combat/cast_plan.cpp
+  src/combat/support_policy.cpp
+  src/combat/profile_migration.cpp
   src/app/lua_ui_items.cpp
   src/app/lua_ui_itemdisplay.cpp
   src/app/lua_ui_adventure.cpp
@@ -1165,6 +1172,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/mq_script_path_test.cpp
     tests/hailstone24/execution_state_test.cpp
     tests/hailstone24/session_bus_test.cpp
+    tests/hailstone24/broker_launch_test.cpp
     tests/cortex_observation_test.cpp
     tests/hailstone24/mq_login_import_test.cpp
     tests/hailstone24/group_profile_test.cpp
@@ -1363,6 +1371,15 @@ if(HAILSTONE_BUILD_TESTS)
     tests/appearance_vectors_test.cpp
     tests/combat_test.cpp
     tests/hailstone24/combat_controller_test.cpp
+    tests/hailstone24/native_engine_selection_test.cpp
+    tests/hailstone24/native_class_profiles_test.cpp
+    tests/hailstone24/native_diagnostics_test.cpp
+    tests/hailstone24/native_cast_plan_test.cpp
+    tests/hailstone24/native_support_policy_test.cpp
+    tests/hailstone24/native_engine_diagnostics_test.cpp
+    tests/hailstone24/native_combat_integration_test.cpp
+    tests/hailstone24/native_combat_command_alias_test.cpp
+    tests/hailstone24/native_profile_migration_test.cpp
     tests/hailstone24/companion_call_test.cpp
     tests/hailstone24/process_identity_test.cpp
     tests/hailstone24/rgmercs_trusted_loader_test.cpp
@@ -1571,6 +1588,11 @@ if(HAILSTONE_BUILD_TESTS)
   target_include_directories(hailstone_tests PRIVATE tests sdk)
   add_dependencies(hailstone_tests hailstone_shared_cache_probe)
   target_compile_definitions(hailstone_tests PRIVATE HAILSTONE_SHARED_CACHE_PROBE="$<TARGET_FILE:hailstone_shared_cache_probe>")
+  # The broker launch-all regression runs the real broker binary against a stub child.
+  if(TARGET hailstone24_broker)
+    add_dependencies(hailstone_tests hailstone24_broker)
+    target_compile_definitions(hailstone_tests PRIVATE HAILSTONE_BROKER_BIN="$<TARGET_FILE:hailstone24_broker>")
+  endif()
   target_compile_options(hailstone_tests PRIVATE ${HAILSTONE_WARNINGS})
   target_link_libraries(hailstone_tests PRIVATE hailstone_engine hailstone_gpu_lab hailstone_texpack doctest::doctest)
   # The server extension test plugin (tests/plugins/ExtendTest.c), the same as an ABI 1 plugin, and the same with its

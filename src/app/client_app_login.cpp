@@ -1560,7 +1560,7 @@ bool ClientApp::launch_group_slot_process(const core::GroupProfile& gp, const co
     }
 
     const std::string tag =
-        slot.session_id.empty() ? std::format("slot{:02d}", slot.slot_number) : slot.session_id;
+        slot.session_id.empty() ? core::format_slot_id(slot.slot_number) : slot.session_id;
     // box_clients_ only knows about children spawned by this launcher.  Use the
     // shared session bus as the global guard too, so a second Hailstone window
     // cannot start another copy of the same group slot and consume another full

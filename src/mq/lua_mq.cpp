@@ -2130,6 +2130,29 @@ bool ScriptHost::run(const std::string& name, const std::vector<std::string>& ar
         return false;
     };
     m.reap();
+    // The native engine owns this character (combat.native.*): the legacy add-on may
+    // not be started behind its back. An explicit run of the add-on itself says why
+    // in chat; a child script's start (rgmercs/heartbeat, sent from its actor
+    // mailbox) is dropped quietly so it cannot turn into Other Chat spam.
+    if (m.env.script_may_start && !m.env.script_may_start(key)) {
+        const std::string text = key + ": the native Hailstone combat engine owns this character";
+        if (why) *why = text;
+        m.last_outcomes[key] = LastOutcome{key, "PAUSED", text};
+        if (key == "rgmercs") {
+            if (m.env.rgmercs) {
+                m.env.rgmercs->set_script_status("paused", "Native Hailstone engine owns this character");
+                // A refusal is not a failure: without this, the error from a start
+                // attempted before the gate existed stayed latched (error is sticky
+                // until starting/reloading) and the dashboard kept showing
+                // rgmercs:error for a character where the add-on is stood down.
+                m.env.rgmercs->clear_error();
+            }
+            m.say("[Lua] " + text);
+        } else {
+            log::info("combat: {} not started (the native engine owns this character)", key);
+        }
+        return false;
+    }
     // The Lua socials' names (button_name): a script of such a name would share a social's config folder and
     // browser owner.
     if (key.starts_with(kSocialPrefix)) return refuse(std::format("{}: a script's name cannot start with \"{}\"", key, kSocialPrefix));
@@ -2741,6 +2764,13 @@ void ScriptHost::Impl::start_allowed(const std::vector<std::string>& names) {
     if (!env.policy || !env.policy->received()) return;
     for (const auto& name : names) {
         if (name.empty() || self->running(name)) continue;
+        // The autoload at a new zone is the usual way the legacy add-on came back
+        // behind the ownership gate; leave it stopped here instead of starting it
+        // and pausing it a tick later.
+        if (env.script_may_start && !env.script_may_start(name)) {
+            log::info("combat: {} left stopped (the native engine owns this character)", name);
+            continue;
+        }
         auto entry = resolve(lower(name));
         auto text = entry ? read_file(*entry) : std::nullopt;
         if (text && env.policy->caps(plugin::FileKind::Script, sha256(*text), name) != 0) self->run(name, {});

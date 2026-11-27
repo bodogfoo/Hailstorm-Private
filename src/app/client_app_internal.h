@@ -11,6 +11,7 @@
 #include "app/hailstone_combat_adapter.h"
 #include "combat/combat_engine.h"
 #include "combat/combat_profile.h"
+#include "combat/engine_selection.h"
 #include "app/frame_pace.h"
 #include "core/group_profile.h"
 #include "ipc/session_bus.h"
@@ -518,6 +519,17 @@ public:
             return collision_->line_of_sight(glm::vec3(a[0], a[1], a[2]), glm::vec3(b[0], b[1], b[2]));
         };
         aenv.ipc_bus = &bus_;
+        // Legacy scripts stand down while the native engine owns the character
+        // (app/client_app_commands.cpp enforce_combat_engine_ownership). With no
+        // combat.native.* flag set this is always true and changes nothing.
+        aenv.script_actions_allowed = [this] {
+            return combat::legacy_script_action_allowed(combat_selection_, combat_gate_);
+        };
+        // ...and it may not be started there either: the zone-in autoload and an
+        // explicit /lua run both ask this before the script loads.
+        aenv.script_may_start = [this](std::string_view name) {
+            return combat::legacy_script_may_start(combat_selection_, name);
+        };
         automation_ = std::make_unique<Automation>(aenv);
         combat_engine_ = std::make_unique<combat::CombatEngine>();
         auto_headless_others_ = config_.get_bool("multibox.auto_headless_others", true);
@@ -1233,6 +1245,27 @@ private:
                                   std::string_view arg, std::string& out_msg);
     std::unique_ptr<combat::CombatEngine> combat_engine_;
     combat::CombatSnapshot last_combat_snapshot_{};
+    // Which engine owns this character's gameplay actions, read from the
+    // combat.native.* settings. Unset means nothing was configured: the native
+    // controller keeps behaving as it did before the flags existed.
+    std::optional<combat::EngineSelection> combat_selection_;
+    // One writer per tick: the engine may act only when the selection says so, and
+    // the legacy script is stood down for as long as it does not.
+    combat::ActionIssuerGate combat_gate_;
+    combat::DiagnosticsSink combat_diagnostics_;
+    // The stand-down is re-applied every tick, so this only keeps the log line (and
+    // the rgmercs bridge's status text) from repeating while it stays paused.
+    bool legacy_stand_down_logged_ = false;
+    std::string combat_selection_character_;
+    std::string combat_selection_group_;
+    // "profile/slot (CLS)" for the box this client was launched as, when a group
+    // profile named it; empty for a lone character (/hcombat status shows it).
+    std::string combat_slot_label_;
+    void refresh_combat_engine_selection(std::string_view group_id, std::string_view character_name);
+    void enforce_combat_engine_ownership(std::uint64_t now_ms);
+    // /hengine <assist <name> | reload>: one client's answer to the commander's
+    // All Assist Me / reload, applied on whichever engine owns this character.
+    bool handle_engine_command(std::string_view action, std::string_view arg, std::string& out_msg);
     std::filesystem::path combat_char_dir_;
     bool last_player_moved_ = false;
     bool last_manual_backward_ = false;

@@ -59,6 +59,16 @@ struct AutomationEnv {
     std::function<void(float)> set_max_camera_distance;
     // The in-game browser for the scripts (mq.web) and plugins (the host table's web_*); null: none.
     plugin::WebAccess* web = nullptr;
+    // Whether a Lua script's command line may reach the game right now. The combat
+    // ownership gate answers it (combat::legacy_script_action_allowed): when the
+    // native engine owns the character the legacy add-on's commands are dropped.
+    // Empty: always allowed, which is how an install with no combat flag behaves.
+    std::function<bool()> script_actions_allowed;
+    // Whether a Lua script may be started at all, by name. The combat ownership gate
+    // answers it for the legacy add-on while the native engine owns the character,
+    // so neither the zone-in autoload nor /lua run can revive it there. Empty: every
+    // script may start.
+    std::function<bool(std::string_view)> script_may_start;
     // The hot buttons for plugins (plugin::NativeEnv hot_button ...).
     std::function<std::optional<std::string>(int bar, int page, int button)> hot_button;
     std::function<bool(int bar, int page, int button, const std::string& spec)> set_hot_button;

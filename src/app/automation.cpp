@@ -91,6 +91,17 @@ struct Automation::Impl {
         }
     }
 
+    // A Lua script's command line: the same path, unless the combat ownership gate
+    // says the legacy add-on may not act for this character this tick. Dropping the
+    // line is the stand-down; the gate has already recorded the violation.
+    void run_script(const std::string& line) {
+        if (env.script_actions_allowed && !env.script_actions_allowed()) {
+            log::info("combat: dropped legacy script command '{}' (another engine owns this character)", line);
+            return;
+        }
+        run(line);
+    }
+
     std::vector<std::string> autoload() const {
         std::vector<std::string> out;
         for (auto& s : mq::split_index(env.autoload)) out.push_back(s);
@@ -187,7 +198,8 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     se.registry = &m.registry;
     se.context = ce.context;
     se.print = ce.echo;
-    se.run = ce.run;
+    se.run = [&m](const std::string& l) { m.run_script(l); };
+    se.script_may_start = m.env.script_may_start;
     se.dirs = search_dirs(m.env.data_dir / "scripts", m.env.install_dir / "scripts");
     se.config_dir = m.env.data_dir / "scripts" / "config";
     m.ctx.lua_dir = se.dirs.front().string();

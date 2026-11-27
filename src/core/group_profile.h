@@ -84,6 +84,12 @@ GroupProfile make_named_group_profile_preset(std::string_view preset_name,
 // Sanitize a profile name or id into a filesystem-safe slug (lowercase [a-z0-9_-]).
 std::string sanitize_group_profile_id(std::string_view raw);
 
+// The session id a slot is launched under when its roster row names none:
+// `slotNN` for slot numbers 1..24. `client_app_login.cpp` and the session broker
+// (`tools/hailstone24_manager`) both use it, so the bus roster, the verified kill
+// and the combat window key on one identity whichever path started the client.
+std::string format_slot_id(int slot_number);
+
 // Resolve a `--profile NAME_OR_PATH` or profile id against `profiles_dir`.
 // Rejects path traversal outside `profiles_dir` for relative names.
 std::optional<std::filesystem::path> find_group_profile_file(const std::filesystem::path& profiles_dir,

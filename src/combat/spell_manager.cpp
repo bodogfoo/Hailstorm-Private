@@ -37,6 +37,18 @@ std::string normalize_rank_suffix(std::string_view s) {
             return trim_copy(lower.substr(0, lower.size() - sv.size()));
         }
     }
+    // A buff's name carries its rank ("Clarity II"): a table that names the
+    // spell without one must still see the buff as up, or it is refreshed every
+    // tick. Exact matching runs first wherever a spell has to be resolved, so
+    // this only decides ties the name alone cannot.
+    const char* ranks[] = {" viii", " vii", " iii", " ii", " ix", " iv", " vi", " v", " x"};
+    for (const char* rank : ranks) {
+        std::string_view rv(rank);
+        if (lower.size() > rv.size() &&
+            lower.compare(lower.size() - rv.size(), rv.size(), rv) == 0) {
+            return trim_copy(lower.substr(0, lower.size() - rv.size()));
+        }
+    }
     return lower;
 }
 

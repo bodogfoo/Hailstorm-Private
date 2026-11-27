@@ -19,6 +19,8 @@
 #include "app/client_app_internal.h"
 #include "app/lua_ui.h"
 #include "app/lua_ui_windows.h"
+#include "combat/class_profiles.h"
+#include "combat/profile_migration.h"
 #include "core/group_profile.h"
 #include "core/msvc_atoi.h"
 #include "game/chat_windows.h"
@@ -638,17 +640,184 @@ bool ClientApp::client_command(std::string_view h, const std::string& args) {
     return client_info_command(h, args);
 }
 
+// Reads combat.native.* and decides which engine owns this character. Called at
+// a zone load and on /hcombat reload, so a changed flag takes effect there rather
+// than mid-fight. Setting no flag leaves combat_selection_ unset and the native
+// controller behaves as it did before the flags existed.
+void ClientApp::refresh_combat_engine_selection(std::string_view group_id, std::string_view character_name) {
+    if (!combat_engine_) return;
+    combat_selection_group_.assign(group_id);
+    combat_selection_character_.assign(character_name);
+    const bool legacy_requested = automation_ && automation_->scripts().running("rgmercs");
+    combat_selection_ = combat::resolve_engine_from_settings(config_, group_id, character_name, legacy_requested);
+    if (combat_selection_) {
+        log::info("combat: engine selection {} ({}), legacy {}, suppressed {}",
+                  combat::combat_engine_kind_name(combat_selection_->kind), combat_selection_->detail,
+                  legacy_requested ? "requested" : "not running", combat_selection_->suppressed_reason);
+    }
+}
+
+// One gate per tick. The legacy add-on is stood down (paused, not stopped, so the
+// player can resume it) the first time the native engine owns the character, and
+// only while the native engine keeps that ownership. Nothing is done when no
+// flag is set, which is how every existing install behaves.
+void ClientApp::enforce_combat_engine_ownership(std::uint64_t now_ms) {
+    if (!combat_selection_) {
+        combat_gate_.reset();
+        return;
+    }
+    combat_gate_.begin_tick(*combat_selection_, now_ms);
+    if (combat::legacy_may_issue_actions(*combat_selection_)) {
+        legacy_stand_down_logged_ = false;
+        return;
+    }
+    if (!automation_ || !combat::native_may_issue_actions(*combat_selection_)) return;
+    // Re-checked every tick, not latched once: RGMercs restarts itself (a reload, an
+    // error repair, the autoload at a new zone), and a one-shot pause left it running
+    // and competing with the native engine -- which the dashboard then reported,
+    // truthfully, as rgmercs:RUNNING.
+    const auto scripts = automation_->scripts().list();
+    const auto it = std::find_if(scripts.begin(), scripts.end(),
+                                 [](const auto& script) { return script.name == "rgmercs"; });
+    const combat::LegacyScriptState state =
+        it == scripts.end() ? combat::LegacyScriptState::Absent
+                            : combat::legacy_script_state_from_status(it->status);
+    if (combat::plan_legacy_stand_down(combat_selection_, state) != combat::LegacyStandDown::PauseNow) return;
+    if (!automation_->scripts().pause("rgmercs", true)) return;
+    automation_->rgmercs().set_script_status("paused", "Native Hailstone engine owns this character");
+    if (!legacy_stand_down_logged_) {
+        legacy_stand_down_logged_ = true;
+        log::info("combat: native engine owns this character; legacy rgmercs paused");
+    }
+}
+
+// One client's answer to the commander's All Assist Me and reload (bus verb
+// /hengine, from handle_commander_command). Whichever engine owns this character
+// applies it: the native engine takes the assist target into its own profile (and
+// saves it, so a zone change keeps it), and RG Mercs is asked to reload ONLY where
+// it owns the character -- reloading it under the native engine is what used to
+// bring the add-on back after the gate had paused it.
+bool ClientApp::handle_engine_command(std::string_view action, std::string_view arg, std::string& out_msg) {
+    const bool native_owns = combat_selection_ && combat::native_may_issue_actions(*combat_selection_);
+    const std::string local_char = conn_ ? conn_->character_name() : std::string();
+
+    if (action == "assist") {
+        if (arg.empty()) {
+            out_msg = "usage: /hengine assist <character>";
+            return false;
+        }
+        if (native_owns) {
+            if (!combat_engine_) {
+                out_msg = "native engine unavailable";
+                return false;
+            }
+            // The leader does not assist itself: it picks the target the others take.
+            const auto same_name = [](std::string_view a, std::string_view b) {
+                return a.size() == b.size() &&
+                       std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+                           return std::tolower(static_cast<unsigned char>(x)) ==
+                                  std::tolower(static_cast<unsigned char>(y));
+                       });
+            };
+            const std::string target = same_name(arg, local_char) ? std::string() : std::string(arg);
+            std::string msg;
+            if (!handle_combat_command("assist_target", target, msg)) {
+                out_msg = msg;
+                return false;
+            }
+            // Persisted through the same guarded path as /combat save, so a zone
+            // change or a profile reload keeps the assist list the button just set.
+            std::string save_msg;
+            if (!handle_combat_command("save", std::string(), save_msg)) {
+                out_msg = std::format("native engine: assist -> {}{}",
+                                      target.empty() ? "self" : target,
+                                      save_msg.empty() ? std::string() : std::format(" (not saved: {})", save_msg));
+                return false;
+            }
+            out_msg = target.empty() ? std::format("native engine: {} leads; no assist target set", local_char)
+                                     : std::format("native engine: assist -> {}", target);
+            return true;
+        }
+        // RG Mercs owns this character: its binds, then the reload that makes the
+        // new assist list live (the behaviour All Assist Me always had).
+        const std::vector<std::string> commands = {
+            "/rglua assistclear",
+            "/rglua set UseAssistList true",
+            "/rglua assistadd " + std::string(arg),
+            "/script reload rgmercs",
+        };
+        for (const auto& command : commands) {
+            ipc::CommandPacket pkt;
+            pkt.target = session_id_;
+            pkt.command = command;
+            const auto ack = handle_bus_command(pkt);
+            if (!ack.ok) {
+                out_msg = std::format("{} failed: {}", command, ack.message);
+                return false;
+            }
+        }
+        out_msg = std::format("RGMercs: assist -> {}", arg);
+        return true;
+    }
+
+    if (action == "reload") {
+        if (native_owns) {
+            out_msg = "native engine owns this character; RG Mercs was not reloaded";
+            return true;
+        }
+        ipc::CommandPacket pkt;
+        pkt.target = session_id_;
+        pkt.command = "/script reload rgmercs";
+        const auto ack = handle_bus_command(pkt);
+        out_msg = ack.ok ? "RGMercs reloaded" : std::format("RGMercs reload failed: {}", ack.message);
+        return ack.ok;
+    }
+
+    out_msg = "usage: /hengine assist <character> | reload";
+    return false;
+}
+
 void ClientApp::load_combat_profile_for_zone(const std::filesystem::path& char_dir,
                                              std::string_view class_short) {
     if (!combat_engine_) return;
     combat_char_dir_ = char_dir;
     const std::string group_id = active_group_profile_ ? active_group_profile_->id : opts_.profile;
+    const std::string character_name = conn_ ? conn_->character_name() : std::string();
+
+    // Group1-4 identity: a box launched with --profile/--slot knows which slot it
+    // is, and that slot names the role it was launched as. The character's own
+    // class wins when it is known; the slot fills the gap when the world has not
+    // told us the class yet (login, char select, a class the client cannot read),
+    // and a disagreement is logged rather than silently overridden.
+    std::string effective_class(class_short);
+    combat_slot_label_.clear();
+    if (active_group_profile_) {
+        if (const core::GroupSlot* slot = core::resolve_group_slot(*active_group_profile_, opts_.slot)) {
+            std::string slot_class = combat::class_short_from_legacy_role(slot->class_role);
+            if (slot_class.empty()) slot_class = combat::class_short_from_legacy_role(slot->combat_profile);
+            const std::string slot_name = slot->session_id.empty() ? std::to_string(slot->slot_number) : slot->session_id;
+            combat_slot_label_ = std::format("{}/{}", active_group_profile_->id, slot_name);
+            if (!slot_class.empty()) {
+                combat_slot_label_ += std::format(" ({})", slot_class);
+            }
+            if (effective_class.empty() && !slot_class.empty()) {
+                effective_class = slot_class;
+                log::info("combat: class {} taken from group slot {}", effective_class, combat_slot_label_);
+            } else if (!slot_class.empty() &&
+                       slot_class != combat::class_short_from_legacy_role(effective_class)) {
+                log::info("combat: group slot {} declares {}; the character's own class {} is used",
+                          combat_slot_label_, slot_class, effective_class);
+            }
+        }
+    }
+
+    refresh_combat_engine_selection(group_id, character_name);
     combat::CombatProfile prof;
     std::string err;
     if (!combat::resolve_character_combat_profile(platform::data_dir(), char_dir, group_id,
-                                                class_short, prof, err)) {
+                                                effective_class, prof, err)) {
         log::warn("combat: profile load note: {}", err);
-        prof = combat::default_combat_profile_for_class(class_short);
+        prof = combat::default_combat_profile_for_class(effective_class);
     }
     if (!char_dir.empty()) {
         combat::migrate_imported_combat_settings(platform::data_dir(), char_dir / "hailstone.ini", prof);
@@ -656,6 +825,26 @@ void ClientApp::load_combat_profile_for_zone(const std::filesystem::path& char_d
             prof.profile_path = (char_dir / "combat_profile.ini").string();
         }
     }
+
+    // native_class_profiles: the class table is the source of truth for what the
+    // class casts, instead of the generic per-class default. Only when the gate
+    // says the native engine owns this character, so a saved RGMercs profile is
+    // untouched for anyone who has not opted in.
+    if (combat_selection_ && combat::native_may_issue_actions(*combat_selection_) &&
+        combat_selection_->effective_flags.native_class_profiles) {
+        combat::CombatProfile native_prof;
+        std::string native_err;
+        if (combat::build_native_combat_profile(effective_class, native_prof, native_err)) {
+            native_prof.profile_path = prof.profile_path;
+            prof = std::move(native_prof);
+            log::info("combat: native class profile for {} in use", effective_class);
+        } else {
+            log::warn("combat: native class profile: {}", native_err);
+        }
+    }
+
+    combat_diagnostics_.set_identity(character_name, server_profile_.name, effective_class, group_id);
+    combat_engine_->set_diagnostics(&combat_diagnostics_);
     combat_engine_->set_profile(std::move(prof));
     HailstoneCombatAdapter actions(conn_.get(), nav_.get(), &ui_host_);
     const std::string zone = conn_ ? conn_->world().zone_short_name : std::string();
@@ -665,11 +854,17 @@ void ClientApp::load_combat_profile_for_zone(const std::filesystem::path& char_d
 void ClientApp::tick_combat_controller() {
     if (!combat_engine_ || !conn_ || !player_ready_ || screen_ != Screen::InGame) return;
     const std::uint64_t now_ms = static_cast<std::uint64_t>(net::GameConnection::now_ms());
+    enforce_combat_engine_ownership(now_ms);
     const game::mechanics::Character* ch = stats_ui_ ? stats_ui_->character() : nullptr;
     last_combat_snapshot_ = build_combat_snapshot(*conn_, nav_.get(), &bus_, ch,
                                                   combat_engine_->profile(),
                                                   last_player_moved_, last_manual_backward_,
                                                   server_profile_.name, now_ms);
+    // The snapshot is still built when another engine owns the character so the
+    // combat window keeps showing what the client sees; only the tick is gated.
+    if (combat_selection_ && !combat_gate_.allow_native()) {
+        return;
+    }
     HailstoneCombatAdapter actions(conn_.get(), nav_.get(), &ui_host_);
     combat_engine_->tick(last_combat_snapshot_, actions);
 }
@@ -696,6 +891,12 @@ bool ClientApp::handle_combat_command(std::string_view action, std::string_view 
     HailstoneCombatAdapter actions(conn_.get(), nav_.get(), &ui_host_);
 
     if (act == "start" || act == "on") {
+        if (combat_selection_ && !combat::native_may_issue_actions(*combat_selection_)) {
+            out_msg = std::format("Native combat is not selected for this character ({})", 
+                                  combat_selection_->suppressed_reason.empty() ? combat_selection_->indicator
+                                                                               : combat_selection_->suppressed_reason);
+            return false;
+        }
         combat_engine_->start("Started by player");
         out_msg = "Combat controller started";
         return true;
@@ -727,12 +928,23 @@ bool ClientApp::handle_combat_command(std::string_view action, std::string_view 
     }
     if (act == "status") {
         const auto st = combat_engine_->status_snapshot(last_combat_snapshot_.in_zone ? &last_combat_snapshot_ : nullptr);
-        out_msg = std::format("Combat: {} | Move: {} | Target: {} | Reason: {}{}",
+        std::string engine = combat_selection_
+                                 ? std::format(" | Engine: {} ({})", combat_selection_->indicator,
+                                               combat_selection_->detail)
+                                 : std::string(" | Engine: unconfigured (native controller only)");
+        if (combat_selection_ && combat_gate_.violation_count() > 0) {
+            engine += std::format(" | ownership violations: {}", combat_gate_.violation_count());
+        }
+        if (!combat_slot_label_.empty()) {
+            engine += std::format(" | Slot: {}", combat_slot_label_);
+        }
+        out_msg = std::format("Combat: {} | Move: {} | Target: {} | Reason: {}{}{}",
                               combat::combat_state_name(st.state),
                               combat::movement_mode_name(st.movement_mode),
                               st.target_name.empty() ? "none" : st.target_name,
                               st.idle_reason.empty() ? st.transition_reason : st.idle_reason,
-                              st.dry_run ? " [DRY-RUN]" : "");
+                              st.dry_run ? " [DRY-RUN]" : "",
+                              engine);
         return true;
     }
     if (act == "reload") {
@@ -926,7 +1138,7 @@ void ClientApp::run_slash_combat(const std::string& args) {
         conn_->show_chat(msg, ok ? 15 : 0xd);
     }
     if (!ok && conn_) {
-        conn_->show_chat("Usage: /combat [start|stop|pause|resume|estop|reset|reload|save|dry_run on|off|status|ui]", 15);
+        conn_->show_chat("Usage: /hcombat [start|stop|pause|resume|estop|reset|reload|save|dry_run on|off|status|ui]", 15);
     }
 }
 
@@ -968,10 +1180,22 @@ ipc::CommandAckPacket ClientApp::handle_bus_command(const ipc::CommandPacket& cm
         return ack;
     }
 
-    if (verb == "/combat") {
+    if (verb == "/hcombat") {
         run_slash_combat(std::string(rest));
         ack.ok = true;
         ack.message = "combat command dispatched";
+        return ack;
+    }
+
+    // Commander -> one client, engine-aware: the All Assist Me and reload buttons
+    // broadcast this so each client applies it on the engine that owns it (the
+    // native profile, or RG Mercs' own binds) and answers with its own result.
+    if (verb == "/hengine") {
+        std::string_view sub = rest;
+        const std::string action = lower_str(game::next_cmd_arg(sub));
+        std::string msg;
+        ack.ok = handle_engine_command(action, trim(sub), msg);
+        ack.message = msg;
         return ack;
     }
 
@@ -1531,9 +1755,18 @@ UiHost::CommanderStatusSnapshot ClientApp::commander_status() {
         self.combat_state = combat_engine_
                                 ? std::string(combat::combat_state_name(combat_engine_->state()))
                                 : "Idle";
+        self.combat_engine = combat_selection_
+                                 ? std::string(combat::combat_engine_kind_name(combat_selection_->kind))
+                                 : std::string();
         if (automation_) {
             const auto running = automation_->scripts().list();
-            if (!running.empty()) {
+            const auto combat_it = std::find_if(running.begin(), running.end(), [](const auto& script) {
+                return combat::legacy_script_name(script.name);
+            });
+            if (combat_it != running.end()) {
+                self.script_name = combat_it->name;
+                self.script_state = combat_it->status;
+            } else if (!running.empty()) {
                 self.script_name = running.front().name;
                 self.script_state = running.front().status;
             } else {
@@ -1706,53 +1939,40 @@ bool ClientApp::handle_commander_command(std::string_view action, std::string_vi
         return true;
     }
 
-    // RGMercs owns its persistent assist settings.  Apply the change through
-    // its supported binds on every connected client, then reload the script so
-    // the new main assist is effective immediately.
+    // The assist/reload buttons mean "the engine that owns you does this". The old
+    // implementation pushed RGMercs' own binds plus a `/script reload rgmercs` to
+    // every client: under the native engine that reload revived the add-on the
+    // ownership gate had just stood down (the dashboard's rgmercs:RUNNING rows),
+    // and the assist list it wrote was never read. /hengine is the one command that
+    // each client answers for itself, on its own engine, with its own ack.
     if (act == "all_assist_me" || act == "reload_all") {
         if (!bus_.connected() && !targets_self) {
             out_msg = "Session bus disconnected; cannot update all clients";
             return false;
         }
-        std::vector<std::string> commands;
-        if (act == "all_assist_me") {
-            if (local_char.empty()) {
-                out_msg = "current character is unavailable";
-                return false;
-            }
-            commands = {
-                // RGMercs registers its bind as /rglua (the older /rgl
-                // spelling is only used in some of its help text).
-                "/rglua assistclear",
-                "/rglua set UseAssistList true",
-                "/rglua assistadd " + local_char,
-                // /rgmercs is the native window toggle.  Use the script
-                // router for a real reload so the button never opens UI.
-                "/script reload rgmercs",
-            };
-        } else {
-            commands = {"/script reload rgmercs"};
+        if (act == "all_assist_me" && local_char.empty()) {
+            out_msg = "current character is unavailable";
+            return false;
+        }
+        const std::string command = act == "all_assist_me" ? "/hengine assist " + local_char : "/hengine reload";
+        ipc::CommandPacket local_pkt;
+        local_pkt.target = session_id_;
+        local_pkt.command = command;
+        const auto local_ack = handle_bus_command(local_pkt);
+        if (!local_ack.ok) {
+            out_msg = std::format("{} failed locally: {}", command, local_ack.message);
+            return false;
         }
         std::uint64_t last_seq = 0;
-        for (const auto& command : commands) {
-            ipc::CommandPacket local_pkt;
-            local_pkt.target = session_id_;
-            local_pkt.command = command;
-            const auto local_ack = handle_bus_command(local_pkt);
-            if (!local_ack.ok) {
-                out_msg = std::format("{} failed locally: {}", command, local_ack.message);
-                return false;
-            }
-            if (bus_.connected()) {
-                ipc::CommandPacket pkt;
-                pkt.scope = ipc::CommandScope::AllExceptSelf;
-                pkt.command = command;
-                last_seq = bus_.send_command(std::move(pkt));
-            }
+        if (bus_.connected()) {
+            ipc::CommandPacket pkt;
+            pkt.scope = ipc::CommandScope::AllExceptSelf;
+            pkt.command = command;
+            last_seq = bus_.send_command(std::move(pkt));
         }
         out_msg = act == "all_assist_me"
-                      ? std::format("All clients now assist {} and RGMercs was reloaded (seq #{})", local_char, last_seq)
-                      : std::format("RGMercs reload sent to all clients (seq #{})", last_seq);
+                      ? std::format("All clients assist {}: {} (seq #{})", local_char, local_ack.message, last_seq)
+                      : std::format("{} (seq #{})", local_ack.message, last_seq);
         return true;
     }
 
@@ -1803,9 +2023,9 @@ bool ClientApp::handle_commander_command(std::string_view action, std::string_vi
         // not turn native melee auto-attack on for casters or idle clients;
         // the combat engine enables melee attack only once its class profile
         // has a valid target and wants melee engagement.
-        slash_cmd = "/combat start";
+        slash_cmd = "/hcombat start";
     } else if (act == "attack_off") {
-        slash_cmd = "/combat stop";
+        slash_cmd = "/hcombat stop";
     } else if (act == "pause_script") {
         slash_cmd = arg.empty() ? "/script pause" : ("/script pause " + std::string(arg));
     } else if (act == "resume_script") {

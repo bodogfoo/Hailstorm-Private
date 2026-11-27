@@ -188,6 +188,8 @@ struct GroupMemberSnapshot {
     bool is_leader = false;
     bool offline = false;
     bool in_zone = false;
+    // Corpse waiting for a resurrection. Set from the spawn's dead flag.
+    bool dead = false;
     float distance = 0.0f;
 };
 
@@ -198,6 +200,11 @@ struct CombatSnapshot {
     bool in_combat = false;
     bool auto_attack_on = false;
     bool sitting = false;
+    // The player's pose is standing (net::kStandStanding). The original refuses
+    // to start an attack from any other pose, and a sit/crouch must read back as
+    // standing before the attack flag is asked for. Defaults true so a snapshot
+    // that says nothing about the pose keeps the old behaviour.
+    bool standing = true;
     bool stunned = false;
     bool casting = false;
     std::uint32_t casting_spell_id = 0;
@@ -226,10 +233,21 @@ struct CombatSnapshot {
     SpawnSnapshot target{};
     bool has_target = false;
     bool allowed_to_attack_target = false;
+    // The original's melee reach between `me` and `target` (game/mechanics/melee.h
+    // __get_melee_range over the two spawns' MeleeRadius, model scale and
+    // AvatarHeight), filled by the app layer from the live spawns. 0 means this
+    // snapshot carries no spawn pair. This is the attack reach; the profile's
+    // melee_range is only the distance the melee stick closes to (positioning).
+    float melee_reach = 0.0f;
 
     std::uint32_t assist_target_id = 0;
     std::string assist_target_name;
     bool has_assist_target = false;
+    // The two raw candidates before validation, kept for the idle reason so a
+    // next session can tell "the peer published nothing" from "the group's main
+    // assist named a spawn this zone does not have".
+    std::uint32_t assist_peer_target_id = 0;
+    std::uint32_t assist_group_target_id = 0;
 
     std::uint32_t pet_id = 0;
     std::uint8_t pet_hp_pct = 100;

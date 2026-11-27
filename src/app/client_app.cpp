@@ -1404,6 +1404,8 @@ void ClientApp::publish_bus_telemetry() {
     snap.combat_state = combat_engine_
                             ? std::string(combat::combat_state_name(combat_engine_->state()))
                             : "Idle";
+    snap.combat_engine = combat_selection_ ? std::string(combat::combat_engine_kind_name(combat_selection_->kind))
+                                          : std::string();
     if (combat_engine_) {
         snap.follow_target = combat_engine_->profile().follow_target;
         snap.active_profile = active_commander_profile_.empty()
@@ -1413,8 +1415,18 @@ void ClientApp::publish_bus_telemetry() {
         snap.active_profile = active_commander_profile_;
     }
     if (automation_) {
+        // Report the combat script when one is loaded, not merely the first in the
+        // list: with rgmercs paused the list still holds its heartbeat and the call
+        // queue helper, and front() then labelled the row with one of those and hid
+        // which engine was actually fighting.
         const auto running = automation_->scripts().list();
-        if (!running.empty()) {
+        const auto combat_it = std::find_if(running.begin(), running.end(), [](const auto& script) {
+            return combat::legacy_script_name(script.name);
+        });
+        if (combat_it != running.end()) {
+            snap.script_name = combat_it->name;
+            snap.script_state = combat_it->status;
+        } else if (!running.empty()) {
             snap.script_name = running.front().name;
             snap.script_state = running.front().status;
         } else {

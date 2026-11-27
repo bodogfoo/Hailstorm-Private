@@ -272,6 +272,7 @@ int CommanderStatus(lua_State* L) {
         set_bool(L, "isLive", p.exec_state == ExecutionState::ForegroundFull);
         set_bool(L, "isSelf", p.session_id == snap.session_id);
         set_str(L, "combatState", p.combat_state);
+        set_str(L, "combatEngine", p.combat_engine);
         set_str(L, "scriptName", p.script_name);
         set_str(L, "scriptState", p.script_state);
         set_str(L, "activeProfile", p.active_profile);

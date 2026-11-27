@@ -163,7 +163,10 @@ void GameConnection::send_command(const std::string& typed) {
         if (word == "/abilitybook" && client_commands_ && client_commands_("Hailstone_abilitybook", std::string(rest)))
             return;
         if (word == "/camera" && client_commands_ && client_commands_("Hailstone_camera", std::string(rest))) return;
-        if (word == "/combat" && client_commands_ && client_commands_("Hailstone_combat", std::string(rest)))
+        // `/hcombat`, not `/combat`: the stock table's `/combatmusic` makes `/combat` a valid
+        // prefix command (game/slash_commands.cpp word_matches), so a `/combat` line is handled as
+        // the combat-music setting and never reaches this invalid-command branch.
+        if (word == "/hcombat" && client_commands_ && client_commands_("Hailstone_combat", std::string(rest)))
             return;
         if (word == "/estop" && client_commands_ && client_commands_("Hailstone_estop", std::string(rest)))
             return;

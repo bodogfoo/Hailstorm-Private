@@ -5,6 +5,8 @@
 #include <sstream>
 
 #include "combat/spell_manager.h"
+#include "combat/cast_plan.h"
+#include "combat/support_policy.h"
 
 namespace hailstone::combat {
 namespace {
@@ -28,6 +30,84 @@ bool iequals(std::string_view a, std::string_view b) {
         }
     }
     return true;
+}
+
+// The engine labels an action with a short category ("cast", "pet", "move"...).
+// That category decides which module owns the diagnostic, so a player's log can
+// be read by area instead of as one flat stream.
+DiagnosticModule diagnostic_module_for_category(std::string_view category) {
+    if (category == "cast" || category == "loadout" || category == "memorize") {
+        return DiagnosticModule::Casting;
+    }
+    if (category == "pet") {
+        return DiagnosticModule::Pets;
+    }
+    if (category == "move" || category == "movement" || category == "follow") {
+        return DiagnosticModule::Movement;
+    }
+    if (category == "heal" || category == "rez" || category == "resurrect") {
+        return DiagnosticModule::Healing;
+    }
+    if (category == "buff") {
+        return DiagnosticModule::Buffs;
+    }
+    if (category == "retreat" || category == "recover") {
+        return DiagnosticModule::Recovery;
+    }
+    if (category == "combat" || category == "attack" || category == "assist") {
+        return DiagnosticModule::Combat;
+    }
+    return DiagnosticModule::Engine;
+}
+
+// The support pass issues the same actions the rule path does, so it names the
+// profile rule it stands for: cooldowns, last-used tracking and the player's
+// diagnostics then treat a heal chosen by the policy like one chosen by a rule.
+std::string_view support_rule_name(SupportActionKind kind) {
+    switch (kind) {
+    case SupportActionKind::Resurrect: return "Resurrect";
+    case SupportActionKind::Heal: return "Heal";
+    case SupportActionKind::CriticalHeal: return "HealCritical";
+    case SupportActionKind::GroupHeal: return "GroupHeal";
+    case SupportActionKind::Cure: return "Cure";
+    case SupportActionKind::PetHeal: return "PetHeal";
+    default: return {};
+    }
+}
+
+std::string_view support_category(SupportActionKind kind) {
+    switch (kind) {
+    case SupportActionKind::Resurrect: return "rez";
+    case SupportActionKind::PetHeal: return "pet";
+    case SupportActionKind::Cure:
+    case SupportActionKind::Heal:
+    case SupportActionKind::CriticalHeal:
+    case SupportActionKind::GroupHeal: return "heal";
+    default: return "support";
+    }
+}
+
+// Attack reach and positioning are two different distances. The profile's
+// melee_range is where the melee stick stops. The reach at which an attack can
+// land is the original's own melee range between the two spawns
+// (__get_melee_range, game/mechanics/melee.h: max(14, (radius_a*scale_a +
+// radius_b*scale_b)*0.75) + 2 + |AvatarHeight_a - AvatarHeight_b|, at most 75),
+// which the app layer puts in CombatSnapshot::melee_reach. A class table's
+// ability max_range is a cast range, not evidence of melee reach, so no fixed
+// number is used here. A snapshot with no spawn pair has no reach to trust: the
+// engine then attacks only at the stick distance, never at an invented one.
+float melee_attack_reach(const CombatSnapshot& snapshot, const CombatProfile& profile) {
+    if (snapshot.melee_reach > 0.0f) {
+        return snapshot.melee_reach;
+    }
+    return std::max(0.0f, profile.melee_range);
+}
+
+const CombatSpellRule* find_enabled_rule(const CombatProfile& profile, std::string_view name) {
+    for (const auto& rule : profile.rules) {
+        if (rule.enabled && rule.name == name) return &rule;
+    }
+    return nullptr;
 }
 
 } // namespace
@@ -295,6 +375,7 @@ void CombatEngine::append_action(std::uint64_t now_ms,
                                  std::string detail,
                                  ICombatActions* actions) {
     last_action_ = detail;
+    ++action_serial_;
     ActionLogEntry entry;
     entry.timestamp_ms = now_ms;
     entry.dry_run = dry_run;
@@ -303,6 +384,19 @@ void CombatEngine::append_action(std::uint64_t now_ms,
     actions_.push_back(std::move(entry));
     while (actions_.size() > kMaxLogEntries) {
         actions_.pop_front();
+    }
+    if (diagnostics_) {
+        // The action's own text goes in `reason`: that is the sentence the player
+        // needs ("Cast Sparky (gem 3)"), while `action` stays the stable category
+        // the log can be filtered by.
+        diagnostics_->emit(diagnostic_module_for_category(category),
+                           DiagnosticSeverity::Info,
+                           category,
+                           engaged_target_name_,
+                           !dry_run,
+                           dry_run ? ("DryRun " + detail) : detail,
+                           combat_state_name(state_),
+                           now_ms);
     }
     if (actions) {
         actions->log_message(category, dry_run ? ("[DRY-RUN] " + detail) : detail);
@@ -529,7 +623,13 @@ const SpawnSnapshot* CombatEngine::resolve_hostile_target(const CombatSnapshot& 
             }
             return assisted_mob;
         }
-        reject_reason = "Waiting for assist target";
+        // Neither source named a spawn this zone holds: the adapter validates
+        // both candidates before setting has_assist_target, so say which ids were
+        // offered. A stale group main-assist id then cannot look like "the peer
+        // published nothing" the next time this is read from a log.
+        reject_reason = "Waiting for assist target '" + profile_.assist_target +
+                        "' (group MA id " + std::to_string(snapshot.assist_group_target_id) +
+                        ", peer target " + std::to_string(snapshot.assist_peer_target_id) + ")";
         return nullptr;
     }
 
@@ -578,8 +678,90 @@ std::string CombatEngine::compute_idle_reason(const CombatSnapshot& snapshot,
     return "Waiting for target";
 }
 
+void CombatEngine::report_idle_diagnostic(std::uint64_t action_serial_before, std::uint64_t now_ms) {
+    if (diagnostics_ == nullptr || action_serial_ != action_serial_before) {
+        return;
+    }
+    diagnostics_->emit(DiagnosticModule::Engine,
+                       DiagnosticSeverity::Info,
+                       "Idle",
+                       engaged_target_name_,
+                       true,
+                       idle_reason_,
+                       combat_state_name(state_),
+                       now_ms);
+}
+
+bool CombatEngine::try_support_action(const CombatSnapshot& snapshot, ICombatActions& actions) {
+    if (snapshot.me.dead) {
+        return false;
+    }
+    // Buffs stay with the loadout/rule path: this pass answers "who needs a heal,
+    // a rez, a cure or a pet heal right now".
+    const SupportSettings settings = support_settings_for_profile(profile_);
+    const std::optional<SupportDecision> decision = choose_support_action(snapshot, settings, {});
+    if (!decision.has_value() || decision->spell_spec.empty()) {
+        return false;
+    }
+
+    const std::string rule_name(support_rule_name(decision->kind));
+    const CombatSpellRule* rule = rule_name.empty() ? nullptr : find_enabled_rule(profile_, rule_name);
+    std::uint64_t last_used_ms = 0;
+    if (!rule_name.empty()) {
+        if (const auto it = last_rule_used_ms_.find(rule_name); it != last_rule_used_ms_.end()) {
+            last_used_ms = it->second;
+        }
+    }
+
+    const CastReadiness readiness = evaluate_cast_readiness(
+        snapshot, decision->spell_spec, 0, last_used_ms, rule != nullptr ? rule->cooldown_ms : 0);
+    if (!readiness.castable) {
+        // Say why once (the sink folds repeats) and let the damage rotation have
+        // the tick: a healer whose heal is not memorized still fights.
+        if (diagnostics_ != nullptr) {
+            diagnostics_->emit(DiagnosticModule::Healing, DiagnosticSeverity::Warning,
+                               support_action_kind_name(decision->kind), decision->target_name, false,
+                               readiness.reason, combat_state_name(state_), snapshot.now_ms);
+        }
+        return false;
+    }
+
+    if (decision->target_spawn_id != 0 &&
+        (!snapshot.has_target || snapshot.target.id != decision->target_spawn_id)) {
+        if (!profile_.dry_run) {
+            actions.set_target(decision->target_spawn_id);
+        }
+    }
+    bool ok = true;
+    if (!profile_.dry_run) {
+        ok = actions.cast_gem(readiness.gem_index);
+    }
+    if (!ok) {
+        return false;
+    }
+
+    if (!rule_name.empty()) {
+        last_rule_used_ms_[rule_name] = snapshot.now_ms;
+    }
+    last_cast_ = std::string(support_action_kind_name(decision->kind)) + ": " + decision->spell_spec;
+    append_action(snapshot.now_ms, profile_.dry_run, support_category(decision->kind),
+                  std::string(support_action_kind_name(decision->kind)) + " -> " +
+                      (decision->target_name.empty() ? snapshot.character_name : decision->target_name) + " (" +
+                      decision->spell_spec + ")",
+                  &actions);
+    return true;
+}
+
 void CombatEngine::tick(const CombatSnapshot& snapshot, ICombatActions& actions) {
     last_tick_ms_ = snapshot.now_ms;
+    // The guard runs on every return path below, so an idle tick is recorded once
+    // instead of the engine having to remember to log it in each branch.
+    struct IdleGuard {
+        CombatEngine& engine;
+        std::uint64_t serial;
+        std::uint64_t now_ms;
+        ~IdleGuard() { engine.report_idle_diagnostic(serial, now_ms); }
+    } idle_guard{*this, action_serial_, snapshot.now_ms};
     if (!snapshot.character_name.empty()) {
         character_name_ = snapshot.character_name;
     }
@@ -858,6 +1040,12 @@ void CombatEngine::tick(const CombatSnapshot& snapshot, ICombatActions& actions)
         movement_.update(target_ooc_state, snapshot, profile_, nullptr, assist_spawn, follow_spawn,
                          actions, profile_.dry_run);
 
+        // Support before buffs and the idle path: a rez, a heal or a pet heal.
+        if (!snapshot.memorizing && try_support_action(snapshot, actions)) {
+            idle_reason_ = "Support action";
+            return;
+        }
+
         // Evaluate out-of-combat / always rules (self buffs, out-of-combat heals, etc.)
         if (!snapshot.in_combat && !snapshot.memorizing) {
             RuleSelection ooc = select_next_rule(snapshot, profile_, nullptr, false, false, last_rule_used_ms_);
@@ -885,9 +1073,16 @@ void CombatEngine::tick(const CombatSnapshot& snapshot, ICombatActions& actions)
             }
         }
 
+        // A rejected target explains itself ("Target is dead", "above engage HP
+        // threshold"); with no target at all the reason is the plain
+        // "Waiting for target" rather than resolve_hostile_target's message.
+        const std::string_view ooc_reason =
+            snapshot.has_target ? std::string_view(target_reject_reason) : std::string_view{};
         idle_reason_ = (target_ooc_state == CombatState::Idle)
-                           ? compute_idle_reason(snapshot, assist_spawn, target_reject_reason)
-                           : ("Assisting " + assist_name);
+                           ? compute_idle_reason(snapshot, assist_spawn, ooc_reason)
+                           : (target_reject_reason.empty()
+                                  ? ("Assisting " + assist_name)
+                                  : compute_idle_reason(snapshot, assist_spawn, target_reject_reason));
         return;
     }
 
@@ -896,7 +1091,7 @@ void CombatEngine::tick(const CombatSnapshot& snapshot, ICombatActions& actions)
     float desired_combat_range = 200.0f;
     switch (profile_.movement_mode) {
     case MovementMode::MeleeRange:
-        desired_combat_range = std::max(3.0f, profile_.melee_range) + 4.0f;
+        desired_combat_range = melee_attack_reach(snapshot, profile_);
         break;
     case MovementMode::RangedRange:
         desired_combat_range = std::max(20.0f, profile_.ranged_max_range);
@@ -938,15 +1133,27 @@ void CombatEngine::tick(const CombatSnapshot& snapshot, ICombatActions& actions)
         }
     }
 
-    // Stand up for combat if sitting.
-    if (snapshot.sitting && !profile_.dry_run) {
-        actions.set_stand_state(true);
+    // Stand up before asking for an attack. The original refuses to start one
+    // from any pose but standing (__ExecuteCmd AUTOPRIM checks it before the
+    // toggle) and the zone applies the stand state only after the packet goes
+    // out, so the two must not share a tick: the flag is asked for on the next
+    // tick, once the snapshot reads standing. Auto-attack stays unlatched when
+    // the pose did not apply, which is what retries it.
+    const bool standing = snapshot.standing;
+    if (!standing) {
+        if (!profile_.dry_run) {
+            actions.set_stand_state(true);
+        }
+        auto_attack_commanded_ = false;
     }
 
-    // Melee auto-attack control.
+    // Melee auto-attack control. Reach is the original's melee range over the two
+    // spawns (__get_melee_range, snapshot.melee_reach), not the stick distance:
+    // at 9 units from a mob whose reach is 16 the swing lands. The stick still
+    // closes to profile_.melee_range regardless.
     const bool want_melee = profile_.allow_melee_attack &&
-                            (target_dist <= std::max(3.0f, profile_.melee_range) + 2.0f);
-    if (want_melee && (!auto_attack_commanded_ || !snapshot.auto_attack_on)) {
+                            (target_dist <= melee_attack_reach(snapshot, profile_));
+    if (want_melee && standing && (!auto_attack_commanded_ || !snapshot.auto_attack_on)) {
         if (!profile_.dry_run) {
             actions.set_auto_attack(true);
         }
@@ -978,6 +1185,11 @@ void CombatEngine::tick(const CombatSnapshot& snapshot, ICombatActions& actions)
         pet_attack_target_id_ = hostile->id;
         append_action(snapshot.now_ms, profile_.dry_run, "pet",
                       "Pet attack -> " + hostile->name, &actions);
+    }
+
+    // Support before damage: a heal or a rez outranks the damage rotation.
+    if (try_support_action(snapshot, actions)) {
+        return;
     }
 
     // Evaluate priority rules (healing/lifetaps/dots/nukes/abilities).

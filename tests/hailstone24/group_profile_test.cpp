@@ -467,3 +467,16 @@ TEST_CASE("GroupProfile: the named leader is the follow default for the other sl
     REQUIRE(bard != nullptr);
     CHECK(bard->follow_target.empty());
 }
+
+// One identity for a launched slot, whichever path starts it: the in-process
+// launcher and the session broker both name a row that carries no session id
+// `slotNN` (docs/native-combat.md, "Limitations").
+TEST_CASE("GroupProfile: a slot with no session id is named slotNN by the shared fallback") {
+    CHECK(core::format_slot_id(1) == "slot01");
+    CHECK(core::format_slot_id(7) == "slot07");
+    CHECK(core::format_slot_id(24) == "slot24");
+    // Out-of-range numbers clamp into the launchable range instead of producing
+    // an id no roster row can match.
+    CHECK(core::format_slot_id(0) == "slot01");
+    CHECK(core::format_slot_id(99) == "slot24");
+}

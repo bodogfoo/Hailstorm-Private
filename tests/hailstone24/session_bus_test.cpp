@@ -1,9 +1,15 @@
 #include <doctest/doctest.h>
 
 #if !defined(_WIN32)
+#include <atomic>
 #include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <filesystem>
+#include <random>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "ipc/session_bus.h"
@@ -13,6 +19,33 @@ using namespace hailstone;
 using namespace hailstone::ipc;
 
 namespace {
+
+// sockaddr_un::sun_path holds about 107 bytes, so a socket path built from a deep
+// temporary folder (a profile dir under a long TMPDIR) cannot be bound at all and
+// SessionBusServer::start() just returns false. The bus therefore gets a short name
+// of its own; the scratch dir keeps the ordinary files.
+std::string short_socket_path() {
+    static std::atomic<unsigned> counter{0};
+    static const std::uint32_t seed = [] {
+        std::random_device rd;
+        return static_cast<std::uint32_t>(rd());
+    }();
+    char name[32];
+    std::snprintf(name, sizeof(name), "hsb_%08x_%u.sock", seed, counter++);
+    return (std::filesystem::temp_directory_path() / name).string();
+}
+
+// Removes the socket file the scratch dir no longer owns.
+struct SocketFile {
+    explicit SocketFile(std::string p) : path(std::move(p)) {}
+    ~SocketFile() {
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
+    }
+    SocketFile(const SocketFile&) = delete;
+    SocketFile& operator=(const SocketFile&) = delete;
+    std::string path;
+};
 
 void pump_all(SessionBusServer& srv, SessionBusClient& a, SessionBusClient& b, SessionBusClient& mgr, int rounds = 12) {
     for (int i = 0; i < rounds; ++i) {
@@ -28,7 +61,9 @@ void pump_all(SessionBusServer& srv, SessionBusClient& a, SessionBusClient& b, S
 
 TEST_CASE("SessionBus IPC: roster, /bca command dispatch, actors mailbox, and foreground switch") {
     test::ScratchDir dir("hs24_bus_test");
-    const std::string sock = (dir.path() / "bus.sock").string();
+    // Braces, not parentheses: `SocketFile f(short_socket_path())` is a function declaration.
+    const SocketFile sock_file{short_socket_path()};
+    const std::string& sock = sock_file.path;
 
     SessionBusServer srv;
     REQUIRE(srv.start(sock));
@@ -130,7 +165,9 @@ TEST_CASE("SessionBus IPC: roster, /bca command dispatch, actors mailbox, and fo
 
 TEST_CASE("SessionBus Commander: tab switch without reconnect, non-exclusive Live/Headless, ACK/failure/timeout tracking, and extended telemetry") {
     test::ScratchDir dir("hs24_bus_commander");
-    const std::string sock = (dir.path() / "bus.sock").string();
+    // Braces, not parentheses: `SocketFile f(short_socket_path())` is a function declaration.
+    const SocketFile sock_file{short_socket_path()};
+    const std::string& sock = sock_file.path;
 
     SessionBusServer srv;
     REQUIRE(srv.start(sock));
@@ -174,6 +211,7 @@ TEST_CASE("SessionBus Commander: tab switch without reconnect, non-exclusive Liv
     s1.active_profile = "Melee Group";
     s1.follow_target = "Yavaha";
     s1.connection_state = "in_game";
+    s1.combat_engine = "NativeHailstone";
 
     SessionSnapshot s2;
     s2.session_id = "slot02";
@@ -189,6 +227,7 @@ TEST_CASE("SessionBus Commander: tab switch without reconnect, non-exclusive Liv
     s2.script_state = "paused";
     s2.active_profile = "Main Tank";
     s2.connection_state = "in_game";
+    s2.combat_engine = "LegacyRGMercs";
 
     REQUIRE(c1.publish_telemetry(s1));
     REQUIRE(c2.publish_telemetry(s2));
@@ -202,6 +241,10 @@ TEST_CASE("SessionBus Commander: tab switch without reconnect, non-exclusive Liv
     CHECK(peer1->active_profile == "Melee Group");
     CHECK(peer1->follow_target == "Yavaha");
     CHECK(peer1->connection_state == "in_game");
+    CHECK(peer1->combat_engine == "NativeHailstone");
+    const auto peer2 = mgr.find_peer("Yavaha");
+    REQUIRE(peer2.has_value());
+    CHECK(peer2->combat_engine == "LegacyRGMercs");
 
     // 1. Clicking a tab (exclusive foreground) switches live client without disconnecting/reconnecting either client.
     REQUIRE(mgr.request_state_control("Yavaha", app::ExecutionState::ForegroundFull, true));
@@ -296,6 +339,48 @@ TEST_CASE("SessionBus Commander: tab switch without reconnect, non-exclusive Liv
     c2.disconnect();
     mgr.disconnect();
     srv.stop();
+}
+TEST_CASE("SessionBus IPC: snapshot serialization carries combat_engine and tolerates an older payload") {
+    // The commander table shows which engine owns each character, so the field has
+    // to survive the wire. It is appended last, which also means a client from
+    // before it must still decode: the older blob simply ends before the field.
+    SessionSnapshot s;
+    s.session_id = "slot02";
+    s.character_name = "Yavaha";
+    s.server_name = "EZ Server";
+    s.class_short = "WAR";
+    s.level = 70;
+    s.zone_short = "surefall";
+    s.online = true;
+    s.combat_state = "Combat";
+    s.script_name = "rgmercs";
+    s.script_state = "paused";
+    s.active_profile = "Main Tank";
+    s.follow_target = "Yavaha";
+    s.connection_state = "in_game";
+    s.combat_engine = "NativeHailstone";
+    s.updated_ms = 123456;
+
+    const auto blob = encode_snapshot(s);
+    SessionSnapshot back;
+    REQUIRE(decode_snapshot(blob.data(), blob.size(), back));
+    CHECK(back.character_name == "Yavaha");
+    CHECK(back.connection_state == "in_game");
+    CHECK(back.script_state == "paused");
+    CHECK(back.combat_engine == "NativeHailstone");
+
+    // An engine string that was never set writes a zero-length field; dropping
+    // those four bytes is exactly the payload of a build without the field.
+    SessionSnapshot older = s;
+    older.combat_engine.clear();
+    auto old_blob = encode_snapshot(older);
+    REQUIRE(old_blob.size() > 4);
+    old_blob.resize(old_blob.size() - 4);
+    SessionSnapshot decoded;
+    REQUIRE(decode_snapshot(old_blob.data(), old_blob.size(), decoded));
+    CHECK(decoded.character_name == "Yavaha");
+    CHECK(decoded.connection_state == "in_game");
+    CHECK(decoded.combat_engine.empty());
 }
 #endif
 

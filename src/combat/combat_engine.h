@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include "combat/combat_types.h"
+#include "combat/diagnostics.h"
 #include "combat/movement_controller.h"
 
 namespace hailstone::combat {
@@ -16,6 +17,12 @@ public:
     static constexpr std::size_t kMaxLogEntries = 100;
 
     CombatEngine() = default;
+
+    // Optional structured log. When set, every action the engine issues and every
+    // tick it spends idle is recorded once (repeats fold into the record's count),
+    // which is what the legacy add-on's per-tick spam was standing in for.
+    void set_diagnostics(DiagnosticsSink* sink) noexcept { diagnostics_ = sink; }
+    DiagnosticsSink* diagnostics() const noexcept { return diagnostics_; }
 
     void set_profile(CombatProfile profile);
     const CombatProfile& profile() const noexcept { return profile_; }
@@ -99,6 +106,17 @@ private:
 
     void record_memo_failure(std::string msg);
     void check_pending_memorizations(const CombatSnapshot& snapshot, ICombatActions& actions);
+    // Called at the end of every tick path: when the tick issued nothing, the
+    // idle reason becomes a diagnostic so "why did nothing happen" is answerable.
+    void report_idle_diagnostic(std::uint64_t action_serial_before, std::uint64_t now_ms);
+
+    // Healing, resurrection, cures and pet healing, chosen by support_policy and
+    // issued through the same action interface as a rule. Runs before the damage
+    // rotation in both the out-of-combat and the combat path; returns true when
+    // it cast something, so the tick stops there. A blocked support action
+    // records why and lets the rotation have the tick: a healer with an empty
+    // heal gem still fights.
+    bool try_support_action(const CombatSnapshot& snapshot, ICombatActions& actions);
 
     LoadoutAudit last_audit_{};
     MovementController movement_{};
@@ -107,6 +125,8 @@ private:
     std::deque<ActionLogEntry> actions_;
     std::deque<std::string> failed_memorizations_;
     std::vector<PendingMemoCheck> pending_memo_checks_;
+    std::uint64_t action_serial_ = 0;
+    DiagnosticsSink* diagnostics_ = nullptr;
 };
 
 } // namespace hailstone::combat

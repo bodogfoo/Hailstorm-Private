@@ -142,10 +142,6 @@ void write_atomic_text(const fs::path& path, std::string_view content, std::stri
     ok = true;
 }
 
-std::string format_slot_id(int slot_number) {
-    return std::format("slot{:02d}", std::clamp(slot_number, 1, 24));
-}
-
 int parse_slot_section_number(std::string_view sec, int fallback) {
     const std::string low = lower_copy(sec);
     if (low.starts_with("slot")) {
@@ -694,6 +690,10 @@ std::string normalize_settings_for_storage(std::string_view raw) {
 }
 
 } // namespace
+
+std::string format_slot_id(int slot_number) {
+    return std::format("slot{:02d}", std::clamp(slot_number, 1, 24));
+}
 
 std::string sanitize_group_profile_id(std::string_view raw) {
     std::string out;

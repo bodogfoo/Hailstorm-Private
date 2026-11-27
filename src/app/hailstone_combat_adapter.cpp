@@ -8,10 +8,12 @@
 #include <glm/glm.hpp>
 
 #include "app/lua_ui.h"
+#include "combat/assist_selection.h"
 #include "core/log.h"
 #include "game/eq_names.h"
 #include "game/group.h"
 #include "game/mechanics/character.h"
+#include "game/mechanics/melee.h"
 #include "game/spells.h"
 #include "game/world_state.h"
 #include "ipc/session_bus.h"
@@ -33,6 +35,21 @@ bool iequals_ascii(std::string_view a, std::string_view b) {
         }
     }
     return true;
+}
+
+// A group member's corpse keeps the member's name with a suffix on some
+// servers ("<name>'s corpse", "<name> corpse") and the bare name on others, so
+// the lookup accepts both. docs/unknowns.md records what would settle it.
+bool corpse_name_matches(std::string_view corpse_name, std::string_view member_name) {
+    if (corpse_name.empty() || member_name.empty()) return false;
+    if (iequals_ascii(corpse_name, member_name)) return true;
+    const std::size_t suffix = corpse_name.find("corpse");
+    if (suffix == std::string_view::npos) return false;
+    std::string_view head = corpse_name.substr(0, suffix);
+    while (!head.empty() && (head.back() == '\'' || head.back() == 's' || head.back() == ' ')) {
+        head.remove_suffix(1);
+    }
+    return iequals_ascii(head, member_name);
 }
 
 combat::SpawnSnapshot convert_spawn(const game::Spawn& sp) {
@@ -110,6 +127,7 @@ combat::CombatSnapshot build_combat_snapshot(const net::GameConnection& conn,
     snap.in_combat = conn.in_combat();
     snap.auto_attack_on = conn.auto_attack();
     snap.sitting = conn.sitting();
+    snap.standing = conn.player_status().stand_state == net::kStandStanding;
     snap.stunned = conn.stunned();
     snap.casting = conn.spell_state().casting.casting();
     snap.casting_spell_id = conn.spell_state().casting.spell != game::kNoSpell
@@ -179,6 +197,18 @@ combat::CombatSnapshot build_combat_snapshot(const net::GameConnection& conn,
             snap.has_target = true;
             snap.target = convert_spawn(it->second);
             snap.allowed_to_attack_target = conn.allowed_to_attack(world.target_id, 0);
+            // The original's melee reach between these two spawns, out of
+            // __get_melee_range (the range CanIHit tests). The engine's attack
+            // activation uses it; the profile's melee_range is only the stick
+            // distance the movement controller closes to.
+            if (const game::Spawn* me = world.player()) {
+                const game::Spawn& tgt = it->second;
+                const game::mechanics::melee::RangeSpawn a{
+                    me->melee_radius, me->heights.model_scale, me->heights.avatar_height};
+                const game::mechanics::melee::RangeSpawn b{
+                    tgt.melee_radius, tgt.heights.model_scale, tgt.heights.avatar_height};
+                snap.melee_reach = game::mechanics::melee::melee_range(&a, &b, game::mechanics::Fpu{});
+            }
         }
     }
 
@@ -282,40 +312,80 @@ combat::CombatSnapshot build_combat_snapshot(const net::GameConnection& conn,
         gm.offline = slot.offline;
         gm.is_leader = grp.is_leader(slot.name);
 
+        // A living spawn wins; a member with no living spawn in zone is either
+        // out of range of the spawn list or dead, and a dead member is a corpse
+        // whose id is what a resurrection is aimed at.
+        const game::Spawn* living = nullptr;
+        const game::Spawn* corpse = nullptr;
+        std::uint32_t living_id = 0;
+        std::uint32_t corpse_id = 0;
         for (const auto& [sid, sp] : world.spawns) {
-            if (!sp.is_npc && iequals_ascii(game::display_name(sp.name), gm.name)) {
-                gm.spawn_id = sid;
-                gm.hp_pct = sp.hp_percent;
-                gm.in_zone = true;
-                gm.distance = snap.me.position.distance_2d(
-                    {sp.position.x, sp.position.y, sp.position.z});
-                if (auto mit = grp.mana_percent.find(sid); mit != grp.mana_percent.end()) {
-                    gm.mana_pct = mit->second;
+            if (sp.is_npc) continue;
+            const std::string spawn_name = game::display_name(sp.name);
+            if (sp.is_corpse) {
+                if (corpse == nullptr && corpse_name_matches(spawn_name, gm.name)) {
+                    corpse = &sp;
+                    corpse_id = sid;
                 }
-                break;
+                continue;
+            }
+            if (living == nullptr && iequals_ascii(spawn_name, gm.name)) {
+                living = &sp;
+                living_id = sid;
+            }
+        }
+        if (const game::Spawn* match = living != nullptr ? living : corpse) {
+            gm.spawn_id = living != nullptr ? living_id : corpse_id;
+            gm.hp_pct = match->hp_percent;
+            gm.in_zone = true;
+            gm.dead = (living == nullptr) || match->hp_percent == 0;
+            if (gm.dead) gm.hp_pct = 0;
+            gm.distance = snap.me.position.distance_2d(
+                {match->position.x, match->position.y, match->position.z});
+            if (auto mit = grp.mana_percent.find(gm.spawn_id); mit != grp.mana_percent.end()) {
+                gm.mana_pct = mit->second;
             }
         }
         snap.group_members.push_back(std::move(gm));
     }
 
-    // Assist target resolution: EQ leadership target first, then native Hailstone SessionBus peer target.
+    // Assist target resolution. Both sources name a mob: the configured assist is
+    // a player, whose published target (SessionBus, same zone) is what the player
+    // chose; the group's main assist sends its target as OP_SetGroupTarget number
+    // 0 (GroupAssistNPC[0]). The configured one wins, but only when the local
+    // spawn table holds that id as a live, attackable NPC: a stale group id used
+    // to be taken as-is and block the peer branch forever, leaving every
+    // follower waiting on an id this zone never had.
     const std::string assist_name = resolve_assist_member_name(profile, grp);
     if (!assist_name.empty()) {
         snap.assist_target_name = assist_name;
-        if (conn.leadership().assist_targets[0] != 0) {
-            snap.assist_target_id = conn.leadership().assist_targets[0];
-            snap.has_assist_target = true;
-        } else if (bus) {
+        auto usable = [&](std::uint32_t id) {
+            combat::AssistSpawnFacts facts;
+            if (auto it = world.spawns.find(id); it != world.spawns.end()) {
+                const combat::SpawnSnapshot spawn = convert_spawn(it->second);
+                facts.present = true;
+                facts.is_npc = spawn.is_npc;
+                facts.is_corpse = spawn.is_corpse;
+                facts.dead = spawn.dead;
+                facts.is_pet = spawn.is_pet;
+                facts.is_mercenary = spawn.is_mercenary;
+            }
+            return combat::assist_spawn_usable(facts);
+        };
+        if (bus) {
             for (const auto& peer : bus->cached_roster()) {
                 if (peer.online && peer.target_id != 0 &&
                     iequals_ascii(peer.character_name, assist_name) &&
                     (peer.zone_short.empty() || iequals_ascii(peer.zone_short, snap.zone_short))) {
-                    snap.assist_target_id = peer.target_id;
-                    snap.has_assist_target = true;
+                    snap.assist_peer_target_id = peer.target_id;
                     break;
                 }
             }
         }
+        snap.assist_group_target_id = conn.leadership().assist_targets[0];
+        snap.assist_target_id = combat::select_assist_target(
+            snap.assist_peer_target_id, snap.assist_group_target_id, usable);
+        snap.has_assist_target = snap.assist_target_id != 0;
     }
 
     return snap;

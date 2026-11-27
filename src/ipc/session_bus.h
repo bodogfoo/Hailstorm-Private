@@ -85,6 +85,10 @@ struct SessionSnapshot {
     std::string active_profile;
     std::string follow_target;
     std::string connection_state; // "in_game", "zoning", "char_select", "login", "disconnected"
+    // Which engine owns this character's combat (combat.native.*): "NativeHailstone",
+    // "LegacyRGMercs", "Disabled", or "" when the client has not resolved one. The
+    // commander table shows it, so a paused RG Mercs row reads as "native owns this".
+    std::string combat_engine;
 };
 
 struct ActorPacket {
@@ -104,7 +108,7 @@ struct CommandPacket {
     std::string target;      // character or channel name
     std::string sender_char;
     std::string sender_zone;
-    std::string command;     // e.g. "/combat start" or "/combat estop"
+    std::string command;     // e.g. "/hcombat start" or "/hcombat estop"
 };
 
 struct CommandAckPacket {

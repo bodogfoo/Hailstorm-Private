@@ -13,6 +13,7 @@
 #include "combat/movement_controller.h"
 #include "combat/spell_manager.h"
 #include "scratch_dir.h"
+#include "game/mechanics/melee.h"
 
 namespace fs = std::filesystem;
 using namespace hailstone::combat;
@@ -34,6 +35,7 @@ struct RecordedActions : public ICombatActions {
     std::vector<std::uint32_t> move_follows;
     std::vector<std::uint32_t> move_ranges;
     std::vector<std::pair<std::uint32_t, bool>> move_melees;
+    std::vector<float> melee_distances; // the stick distance each move_melee asked for
     int move_disengages = 0;
     std::vector<std::string> stop_moves;
     std::vector<std::pair<std::string, std::string>> logs;
@@ -90,9 +92,10 @@ struct RecordedActions : public ICombatActions {
         ++gameplay_calls;
         move_ranges.push_back(target_id);
     }
-    void move_melee(std::uint32_t target_id, float, bool behind) override {
+    void move_melee(std::uint32_t target_id, float distance, bool behind) override {
         ++gameplay_calls;
         move_melees.emplace_back(target_id, behind);
+        melee_distances.push_back(distance);
     }
     void move_disengage(const Vec3&, float) override {
         ++gameplay_calls;
@@ -125,6 +128,18 @@ struct RecordedActions : public ICombatActions {
         stop_moves.clear();
     }
 };
+
+// The app layer fills CombatSnapshot::melee_reach with the original's
+// __get_melee_range over the live spawn pair. A unit snapshot has no live
+// spawns, so it states that reach from the same function over the fixture's
+// radii: a 6-radius player against a mob of the given MeleeRadius, both at
+// scale 1 and the same AvatarHeight. The value is spawn-dependent (16 for a
+// 6-radius mob), which is the point: it is not a fixed number.
+float native_melee_reach(float mob_melee_radius) {
+    const hailstone::game::mechanics::melee::RangeSpawn me{6.0f, 1.0f, 3.75f};
+    const hailstone::game::mechanics::melee::RangeSpawn mob{mob_melee_radius, 1.0f, 3.75f};
+    return hailstone::game::mechanics::melee::melee_range(&me, &mob, {});
+}
 
 SpawnSnapshot make_mob(std::uint32_t id,
                        const char* name,
@@ -364,6 +379,7 @@ TEST_CASE("CombatEngine: target death, disappearance, out-of-range, and Stop saf
     snap.has_target = true;
     snap.target = mob;
     snap.allowed_to_attack_target = true;
+    snap.melee_reach = native_melee_reach(mob.melee_radius);
 
     engine.tick(snap, actions);
     CHECK(engine.state() == CombatState::Combat);
@@ -457,6 +473,7 @@ TEST_CASE("CombatEngine: manual back-away holds override without snapping back")
     snap.has_target = true;
     snap.target = mob;
     snap.allowed_to_attack_target = true;
+    snap.melee_reach = native_melee_reach(mob.melee_radius);
 
     engine.tick(snap, actions);
     CHECK(engine.state() == CombatState::Combat);
@@ -647,6 +664,7 @@ TEST_CASE("Class profiles: NEC priority, ROG behind-backstab, CLR group heal, WA
         snap.has_target = true;
         snap.target = mob;
         snap.allowed_to_attack_target = true;
+        snap.melee_reach = native_melee_reach(mob.melee_radius);
 
         engine.tick(snap, actions);
         CHECK(engine.state() == CombatState::Combat);
@@ -736,6 +754,7 @@ TEST_CASE("Class profiles: NEC priority, ROG behind-backstab, CLR group heal, WA
         snap.has_target = true;
         snap.target = mob;
         snap.allowed_to_attack_target = true;
+        snap.melee_reach = native_melee_reach(mob.melee_radius);
 
         engine.tick(snap, actions);
         CHECK(engine.state() == CombatState::Combat);
@@ -939,4 +958,206 @@ TEST_CASE("MovementController: the melee stick is held on arrival, not force-sto
     step = nav.update(CombatState::Combat, snap, profile, &mob, nullptr, nullptr, actions, true);
     CHECK(step.command == MovementCommandKind::MoveDisengage);
     CHECK(nav.last_decision().find("Holding melee stick") == std::string::npos);
+}
+
+TEST_CASE("CombatEngine: stick stops at profile melee_range while attack reach comes from the spawns") {
+    // Two distances, deliberately different. melee_range (3) is where the stick
+    // closes to; the reach at which auto-attack turns on is the original's
+    // __get_melee_range over the two spawns, which the app layer puts in
+    // CombatSnapshot::melee_reach. Neither is a class table's ability max_range.
+    const float reach = native_melee_reach(6.0f);
+    REQUIRE(reach == doctest::Approx(16.0f)); // max(14, (6+6)*0.75) + 2
+    // Per spawn pair, not a constant: a bigger mob is reachable further away.
+    CHECK(native_melee_reach(20.0f) > reach);
+
+    for (const float approach : {9.0f, 14.0f}) {
+        CombatProfile profile = default_combat_profile_for_class("ROG");
+        profile.movement_mode = MovementMode::MeleeRange;
+        profile.melee_behind = false;
+        profile.melee_range = 3.0f;
+        profile.assist_target.clear();
+
+        CombatSnapshot snap;
+        snap.now_ms = 1000;
+        snap.in_zone = true;
+        snap.character_name = "Slink";
+        snap.class_short = "ROG";
+        snap.me.id = 2;
+        snap.me.name = "Slink";
+        snap.me.position = {0.0f, 0.0f, 0.0f};
+
+        SpawnSnapshot mob = make_mob(401, "a_froglok", approach, 0.0f);
+        snap.spawns.push_back(mob);
+        snap.has_target = true;
+        snap.target = mob;
+        snap.allowed_to_attack_target = true;
+        snap.melee_reach = reach;
+
+        RecordedActions actions;
+        CombatEngine engine;
+        engine.set_profile(profile);
+        engine.start();
+        engine.tick(snap, actions);
+
+        // Inside the spawns' reach: fighting, and the stick is asked to close to 3.
+        CHECK(engine.state() == CombatState::Combat);
+        CHECK(actions.auto_attacks == std::vector<bool>{true});
+        REQUIRE_FALSE(actions.move_melees.empty());
+        CHECK(actions.move_melees.back().first == 401);
+        REQUIRE_FALSE(actions.melee_distances.empty());
+        CHECK(actions.melee_distances.back() == doctest::Approx(3.0f));
+
+        // Back-away override wins: paused, attack off, no re-close while paused.
+        actions.reset_counts();
+        snap.manual_move_backward = true;
+        snap.player_moving_manually = true;
+        snap.auto_attack_on = true;
+        snap.nav_active = true;
+        snap.now_ms = 2000;
+        engine.tick(snap, actions);
+        CHECK(engine.state() == CombatState::Paused);
+        CHECK(actions.auto_attacks == std::vector<bool>{false});
+        CHECK(actions.move_melees.empty());
+
+        actions.reset_counts();
+        snap.manual_move_backward = false;
+        snap.player_moving_manually = false;
+        snap.auto_attack_on = false;
+        snap.nav_active = false;
+        snap.now_ms = 3500; // inside manual_override_cooldown_ms (2000 + 3500)
+        engine.tick(snap, actions);
+        CHECK(engine.state() == CombatState::Paused);
+        CHECK(actions.move_melees.empty());
+    }
+}
+
+TEST_CASE("CombatEngine: a snapshot without spawn reach does not invent one") {
+    // No spawn pair means no __get_melee_range result. The engine must not fall
+    // back to a fixed reach (the 14-units-from-ability-max_range claim was wrong);
+    // it attacks only at the stick distance, where a swing certainly lands.
+    CombatProfile profile = default_combat_profile_for_class("ROG");
+    profile.movement_mode = MovementMode::MeleeRange;
+    profile.melee_behind = false;
+    profile.melee_range = 3.0f;
+    profile.assist_target.clear();
+
+    CombatSnapshot snap;
+    snap.now_ms = 1000;
+    snap.in_zone = true;
+    snap.class_short = "ROG";
+    snap.me.id = 2;
+    snap.me.position = {0.0f, 0.0f, 0.0f};
+    SpawnSnapshot mob = make_mob(402, "a_froglok", 9.0f, 0.0f);
+    snap.spawns.push_back(mob);
+    snap.has_target = true;
+    snap.target = mob;
+    snap.allowed_to_attack_target = true;
+
+    RecordedActions actions;
+    CombatEngine engine;
+    engine.set_profile(profile);
+    engine.start();
+    engine.tick(snap, actions);
+
+    CHECK(engine.state() == CombatState::Engage);
+    CHECK(actions.auto_attacks.empty());
+    // Movement still closes to the configured stick distance.
+    REQUIRE_FALSE(actions.melee_distances.empty());
+    CHECK(actions.melee_distances.back() == doctest::Approx(3.0f));
+}
+
+TEST_CASE("CombatEngine: a crouched character stands first and attacks once the pose reads back") {
+    // The live warrior failure: the attack was asked for from a pose that was not
+    // standing, the client latched its own "Auto attack is on." while the zone
+    // never started the attack, and nothing re-sent it. The engine stands first,
+    // leaves the flag alone for that tick, and asks again while the snapshot says
+    // auto-attack is still off. Crouch (not only sitting) is covered on purpose:
+    // the old guard tested `sitting` alone.
+    const float reach = native_melee_reach(6.0f);
+    CombatProfile profile = default_combat_profile_for_class("WAR");
+    profile.movement_mode = MovementMode::MeleeRange;
+    profile.assist_target.clear();
+
+    CombatSnapshot snap;
+    snap.now_ms = 1000;
+    snap.in_zone = true;
+    snap.character_name = "Yavaha";
+    snap.class_short = "WAR";
+    snap.me.id = 2;
+    snap.me.name = "Yavaha";
+    snap.me.position = {0.0f, 0.0f, 0.0f};
+    SpawnSnapshot mob = make_mob(501, "Practice_Dummy", 9.0f, 0.0f);
+    snap.spawns.push_back(mob);
+    snap.has_target = true;
+    snap.target = mob;
+    snap.allowed_to_attack_target = true;
+    snap.melee_reach = reach;
+    snap.standing = false; // seated or crouched: anything but kStandStanding
+    snap.sitting = true;
+
+    RecordedActions actions;
+    CombatEngine engine;
+    engine.set_profile(profile);
+    engine.start();
+    engine.tick(snap, actions);
+
+    CHECK(engine.state() == CombatState::Combat);
+    CHECK(actions.stand_states == std::vector<bool>{true});
+    CHECK(actions.auto_attacks.empty()); // the attack waits for the pose
+
+    // The stand applied. Now the attack is asked for, once.
+    actions.reset_counts();
+    snap.now_ms = 2000;
+    snap.standing = true;
+    snap.sitting = false;
+    snap.auto_attack_on = false;
+    engine.tick(snap, actions);
+    CHECK(actions.stand_states.empty());
+    CHECK(actions.auto_attacks == std::vector<bool>{true});
+
+    // The zone never confirmed it (the flag reads off again): still standing, so
+    // it is asked for again rather than left latched off.
+    actions.reset_counts();
+    snap.now_ms = 3000;
+    snap.auto_attack_on = false;
+    engine.tick(snap, actions);
+    CHECK(actions.auto_attacks == std::vector<bool>{true});
+}
+
+TEST_CASE("CombatEngine: an invalid assist id explains both sources it was offered") {
+    // The followers sat in "Assisting Yavaha" for a whole session. The adapter now
+    // validates both candidates, and this is the one line that says why nothing
+    // was chosen: the group's main assist named an id this zone does not have,
+    // and the peer published none.
+    CombatProfile profile = default_combat_profile_for_class("WAR");
+    profile.assist_target = "Yavaha";
+
+    CombatSnapshot snap;
+    snap.now_ms = 1000;
+    snap.in_zone = true;
+    snap.character_name = "Shesstabbinyah";
+    snap.me.id = 9;
+    snap.me.position = {0.0f, 0.0f, 0.0f};
+    SpawnSnapshot leader;
+    leader.id = 7;
+    leader.name = "Yavaha";
+    leader.is_npc = false;
+    leader.position = {1.0f, 0.0f, 0.0f};
+    snap.spawns.push_back(leader);
+    snap.assist_target_name = "Yavaha";
+    snap.assist_group_target_id = 999;
+    snap.assist_peer_target_id = 0;
+    snap.has_assist_target = false;
+
+    RecordedActions actions;
+    CombatEngine engine;
+    engine.set_profile(profile);
+    engine.start();
+    engine.tick(snap, actions);
+
+    // No assist target either: the engine waits in the Assist state, not Idle.
+    CHECK(engine.state() == CombatState::Assist);
+    const std::string reason = engine.status_snapshot(&snap).idle_reason;
+    CHECK(reason.find("group MA id 999") != std::string::npos);
+    CHECK(reason.find("peer target 0") != std::string::npos);
 }

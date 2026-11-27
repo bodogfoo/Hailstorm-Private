@@ -25,6 +25,7 @@
 #endif
 
 #include "app/execution_state.h"
+#include "app/group_launch_plan.h"
 #include "core/group_profile.h"
 #include "core/ini_file.h"
 #include "core/mq_login_import.h"
@@ -368,65 +369,76 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "[broker] --launch-all set but no enabled slots loaded (%s)\n",
                          load_error.empty() ? opts.roster_path.string().c_str() : load_error.c_str());
         }
+        // The bus is the shared authority on which slots are already online: the
+        // in-process launcher (client_app_login.cpp) refuses a slot whose tag is
+        // online there, and the broker must apply the same rule instead of only
+        // checking the children it spawned itself.
+        auto settle_bus = [&bus] {
+            // A peer that connected during the last stagger window may not have
+            // been accepted, or its Hello read, when poll_once returned. Wait a
+            // short beat for the connection, then drain the Hello that follows.
+            for (int i = 0; i < 4; ++i) {
+                if (!bus.poll_once(i == 0 ? 50 : 0)) break;
+            }
+        };
+        app::GroupLaunchOptions launch_opts;
+        launch_opts.hailstone_bin = opts.hailstone_bin;
+        launch_opts.data_dir = platform::data_dir();
+        launch_opts.game_dir = opts.game_dir;
+        launch_opts.profile_path = profile_path;
+        launch_opts.ipc_socket = opts.socket_path;
+        launch_opts.no_audio = true;
+
+        settle_bus();
         for (std::size_t idx = 0; idx < slots.size() && !g_stop_requested.load(std::memory_order_relaxed); ++idx) {
             const auto& slot = slots[idx];
-            std::vector<std::string> args;
-            args.push_back(opts.hailstone_bin.string());
-            args.push_back("--data-dir");
-            args.push_back(platform::data_dir().string());
-            if (!opts.game_dir.empty()) {
-                args.push_back("--game-dir");
-                args.push_back(opts.game_dir.string());
+            // The in-process launcher launches a slot under its `slotNN` id when
+            // the roster row names no session id; app::slot_launch_tag is that same
+            // fallback, and the child, the supervisor and the guard all use it.
+            app::GroupLaunchSpec spec;
+            spec.slot_number = slot.slot_number;
+            spec.session_id = slot.session_id;
+            spec.server_id = slot.server_id;
+            spec.world = slot.world;
+            spec.account = slot.account;
+            spec.character = slot.character;
+            spec.settings_path = slot.settings_path;
+            spec.auto_login = slot.auto_login;
+            spec.auto_kick = slot.auto_kick;
+            spec.headless = slot.headless;
+            spec.bg_tick_hz = slot.bg_tick_hz;
+            spec.gpu_mode = slot.gpu_mode;
+            const std::string tag = app::slot_launch_tag(spec.session_id, spec.slot_number);
+
+            settle_bus();
+            std::string refusal = app::duplicate_online_refusal(bus.roster(), spec);
+            if (refusal.empty()) {
+                for (const auto& c : children) {
+                    if (c.running && c.session_id == tag) {
+                        refusal = std::format("Slot {} ({}) is already running.", slot.slot_number, tag);
+                        break;
+                    }
+                }
             }
-            if (!profile_path.empty()) {
-                args.push_back("--profile");
-                args.push_back(profile_path.string());
-                args.push_back("--slot");
-                args.push_back(std::to_string(slot.slot_number));
+            if (!refusal.empty()) {
+                std::printf("[broker] Skipped order=%d slot=%d (%s): %s\n", slot.launch_order,
+                            slot.slot_number, tag.c_str(), refusal.c_str());
+                std::fflush(stdout);
+                continue;
             }
-            if (!slot.server_id.empty()) {
-                args.push_back("--server");
-                args.push_back(slot.server_id);
-            }
-            if (!slot.world.empty()) {
-                args.push_back("--world");
-                args.push_back(slot.world);
-            }
-            args.push_back("--account");
-            args.push_back(slot.account);
-            if (!slot.character.empty()) {
-                args.push_back("--character");
-                args.push_back(slot.character);
-            }
-            if (!slot.settings_path.empty()) {
-                args.push_back("--settings-path");
-                args.push_back(slot.settings_path);
-            }
-            if (slot.auto_login) args.push_back("--auto-login");
-            if (slot.auto_kick) args.push_back("--auto-kick");
-            args.push_back("--session-id");
-            args.push_back(slot.session_id);
-            args.push_back("--ipc-socket");
-            args.push_back(opts.socket_path);
-            args.push_back("--bg-tick-hz");
-            args.push_back(std::to_string(slot.bg_tick_hz));
-            args.push_back("--gpu-mode");
-            args.push_back(slot.gpu_mode);
-            // Group clients are monitored through the controller; never open
-            // an audio device for background or foreground group members.
-            args.push_back("--no-audio");
-            if (slot.headless) args.push_back("--headless-bg");
+
+            const auto args = app::build_group_launch_args(launch_opts, spec);
 
             const pid_t cpid = spawn_process(args);
             if (cpid > 0) {
-                children.push_back(SupervisedChild{cpid, slot.session_id, slot.character, true});
+                children.push_back(SupervisedChild{cpid, tag, slot.character, true});
                 std::printf("[broker] Launched order=%d slot=%d (%s) char=%s mode=%s (pid=%d)\n",
-                            slot.launch_order, slot.slot_number, slot.session_id.c_str(),
+                            slot.launch_order, slot.slot_number, tag.c_str(),
                             slot.character.empty() ? "<select>" : slot.character.c_str(),
                             slot.headless ? "BACKGROUND_HEADLESS" : "FOREGROUND_FULL",
                             static_cast<int>(cpid));
             } else {
-                std::fprintf(stderr, "[broker] Failed to spawn %s\n", slot.session_id.c_str());
+                std::fprintf(stderr, "[broker] Failed to spawn %s\n", tag.c_str());
             }
             if (idx + 1 < slots.size() && opts.stagger_ms > 0) {
                 bus.poll_once(opts.stagger_ms);

@@ -93,6 +93,13 @@ struct ScriptEnv {
     ipc::SessionBusClient* ipc_bus = nullptr;
     // Hailstone 24: native RG Mercs state/settings/log bridge (non-owning, optional).
     RGMercsBridge* rgmercs = nullptr;
+    // Whether this script may be started here at all. The combat ownership gate
+    // answers it for the legacy add-on while the native engine owns the character:
+    // asked before an autoload/required start (skipped, so the script never loads)
+    // and before an explicit /lua run or /script run (refused with the reason in
+    // chat). Null: every script may start, which is how an install with no
+    // combat.native.* flag behaves.
+    std::function<bool(std::string_view name)> script_may_start;
 };
 
 // A Lua social's hot button pressed (game/lua_social.h). The social's Lua sees `button` = {social, bar, button,

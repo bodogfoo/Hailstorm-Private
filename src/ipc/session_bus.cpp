@@ -225,6 +225,7 @@ std::vector<std::uint8_t> encode_snapshot(const SessionSnapshot& s) {
     w.str(s.active_profile);
     w.str(s.follow_target);
     w.str(s.connection_state);
+    w.str(s.combat_engine);
     return std::move(w.buf);
 }
 
@@ -259,6 +260,7 @@ bool decode_snapshot(const std::uint8_t* data, std::size_t size, SessionSnapshot
         if (r.ok && r.rem > 0) out.active_profile = r.str();
         if (r.ok && r.rem > 0) out.follow_target = r.str();
         if (r.ok && r.rem > 0) out.connection_state = r.str();
+        if (r.ok && r.rem > 0) out.combat_engine = r.str();
     }
     return r.ok;
 }

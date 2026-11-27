@@ -228,6 +228,7 @@ The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/re
 - `/offlinemode` sends opcode 0x53d3, which EQEmu drops; the position history the original sends first (Send_OP_FloatListThing) is not kept. A link death within 15 s of it exits the client after 3 s, but the screen shown is the disconnect one, not OfflineMode.bmp's. The server's 0x5369 that cancels it is not in EQEmu's table.
 - `/targetgroupbuff` keeps TargetGroupBuff in the character's options.ini (the original: eqclient.ini [Defaults]) and sends it at each zone-in.
 - AllowedToAttack's newbie-zone rule reads the target's Zone (+0x210); the client fills it for every spawn with the current zone's id and instance (`AttackCheckInput::zone`), as a spawn is only known in the player's own zone. Where the original writes a spawn's +0x210 (the spawn packet or the zone-in) was not traced; tracing those writes would settle it.
+- A dead group member in the native combat snapshot (`hailstone_combat_adapter.cpp`, `corpse_name_matches()`): a resurrection is aimed at the corpse, whose spawn id the group window does not carry, so the adapter looks for a non-NPC corpse spawn whose name is the member's name, with a `corpse` suffix stripped when it has one (`"<name>'s corpse"`, `"<name> corpse"` and the bare name are all accepted) and marks the member dead. Which form RoF2 and EQEmu use for a player corpse was not checked; a corpse whose name carries neither the member's name nor a `corpse` suffix is not found, and the member is then left without a spawn id (not rezzable until the corpse is targetable another way). Settled by reading a player corpse's name from a live zone or from a recorded spawn packet.
 
 - Buffs in a zone that suspends them (OP_NewZone +876, 0xddfc5c), what is still open. The plugin bulk reads of the player's own buffs (`get_buff_data_bulk`, `get_buff_name_data_bulk`) take no zone flag: they stay right only because the held buff tick sets `received_ms` every 6 s, so without the game folder's BaseData.txt row for the character (the tick then waits) they count a held buff down by the time since it arrived. `get_pet_buff_data_bulk` takes no zone flag either, so it counts a pet's suspendable buff down while the pet windows hold it; the method is its author's to change (its comment asks for that). Pet and target buffs are not ticked by the client: when a quest clears the flag in the middle of a zone (EQEmu's `set_zone_header("suspendbuffs", 0)` sends OP_NewZone again), the ones that came before it count down by all the time since they came until the server sends them again. A live session with a pet in a suspendbuffs zone, and one where a script clears the flag, would show how far they drift.
 - Spell descriptions with a live game folder and no server `eqstr_us.txt`: the spell display and the item display put
@@ -239,6 +240,13 @@ The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/re
   no `eqstr_us.txt`, so the live file is read and every one of its reworded ids can show such text. Not worked around in
   the client (it would mean carrying RoF2's string table). Settled by the server's assets bringing RoF2's
   `eqstr_us.txt`; whether to refuse a live file's reworded ids instead is open.
+
+- Native controller melee positioning: the melee stick stops at the profile's `melee_range`
+  (3 units by default, configurable), which is a Hailstone choice, not a traced rule of the original
+  client. Attack activation is separate and uses `__get_melee_range` (`game/mechanics/melee.h`,
+  the range `CanIHit` tests) over the live spawns, so it is spawn-dependent rather than fixed.
+  Whether the original's own follow/stick holds the same 3-unit offset from a mob is not confirmed;
+  a capture of the original's `/stick` on a stationary mob would settle it.
 
 ## Items, inventory and commerce
 

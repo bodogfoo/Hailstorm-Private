@@ -1,4 +1,4 @@
--- Hailstone Combat Controller (CombatWnd): native Hailstone combat UI (/combat, /estop).
+-- Hailstone Combat Controller (CombatWnd): native Hailstone combat UI (/hcombat, /estop).
 -- Uses only Hailstone API.combat bindings; zero MacroQuest / RGMercs / /stick dependencies.
 
 local API = hs.UI
@@ -69,6 +69,29 @@ end
 
 local function colorByName(name)
   return C[name] or C.text
+end
+
+local function engineLabel(peer)
+  local e = peer.combatEngine or ""
+  if e == "NativeHailstone" then return "native" end
+  if e == "LegacyRGMercs" then return "rgmercs" end
+  if e == "Disabled" then return "off" end
+  return ""
+end
+
+local function engineTooltip(peer, scriptState)
+  local e = peer.combatEngine or ""
+  if e == "NativeHailstone" then
+    local st = string.lower(scriptState or "")
+    if st == "paused" then return "Native engine owns this character; RG Mercs is stood down" end
+    if st == "running" or st == "RUNNING" or st == "starting" then
+      return "Native engine owns this character, but RG Mercs is still live -- it should be paused"
+    end
+    return "Native engine owns this character"
+  end
+  if e == "LegacyRGMercs" then return "RG Mercs owns this character" end
+  if e == "Disabled" then return "No combat engine is enabled for this character" end
+  return ""
 end
 
 local function assistIndicator(peer)
@@ -348,11 +371,12 @@ local function drawClientsTab(s, h)
     end
     if p.isLive then ui.PopStyleColor(2) end
     if ui.IsItemHovered() then
-      ui.SetTooltip(string.format("Click to make %s the live visible client (no reconnect)\nAssist: %s (%s)  |  Zone: %s  |  Combat: %s  |  Script: %s",
+      ui.SetTooltip(string.format("Click to make %s the live visible client (no reconnect)\nAssist: %s (%s)  |  Zone: %s  |  Combat: %s  |  Engine: %s  |  Script: %s",
         p.characterName ~= "" and p.characterName or p.sessionId,
         assistText, assistTip,
         p.zoneShort ~= "" and p.zoneShort or "offline",
         p.combatState or "Idle",
+        engineLabel(p) ~= "" and engineLabel(p) or "unresolved",
         p.scriptState or "stopped"))
     end
     ui.PopID()
@@ -380,7 +404,9 @@ local function drawClientsTab(s, h)
       ui.PushID("peer_" .. tostring(idx))
       ui.TableNextRow()
       ui.TableNextColumn()
-      colored(p.isSelf and C.accent or C.text, p.characterName ~= "" and p.characterName or p.sessionId)
+      local eng = engineLabel(p)
+      colored(p.isSelf and C.accent or C.text,
+        (p.characterName ~= "" and p.characterName or p.sessionId) .. (eng ~= "" and ("  [" .. eng .. "]") or ""))
       ui.TableNextColumn()
       colored(C.muted, p.classShort or "")
       ui.TableNextColumn()
@@ -395,7 +421,12 @@ local function drawClientsTab(s, h)
       if ui.IsItemHovered() then ui.SetTooltip(assistTip) end
       ui.TableNextColumn()
       local sc = (p.scriptState == "error" and C.danger) or ((p.scriptState == "RUNNING" or p.scriptState == "running") and C.good or C.muted)
+      if p.combatEngine == "NativeHailstone" and string.lower(p.scriptState or "") == "running" then sc = C.gold end
       colored(sc, (p.scriptName ~= "" and (p.scriptName .. ":") or "") .. (p.scriptState ~= "" and p.scriptState or "stopped"))
+      if ui.IsItemHovered() then
+        local tip = engineTooltip(p, p.scriptState)
+        if tip ~= "" then ui.SetTooltip(tip) end
+      end
       ui.TableNextColumn()
       colored(p.isLive and C.good or C.faint, p.isLive and "Live" or "Headless")
       ui.TableNextColumn()

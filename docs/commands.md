@@ -226,6 +226,7 @@ These are not in the original client.
 | Command | What it does |
 |---|---|
 | `/abilitybook [auto [on\|off]]` | The Ability Book; `auto` turns autoskill on or off. |
+| `/hcombat [status \| start \| stop \| ...]` | The native combat controller (docs/native-combat.md); without an action, the Combat window. `/combat` (no h) stays the stock combat-music setting. |
 | `/finditem [text]`, `/advi [text]` | The Advanced Inventory, searching everything you have for the text. |
 | `/destroy` | Destroy the item on your cursor (the inventory's Destroy button). |
 | `/destroycursor <id>` | Destroy the item on your cursor without asking, only if its item id is `<id>`; never coin or a bag. For plugins (docs/plugins.md). |

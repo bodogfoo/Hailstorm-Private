@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Combat: the native controller can now be chosen per group or per character with the `combat.native.*` settings (`native_combat` is the master switch; `native_class_profiles` uses the class table). Nothing changes unless a key is set. When it is, the client pauses the RGMercs script (rather than stopping it) so the two never act on one character, `/hcombat status` names the engine, and `/hcombat start` says why it refuses while another engine owns the character
+- Combat: a healer in the native controller resurrects and heals its group out of its own class table rules. A dead member is found through their corpse, a critical heal outranks an ordinary one, and a heal that cannot be cast says why and leaves the damage rotation to fight
+- Combat: a Magician memorizes Child of Fire into an empty gem out of combat and then casts it at the engaged target, as the rest of the class rotations already did
+- Combat: the native controller engages and turns auto-attack on at the original's own melee reach between the two spawns (`__get_melee_range`, 16 units for two 6-radius spawns and more for a larger mob) instead of the 5-8 units a stick distance allowed, while the melee stick still closes to the profile's `melee_range` (3 units by default, configurable); `/hcombat status` keeps reporting the stick distance as before
+- Group launch: a broker-launched slot that names no session id now starts under the same `slotNN` id as one started from the client's own launcher, so the session bus roster, the verified kill and the combat window's group tabs see one identity whichever path started the client
+
 - Guilds: the Banner page in Modern and Gamepad shows available kits, the active banner and its remaining time. On a server with RoF2 guild banners, members with the appropriate permissions can plant, remove or customise the banner. Planted banners display their guild's patterns and colours.
 - Enchanter pets and other invisible-body spawns (race 127's IVM, also race 600) show the weapon they hold again. The body stays invisible, but the primary and secondary items are drawn in its hands, which move as a wood elf's, as in the original; an aura with nothing held still shows nothing
 - Erudite ghosts (race 118, GEM / GEF in Paineel's models) take the wood elf's animations for the clips they lack, as the original gives every model of that prefix group: they had only the 9 clips of their own (walk, run, one swing, two deaths and a few more); now they have 71
