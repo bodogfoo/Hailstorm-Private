@@ -337,6 +337,9 @@ void ClientApp::update_zone_settle() {
 }
 
 void ClientApp::unload_zone() {
+    if (epic_manager_ && conn_) {
+        epic_manager_->on_character_disconnect_or_zone(conn_->character_name());
+    }
     if (combat_engine_) {
         HailstoneCombatAdapter actions(conn_.get(), nav_.get(), &ui_host_);
         combat_engine_->on_zone_change(&actions, "");

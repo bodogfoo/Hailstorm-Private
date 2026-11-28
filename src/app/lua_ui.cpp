@@ -38,6 +38,7 @@
 #include "app/lua_ui_hooks.h"
 #include "app/lua_ui_plugins.h"
 #include "app/lua_ui_combat.h"
+#include "app/lua_ui_epic.h"
 #include "app/lua_ui_record.h"
 #include "app/lua_ui_extensions.h"
 #include "plugin/lua_keep.h"
@@ -3223,6 +3224,7 @@ void UiApi::register_functions(lua_State* L) {
     register_ui_extensions(L, impl_->extensions_context);
     register_scripts_api(L, impl_->host);
     register_combat_api(L, impl_->host);
+    register_epic_api(L, impl_->host);
     register_rgmercs_api(L, impl_->host);
     register_pregame_api(L, impl_->host, impl_->screens);
     static const luaL_Reg fns[] = {

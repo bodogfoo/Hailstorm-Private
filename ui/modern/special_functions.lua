@@ -8,9 +8,25 @@ local C = T.color
 
 local WINDOW = "SpecialFunctionsWnd"
 local WINDOW_OPTS = {
-  size = function() return 720, 600 end,
-  resizable = { 540, 440 },
+  size = function() return 920, 680 end,
+  resizable = { 640, 480 },
 }
+
+local epicGroupFilter = "All"
+local epicClassFilter = "All"
+local epicStateFilter = "All"
+local epicCharSearch = ""
+local epicSelectedKey = ""
+local epicManualStage = ""
+local epicManualReason = "Manual stage completion"
+local epicPriorityChar = ""
+local epicPriorityVal = "80"
+local epicReserveItem = ""
+local epicReserveChar = ""
+local epicImportJsonBuf = ""
+local epicShowImportModal = false
+local epicMsg = ""
+local epicOk = true
 
 local ACK_COLORS = {
   Pending = "gold",
@@ -162,7 +178,7 @@ local function modeLabel(id)
   return PORTER_MODES[1].label
 end
 
-local function drawWindow()
+local function drawPorterTab()
   local s = T.scale or 1
   local zones = loadZones(false)
   local cst = (API.commander and API.commander.Status) and API.commander.Status() or {}
@@ -477,6 +493,452 @@ local function drawWindow()
       colored((a.status == "Failed" or a.status == "TimedOut") and C.danger or C.text, a.detail or "")
     end
     ui.EndTable()
+  end
+end
+
+local STATE_COLORS = {
+  ["Completed"] = "good",
+  ["Completed with upgrade available"] = "good",
+  ["Ready for completion"] = "good",
+  ["Awaiting turn-in"] = "gold",
+  ["In progress"] = "accent",
+  ["Awaiting item"] = "gold",
+  ["Not started"] = "muted",
+  ["Unknown"] = "faint",
+  ["Blocked"] = "danger",
+  ["Manual override"] = "accent",
+}
+
+local CONFLICT_RULES = {
+  "ActiveStageFirst",
+  "HighestPriorityCharacter",
+  "MainCharacterFirst",
+  "HighestStageProgress",
+  "GroupPriorityThenCharacter",
+  "ClassPriority",
+  "ManualApproval",
+}
+
+local function runEpicDo(action, a1, a2, a3)
+  if not API.epic or not API.epic.Do then
+    epicOk = false
+    epicMsg = "Epic API unavailable"
+    return false
+  end
+  local ok, msg = API.epic.Do(action, a1 or "", a2 or "", a3 or "")
+  epicOk = ok == true
+  if msg and msg ~= "" then epicMsg = msg end
+  return ok
+end
+
+local function drawEpicTab()
+  local s = T.scale or 1
+  if not API.epic or not API.epic.Status then
+    colored(C.danger, "Epic Quest & Loot system is not available in this session.")
+    return
+  end
+
+  local st = API.epic.Status() or {}
+  if not st.available then
+    colored(C.muted, "Epic Quest & Loot manager offline.")
+    return
+  end
+
+  local pol = st.policy or {}
+  local profiles = st.profiles or {}
+  local defs = st.definitions or {}
+
+  -- Top Control Strip
+  if pol.emergencyDisable then
+    if ui.SmallButton("RESUME EPIC LOOT (Emergency Off)##epEstop") then
+      runEpicDo("emergency_disable", "false")
+    end
+    ui.SameLine()
+    colored(C.danger, "EMERGENCY DISABLE ACTIVE")
+  else
+    if ui.SmallButton("EMERGENCY DISABLE##epEstop") then
+      runEpicDo("emergency_disable", "true")
+    end
+  end
+  ui.SameLine()
+  local dryRun = pol.dryRun == true
+  local newDry, dryChanged = ui.Checkbox("Dry-Run Mode##epDryRun", dryRun)
+  if dryChanged then
+    runEpicDo("dry_run", newDry and "true" or "false")
+  end
+  ui.SameLine()
+  if ui.SmallButton("Scan & Reconcile All##epScan") then
+    runEpicDo("scan_all")
+  end
+  ui.SameLine()
+  if ui.SmallButton("Backup DB##epBackup") then
+    runEpicDo("backup")
+  end
+  ui.SameLine()
+  if ui.SmallButton("Restore DB##epRestore") then
+    runEpicDo("restore")
+  end
+  ui.SameLine()
+  if ui.SmallButton("Export JSON##epExport") and API.epic.Export then
+    epicImportJsonBuf = API.epic.Export() or ""
+    epicShowImportModal = true
+    epicOk = true
+    epicMsg = string.format("Exported %d bytes to JSON buffer below.", #epicImportJsonBuf)
+  end
+  ui.SameLine()
+  if ui.SmallButton("Import JSON##epImportToggle") then
+    epicShowImportModal = not epicShowImportModal
+  end
+
+  if epicMsg ~= "" then
+    colored(epicOk and C.good or C.danger, epicMsg)
+  end
+
+  if epicShowImportModal then
+    ui.Separator()
+    colored(C.heading or C.accent, "Epic Database JSON Import / Export")
+    epicImportJsonBuf = ui.InputTextMultiline("##epJsonBuf", epicImportJsonBuf, 65536, -1, 110 * s)
+    if ui.SmallButton("Import (Merge)##epImpMerge") and API.epic.Import then
+      local ok, msg = API.epic.Import(epicImportJsonBuf, true)
+      epicOk = ok == true
+      epicMsg = msg or ""
+    end
+    ui.SameLine()
+    if ui.SmallButton("Import (Replace)##epImpRepl") and API.epic.Import then
+      local ok, msg = API.epic.Import(epicImportJsonBuf, false)
+      epicOk = ok == true
+      epicMsg = msg or ""
+    end
+    ui.SameLine()
+    if ui.SmallButton("Close##epImpClose") then
+      epicShowImportModal = false
+    end
+  end
+
+  ui.Separator()
+
+  if ui.BeginTabBar("##epicSubTabs") then
+    -- Sub-tab 1: Characters (24-Box View)
+    if ui.BeginTabItem("Characters (" .. tostring(#profiles) .. ")##epCharsTab") then
+      local groups = { "All" }
+      local groupSeen = {}
+      local classes = { "All" }
+      local classSeen = {}
+      for _, p in ipairs(profiles) do
+        local g = p.groupName or ""
+        if g ~= "" and not groupSeen[g] then groupSeen[g] = true; groups[#groups + 1] = g end
+        local c = p.classShort or ""
+        if c ~= "" and not classSeen[c] then classSeen[c] = true; classes[#classes + 1] = c end
+      end
+
+      ui.Text("Filter:")
+      ui.SameLine()
+      ui.SetNextItemWidth(140 * s)
+      epicCharSearch = ui.InputTextWithHint("##epSearch", "Character...", epicCharSearch, 48)
+      ui.SameLine()
+      ui.SetNextItemWidth(110 * s)
+      if ui.BeginCombo("##epGrpFlt", "Group: " .. epicGroupFilter) then
+        for _, g in ipairs(groups) do
+          if ui.Selectable(g .. "##eg" .. g, epicGroupFilter == g) then epicGroupFilter = g end
+        end
+        ui.EndCombo()
+      end
+      ui.SameLine()
+      ui.SetNextItemWidth(95 * s)
+      if ui.BeginCombo("##epClsFlt", "Class: " .. epicClassFilter) then
+        for _, c in ipairs(classes) do
+          if ui.Selectable(c .. "##ec" .. c, epicClassFilter == c) then epicClassFilter = c end
+        end
+        ui.EndCombo()
+      end
+
+      local filtered = {}
+      local searchLower = trim(epicCharSearch):lower()
+      local selectedProfile = nil
+      for _, p in ipairs(profiles) do
+        local okG = (epicGroupFilter == "All" or p.groupName == epicGroupFilter)
+        local okC = (epicClassFilter == "All" or p.classShort == epicClassFilter)
+        local okS = (searchLower == "" or (p.character or ""):lower():find(searchLower, 1, true))
+        if okG and okC and okS then
+          filtered[#filtered + 1] = p
+        end
+        if p.storageKey == epicSelectedKey then
+          selectedProfile = p
+        end
+      end
+      if not selectedProfile and #filtered > 0 then
+        selectedProfile = filtered[1]
+        epicSelectedKey = selectedProfile.storageKey or ""
+      end
+
+      local tflags = ui.TableFlags.RowBg | ui.TableFlags.BordersInnerV | ui.TableFlags.ScrollY | ui.TableFlags.SizingStretchProp
+      if ui.BeginTable("##epCharsTbl", 8, tflags, 0, 210 * s) then
+        ui.TableSetupColumn("Character", ui.TableColumnFlags.WidthFixed, 105 * s)
+        ui.TableSetupColumn("Cls", ui.TableColumnFlags.WidthFixed, 38 * s)
+        ui.TableSetupColumn("Server", ui.TableColumnFlags.WidthFixed, 85 * s)
+        ui.TableSetupColumn("Group", ui.TableColumnFlags.WidthFixed, 80 * s)
+        ui.TableSetupColumn("Variant", ui.TableColumnFlags.WidthFixed, 85 * s)
+        ui.TableSetupColumn("Stage", ui.TableColumnFlags.WidthFixed, 95 * s)
+        ui.TableSetupColumn("Prog", ui.TableColumnFlags.WidthFixed, 48 * s)
+        ui.TableSetupColumn("Status", ui.TableColumnFlags.WidthStretch, 1.0)
+        ui.TableHeadersRow()
+
+        for i, p in ipairs(filtered) do
+          local isSel = (p.storageKey == epicSelectedKey)
+          ui.TableNextRow()
+          ui.TableNextColumn()
+          if ui.Selectable((p.character or "?") .. "##epRow" .. i, isSel, ui.SelectableFlags.SpanAllColumns) then
+            epicSelectedKey = p.storageKey or ""
+            selectedProfile = p
+          end
+          ui.TableNextColumn()
+          colored(C.text, p.classShort or "-")
+          ui.TableNextColumn()
+          colored(C.muted, p.server or "-")
+          ui.TableNextColumn()
+          colored(C.muted, (p.groupName and p.groupName ~= "") and p.groupName or "-")
+          ui.TableNextColumn()
+          colored(C.text, p.epicVariant or "-")
+          ui.TableNextColumn()
+          colored(C.text, p.currentStageId or "-")
+          ui.TableNextColumn()
+          colored(C.text, string.format("%.0f%%", p.progressPct or 0))
+          ui.TableNextColumn()
+          local stText = p.needsReview and ("REVIEW: " .. (p.state or "Unknown")) or (p.state or "Unknown")
+          local stColor = p.needsReview and "danger" or (STATE_COLORS[p.state or ""] or "text")
+          colored(colorByName(stColor), stText)
+        end
+        ui.EndTable()
+      end
+
+      if selectedProfile then
+        ui.Separator()
+        local p = selectedProfile
+        colored(C.heading or C.accent, string.format("%s (%s | %s | %s)",
+          p.character or "?", p.classShort or "?", p.server or "?", p.epicVariant or "?"))
+        ui.SameLine()
+        colored(C.muted, string.format("Source: %s | Confidence: %s | Stages: %d/%d",
+          p.source or "Unknown", p.confidence or "None", p.completedStageCount or 0, p.totalStages or 0))
+
+        if p.needsReview then
+          colored(C.danger, "Review Needed: " .. (p.reviewReason or "Inconsistency detected"))
+          ui.SameLine()
+          if ui.SmallButton("Clear Review##epClrRev") then
+            local keyStr = string.format("%s|%s|%s|%s", p.server or "", p.character or "", p.classShort or "", p.epicVariant or "")
+            runEpicDo("clear_review", keyStr)
+          end
+        end
+
+        -- Manual Override Controls
+        local keyStr = string.format("%s|%s|%s|%s", p.server or "", p.character or "", p.classShort or "", p.epicVariant or "")
+        ui.SetNextItemWidth(130 * s)
+        epicManualStage = ui.InputTextWithHint("##epManStg", "Stage ID (e.g. stage_1)", epicManualStage, 64)
+        ui.SameLine()
+        if ui.SmallButton("Mark Stage Complete##epMarkStg") then
+          local stg = trim(epicManualStage) ~= "" and trim(epicManualStage) or (p.currentStageId or "")
+          runEpicDo("mark_stage", keyStr, stg, epicManualReason)
+        end
+        ui.SameLine()
+        if ui.SmallButton("Rollback Manual Change##epRollback") then
+          runEpicDo("rollback", keyStr)
+        end
+
+        -- Variant Switcher
+        ui.SameLine()
+        ui.SetNextItemWidth(130 * s)
+        if ui.BeginCombo("##epVarPick", "Variant: " .. (p.epicVariant or "")) then
+          for _, d in ipairs(defs) do
+            local matchCls = false
+            for _, c in ipairs(d.classes or {}) do
+              if c == p.classShort or c == "ALL" then matchCls = true; break end
+            end
+            if matchCls then
+              if ui.Selectable((d.variantName or d.epicId) .. "##ev" .. d.epicId, d.epicId == p.epicId) then
+                local baseKey = string.format("%s|%s|%s", p.server or "", p.character or "", p.classShort or "")
+                runEpicDo("set_variant", baseKey, d.variantName or d.epicId)
+              end
+            end
+          end
+          ui.EndCombo()
+        end
+
+        -- Required / Owned / Missing Items table for selected character
+        local reqs = p.requiredItems or {}
+        if ui.BeginTable("##epCharItems", 5, tflags, 0, 110 * s) then
+          ui.TableSetupColumn("Item Name", ui.TableColumnFlags.WidthStretch, 1.4)
+          ui.TableSetupColumn("Item ID", ui.TableColumnFlags.WidthFixed, 68 * s)
+          ui.TableSetupColumn("Stage", ui.TableColumnFlags.WidthFixed, 85 * s)
+          ui.TableSetupColumn("Owned/Req", ui.TableColumnFlags.WidthFixed, 75 * s)
+          ui.TableSetupColumn("State", ui.TableColumnFlags.WidthFixed, 90 * s)
+          ui.TableHeadersRow()
+          for _, it in ipairs(reqs) do
+            ui.TableNextRow()
+            ui.TableNextColumn()
+            colored(C.text, it.itemName or "?")
+            ui.TableNextColumn()
+            colored(C.muted, tostring(it.itemId or 0))
+            ui.TableNextColumn()
+            colored(C.muted, it.stageId or "-")
+            ui.TableNextColumn()
+            colored(C.text, string.format("%d / %d", it.ownedQty or 0, it.requiredQty or 1))
+            ui.TableNextColumn()
+            if it.obsolete then
+              colored(C.faint, "Obsolete")
+            elseif (it.missingQty or 0) == 0 then
+              colored(C.good, "Owned")
+            else
+              colored(C.gold, "Needed")
+            end
+          end
+          ui.EndTable()
+        end
+      end
+      ui.EndTabItem()
+    end
+
+    -- Sub-tab 2: Items & Conflicts
+    if ui.BeginTabItem("Items & Conflicts##epItemsTab") then
+      local items = (API.epic.Items and API.epic.Items()) or {}
+      local tflags = ui.TableFlags.RowBg | ui.TableFlags.BordersInnerV | ui.TableFlags.ScrollY | ui.TableFlags.SizingStretchProp
+      if ui.BeginTable("##epItemsTbl", 7, tflags, 0, 0) then
+        ui.TableSetupColumn("Item Name", ui.TableColumnFlags.WidthStretch, 1.3)
+        ui.TableSetupColumn("ID", ui.TableColumnFlags.WidthFixed, 60 * s)
+        ui.TableSetupColumn("Characters", ui.TableColumnFlags.WidthStretch, 1.1)
+        ui.TableSetupColumn("Req/Own", ui.TableColumnFlags.WidthFixed, 65 * s)
+        ui.TableSetupColumn("Zone", ui.TableColumnFlags.WidthFixed, 80 * s)
+        ui.TableSetupColumn("Action", ui.TableColumnFlags.WidthFixed, 130 * s)
+        ui.TableSetupColumn("Reason", ui.TableColumnFlags.WidthStretch, 1.4)
+        ui.TableHeadersRow()
+        for _, it in ipairs(items) do
+          ui.TableNextRow()
+          ui.TableNextColumn()
+          colored(it.hasConflict and C.gold or C.text, it.itemName or "?")
+          ui.TableNextColumn()
+          colored(C.muted, tostring(it.itemId or 0))
+          ui.TableNextColumn()
+          colored(C.text, table.concat(it.needingCharacters or {}, ", "))
+          ui.TableNextColumn()
+          colored(C.text, string.format("%d / %d", it.totalRequired or 0, it.totalOwned or 0))
+          ui.TableNextColumn()
+          colored(C.muted, (it.sourceZone and it.sourceZone ~= "") and it.sourceZone or "-")
+          ui.TableNextColumn()
+          colored(it.hasConflict and C.gold or C.good, it.recommendedAction or "-")
+          ui.TableNextColumn()
+          colored(C.muted, it.reason or "-")
+        end
+        ui.EndTable()
+      end
+      ui.EndTabItem()
+    end
+
+    -- Sub-tab 3: Policy & Priorities
+    if ui.BeginTabItem("Policy & Priorities##epPolTab") then
+      local function policyCheck(label, key, cur)
+        local val, chg = ui.Checkbox(label .. "##epPol_" .. key, cur == true)
+        if chg then runEpicDo("set_policy", key, val and "true" or "false") end
+      end
+
+      policyCheck("Enable Epic-Aware Looting", "epic_loot_enabled", pol.epicLootEnabled)
+      policyCheck("Loot Only Active Epic Stage", "loot_only_active_stage", pol.lootOnlyActiveStage)
+      policyCheck("Loot Future Stage Items", "loot_future_stage_items", pol.lootFutureStageItems)
+      policyCheck("Loot Items For Other Characters", "loot_for_other_characters", pol.lootForOtherCharacters)
+      policyCheck("Stop Looting After Epic Completion", "stop_after_completion", pol.stopAfterCompletion)
+      policyCheck("Allow Looting Obsolete Epic Items", "allow_obsolete_items", pol.allowObsoleteItems)
+      policyCheck("Require Confirmation For NO-DROP Items", "require_confirm_no_drop", pol.requireConfirmNoDrop)
+      policyCheck("Allow Manual Conflict Approval", "allow_manual_conflict_approval", pol.allowManualConflictApproval)
+      policyCheck("Enable Shared Raid Inventory Tracking", "shared_raid_inventory_tracking", pol.sharedRaidInventoryTracking)
+
+      ui.Separator()
+      ui.Text("Conflict Resolution Rule:")
+      ui.SameLine()
+      ui.SetNextItemWidth(220 * s)
+      if ui.BeginCombo("##epConfRule", pol.conflictRule or "ActiveStageFirst") then
+        for _, r in ipairs(CONFLICT_RULES) do
+          if ui.Selectable(r, pol.conflictRule == r) then
+            runEpicDo("set_policy", "conflict_rule", r)
+          end
+        end
+        ui.EndCombo()
+      end
+
+      ui.Separator()
+      ui.Text("Character Priority:")
+      ui.SameLine()
+      ui.SetNextItemWidth(120 * s)
+      epicPriorityChar = ui.InputTextWithHint("##epPrioChar", "Character", epicPriorityChar, 48)
+      ui.SameLine()
+      ui.SetNextItemWidth(60 * s)
+      epicPriorityVal = ui.InputTextWithHint("##epPrioVal", "0-100", epicPriorityVal, 8)
+      ui.SameLine()
+      if ui.SmallButton("Set Priority##epSetPrio") then
+        runEpicDo("set_char_priority", trim(epicPriorityChar), trim(epicPriorityVal))
+      end
+
+      ui.Text("Reserve Item:")
+      ui.SameLine()
+      ui.SetNextItemWidth(140 * s)
+      epicReserveItem = ui.InputTextWithHint("##epResItem", "Item ID or Name", epicReserveItem, 64)
+      ui.SameLine()
+      ui.SetNextItemWidth(120 * s)
+      epicReserveChar = ui.InputTextWithHint("##epResChar", "Character", epicReserveChar, 48)
+      ui.SameLine()
+      if ui.SmallButton("Reserve##epResBtn") then
+        runEpicDo("reserve_item", trim(epicReserveItem), trim(epicReserveChar))
+      end
+      ui.EndTabItem()
+    end
+
+    -- Sub-tab 4: Audit & Diagnostics
+    if ui.BeginTabItem("Audit & Diagnostics##epAuditTab") then
+      if ui.SmallButton("Clear Diagnostics##epClrDiag") then
+        runEpicDo("clear_diagnostics")
+      end
+      local diags = (API.epic.Audit and API.epic.Audit()) or {}
+      local tflags = ui.TableFlags.RowBg | ui.TableFlags.BordersInnerV | ui.TableFlags.ScrollY | ui.TableFlags.SizingStretchProp
+      if ui.BeginTable("##epDiagTbl", 6, tflags, 0, 0) then
+        ui.TableSetupColumn("Char", ui.TableColumnFlags.WidthFixed, 95 * s)
+        ui.TableSetupColumn("Item", ui.TableColumnFlags.WidthFixed, 130 * s)
+        ui.TableSetupColumn("Decision", ui.TableColumnFlags.WidthFixed, 130 * s)
+        ui.TableSetupColumn("Recipient", ui.TableColumnFlags.WidthFixed, 95 * s)
+        ui.TableSetupColumn("Mode", ui.TableColumnFlags.WidthFixed, 60 * s)
+        ui.TableSetupColumn("Reason", ui.TableColumnFlags.WidthStretch, 1.6)
+        ui.TableHeadersRow()
+        for i = #diags, 1, -1 do
+          local d = diags[i]
+          ui.TableNextRow()
+          ui.TableNextColumn()
+          colored(C.text, d.character or "-")
+          ui.TableNextColumn()
+          colored(C.text, d.itemName or "-")
+          ui.TableNextColumn()
+          colored(C.accent, d.decision or "-")
+          ui.TableNextColumn()
+          colored(C.good, (d.recipient and d.recipient ~= "") and d.recipient or "-")
+          ui.TableNextColumn()
+          colored(d.dryRun and C.gold or C.muted, d.dryRun and "DRY" or "LIVE")
+          ui.TableNextColumn()
+          colored(C.muted, d.reason or "-")
+        end
+        ui.EndTable()
+      end
+      ui.EndTabItem()
+    end
+
+    ui.EndTabBar()
+  end
+end
+
+local function drawWindow()
+  if ui.BeginTabBar("##specialFunctionsMainTabs") then
+    if ui.BeginTabItem("Teleport & Porter##sfTabPorter") then
+      drawPorterTab()
+      ui.EndTabItem()
+    end
+    if ui.BeginTabItem("Epic Quests & Loot##sfTabEpic") then
+      drawEpicTab()
+      ui.EndTabItem()
+    end
+    ui.EndTabBar()
   end
 end
 

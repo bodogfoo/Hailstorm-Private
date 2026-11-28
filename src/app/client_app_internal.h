@@ -12,6 +12,7 @@
 #include "combat/combat_engine.h"
 #include "combat/combat_profile.h"
 #include "combat/engine_selection.h"
+#include "epic/epic_manager.h"
 #include "app/frame_pace.h"
 #include "core/group_profile.h"
 #include "ipc/session_bus.h"
@@ -532,6 +533,8 @@ public:
         };
         automation_ = std::make_unique<Automation>(aenv);
         combat_engine_ = std::make_unique<combat::CombatEngine>();
+        epic_manager_ = std::make_unique<epic::EpicManager>(platform::data_dir());
+        epic_manager_->initialize();
         auto_headless_others_ = config_.get_bool("multibox.auto_headless_others", true);
         {
             const std::string bus_sock = !opts_.ipc_socket.empty()
@@ -568,6 +571,12 @@ public:
         };
         automation_->hooks().add_command(plugin::Hooks::kClient, "/specialfunctions", toggle_special_functions);
         automation_->hooks().add_command(plugin::Hooks::kClient, "/special", toggle_special_functions);
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/epic", [this](std::string_view args) {
+            run_slash_epic(args);
+        });
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/epicloot", [this](std::string_view args) {
+            run_slash_epic(args);
+        });
         automation_->hooks().add_command(plugin::Hooks::kClient, "/porterall", [this](std::string_view args) {
             std::string msg;
             const bool ok = handle_commander_command("porter_all", "all", args, msg);
@@ -1244,6 +1253,12 @@ private:
     bool handle_commander_command(std::string_view action, std::string_view target,
                                   std::string_view arg, std::string& out_msg);
     std::unique_ptr<combat::CombatEngine> combat_engine_;
+    std::unique_ptr<epic::EpicManager> epic_manager_;
+    void scan_epic_self();
+    bool handle_epic_command(std::string_view action, std::string_view arg1, std::string_view arg2,
+                             std::string_view arg3, std::string& out_msg);
+    void run_slash_epic(std::string_view args);
+    void evaluate_epic_loot_session();
     combat::CombatSnapshot last_combat_snapshot_{};
     // Which engine owns this character's gameplay actions, read from the
     // combat.native.* settings. Unset means nothing was configured: the native

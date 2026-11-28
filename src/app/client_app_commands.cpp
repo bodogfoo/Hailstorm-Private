@@ -21,6 +21,7 @@
 #include "app/lua_ui_windows.h"
 #include "combat/class_profiles.h"
 #include "combat/profile_migration.h"
+#include "core/ascii_case.h"
 #include "core/group_profile.h"
 #include "core/msvc_atoi.h"
 #include "game/chat_windows.h"
@@ -1187,6 +1188,13 @@ ipc::CommandAckPacket ClientApp::handle_bus_command(const ipc::CommandPacket& cm
         return ack;
     }
 
+    if (verb == "/epic" || verb == "/epicloot") {
+        run_slash_epic(rest);
+        ack.ok = true;
+        ack.message = "epic command dispatched";
+        return ack;
+    }
+
     // Commander -> one client, engine-aware: the All Assist Me and reload buttons
     // broadcast this so each client applies it on the engine that owns it (the
     // native profile, or RG Mercs' own binds) and answers with its own result.
@@ -2103,6 +2111,250 @@ bool ClientApp::handle_commander_command(std::string_view action, std::string_vi
     const auto seq = bus_.send_command(std::move(pkt));
     out_msg = std::format("Dispatched '{}' to '{}' (seq #{})", slash_cmd, scope, seq);
     return seq != 0;
+}
+
+void ClientApp::scan_epic_self() {
+    if (!epic_manager_ || !conn_ || !player_ready_ || screen_ != Screen::InGame) return;
+    const auto& world = conn_->world();
+    auto me_it = world.spawns.find(world.player_id);
+    std::string cls = me_it != world.spawns.end() ? std::string(game::class_short_name(me_it->second.class_id)) : "";
+    std::string srv = !server_profile_.name.empty() ? server_profile_.name : server_profile_.id;
+    if (srv.empty()) srv = "default";
+    const auto now_ms = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count());
+    const auto snap = epic::snapshot_from_inventory(
+        conn_->inventory(), srv, conn_->character_name(), cls, active_commander_profile_, opts_.account, now_ms);
+    epic_manager_->scan_character(snap);
+}
+
+void ClientApp::evaluate_epic_loot_session() {
+    if (!epic_manager_ || !conn_ || !player_ready_ || screen_ != Screen::InGame) return;
+    const auto& sess = conn_->loot_session();
+    if (!sess || !sess->open || !sess->complete) return;
+
+    const auto& world = conn_->world();
+    auto me_it = world.spawns.find(world.player_id);
+    epic::LootEvaluationContext ctx;
+    ctx.looter_server = !server_profile_.name.empty() ? server_profile_.name : server_profile_.id;
+    if (ctx.looter_server.empty()) ctx.looter_server = "default";
+    ctx.looter_character = conn_->character_name();
+    ctx.looter_class = me_it != world.spawns.end() ? std::string(game::class_short_name(me_it->second.class_id)) : "";
+    ctx.looter_group = active_commander_profile_;
+    ctx.looter_online = true;
+    ctx.looter_zoning = (screen_ != Screen::InGame);
+    ctx.looter_dead = (me_it != world.spawns.end() && me_it->second.is_corpse);
+    ctx.now_ms = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count());
+
+    if (bus_.connected()) {
+        for (const auto& peer : bus_.cached_roster()) {
+            epic::PeerAvailability pa;
+            pa.server = peer.server_name;
+            pa.character = peer.character_name;
+            pa.class_short = peer.class_short;
+            pa.group_name = peer.active_profile;
+            pa.online = peer.online;
+            pa.in_same_group = !peer.group_leader.empty() && iequals(peer.group_leader, conn_->group().leader);
+            pa.in_same_zone = iequals(peer.zone_short, world.zone_short_name);
+            ctx.peers.push_back(std::move(pa));
+        }
+    }
+
+    for (const auto& [slot, item] : sess->items) {
+        const auto cand = epic::candidate_from_net_item(sess->corpse_id, slot, item);
+        const auto dec = epic_manager_->evaluate_loot(cand, ctx, true);
+        if (!dec.dry_run && dec.outcome == epic::LootDecisionOutcome::LootForCharacter && !dec.requires_confirmation) {
+            conn_->loot_item(slot, true);
+            epic_manager_->mark_slot_looted(sess->corpse_id, slot, ctx.looter_character);
+        }
+    }
+}
+
+bool ClientApp::handle_epic_command(std::string_view action, std::string_view arg1, std::string_view arg2,
+                                     std::string_view arg3, std::string& out_msg) {
+    if (!epic_manager_) {
+        out_msg = "Epic manager offline";
+        return false;
+    }
+    const auto now_ms = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count());
+    auto trim_sv = [](std::string_view sv) -> std::string_view {
+        while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.front()))) sv.remove_prefix(1);
+        while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.back()))) sv.remove_suffix(1);
+        return sv;
+    };
+    auto lower_sv = [](std::string_view sv) -> std::string {
+        std::string out(sv);
+        for (char& ch : out) ch = ascii_lower(ch);
+        return out;
+    };
+    const std::string act = lower_sv(trim_sv(action));
+
+    auto parse_key = [](std::string_view s) -> epic::CharacterEpicKey {
+        // storage_key or "server|character|class|variant"
+        epic::CharacterEpicKey k;
+        std::vector<std::string> parts;
+        std::size_t start = 0;
+        while (start <= s.size()) {
+            auto pos = s.find('|', start);
+            if (pos == std::string_view::npos) {
+                parts.emplace_back(s.substr(start));
+                break;
+            }
+            parts.emplace_back(s.substr(start, pos - start));
+            start = pos + 1;
+        }
+        if (parts.size() >= 4) {
+            k.server = parts[0];
+            k.character = parts[1];
+            k.class_short = parts[2];
+            k.epic_variant = parts[3];
+        }
+        return k;
+    };
+
+    if (act == "scan_self") {
+        scan_epic_self();
+        out_msg = "Scanned current character inventory for epic progress.";
+        return true;
+    }
+    if (act == "scan_all") {
+        scan_epic_self();
+        if (bus_.connected()) {
+            ipc::CommandPacket pkt;
+            pkt.scope = ipc::CommandScope::AllExceptSelf;
+            pkt.command = "/epic scan";
+            bus_.send_command(std::move(pkt));
+        }
+        out_msg = "Triggered epic inventory scan across connected sessions.";
+        return true;
+    }
+    if (act == "emergency_disable") {
+        const bool on = (arg1 == "true" || arg1 == "1" || lower_sv(arg1) == "on");
+        epic_manager_->set_emergency_disable(on);
+        out_msg = on ? "Epic loot EMERGENCY DISABLED." : "Epic loot emergency disable cleared.";
+        return true;
+    }
+    if (act == "dry_run") {
+        const bool on = (arg1 == "true" || arg1 == "1" || lower_sv(arg1) == "on");
+        epic_manager_->set_dry_run(on);
+        out_msg = on ? "Epic loot dry-run enabled." : "Epic loot dry-run disabled.";
+        return true;
+    }
+    if (act == "set_policy") {
+        auto pol = epic_manager_->policy();
+        const bool bval = (arg2 == "true" || arg2 == "1" || lower_sv(arg2) == "on");
+        if (arg1 == "epic_loot_enabled") pol.epic_loot_enabled = bval;
+        else if (arg1 == "loot_only_active_stage") pol.loot_only_active_stage = bval;
+        else if (arg1 == "loot_future_stage_items") pol.loot_future_stage_items = bval;
+        else if (arg1 == "loot_for_other_characters") pol.loot_for_other_characters = bval;
+        else if (arg1 == "stop_after_completion") pol.stop_after_completion = bval;
+        else if (arg1 == "allow_obsolete_items") pol.allow_obsolete_items = bval;
+        else if (arg1 == "require_confirm_no_drop") pol.require_confirm_no_drop = bval;
+        else if (arg1 == "allow_manual_conflict_approval") pol.allow_manual_conflict_approval = bval;
+        else if (arg1 == "shared_raid_inventory_tracking") pol.shared_raid_inventory_tracking = bval;
+        else if (arg1 == "conflict_rule") pol.conflict_rule = epic::parse_conflict_rule(arg2);
+        else if (arg1 == "main_character") pol.main_character = std::string(arg2);
+        else {
+            out_msg = "Unknown policy key: " + std::string(arg1);
+            return false;
+        }
+        epic_manager_->set_policy(std::move(pol));
+        out_msg = std::format("Updated epic policy '{}'.", arg1);
+        return true;
+    }
+    if (act == "set_char_priority") {
+        int prio = 50;
+        try { prio = std::stoi(std::string(arg2)); } catch (...) {}
+        epic_manager_->set_character_priority(arg1, prio);
+        out_msg = std::format("Set priority for {} to {}.", arg1, prio);
+        return true;
+    }
+    if (act == "reserve_item") {
+        epic_manager_->set_reserved_item(arg1, arg2);
+        out_msg = std::format("Reserved '{}' for {}.", arg1, arg2);
+        return true;
+    }
+    if (act == "clear_reserve") {
+        epic_manager_->clear_reserved_item(arg1);
+        out_msg = std::format("Cleared reservation for '{}'.", arg1);
+        return true;
+    }
+    if (act == "mark_stage") {
+        const auto k = parse_key(arg1);
+        const bool ok = epic_manager_->mark_stage_complete(k, arg2, now_ms, arg3.empty() ? "Marked complete via UI" : arg3);
+        out_msg = ok ? std::format("Marked stage '{}' complete for {}.", arg2, k.character)
+                     : "Character epic profile not found.";
+        return ok;
+    }
+    if (act == "set_variant") {
+        // arg1 = "server|char|class", arg2 = variant_name
+        auto k = parse_key(std::string(arg1) + "|");
+        const bool ok = epic_manager_->set_character_variant(k.server, k.character, k.class_short, arg2, now_ms);
+        out_msg = ok ? std::format("Assigned epic variant '{}' to {}.", arg2, k.character)
+                     : "Failed to assign epic variant.";
+        return ok;
+    }
+    if (act == "rollback") {
+        const auto k = parse_key(arg1);
+        std::string reason;
+        const bool ok = epic_manager_->rollback_manual_change(k, now_ms, &reason);
+        out_msg = reason;
+        return ok;
+    }
+    if (act == "clear_review") {
+        const auto k = parse_key(arg1);
+        const bool ok = epic_manager_->clear_review_flag(k, now_ms);
+        out_msg = ok ? "Cleared manual review flag." : "Profile not found.";
+        return ok;
+    }
+    if (act == "clear_diagnostics") {
+        epic_manager_->clear_diagnostics();
+        out_msg = "Cleared epic loot diagnostic log.";
+        return true;
+    }
+    if (act == "backup") {
+        const auto path = platform::data_dir() / "epic_progress.backup.json";
+        std::string err;
+        const bool ok = epic_manager_->backup_database(path, &err);
+        out_msg = ok ? ("Backed up epic database to " + path.string()) : err;
+        return ok;
+    }
+    if (act == "restore") {
+        const auto path = platform::data_dir() / "epic_progress.backup.json";
+        std::string err;
+        const bool ok = epic_manager_->restore_database(path, &err);
+        out_msg = ok ? ("Restored epic database from " + path.string()) : err;
+        return ok;
+    }
+    if (act == "evaluate_loot") {
+        evaluate_epic_loot_session();
+        out_msg = "Evaluated current loot session.";
+        return true;
+    }
+
+    out_msg = "Unknown epic command: " + act;
+    return false;
+}
+
+void ClientApp::run_slash_epic(std::string_view args) {
+    while (!args.empty() && std::isspace(static_cast<unsigned char>(args.front()))) args.remove_prefix(1);
+    while (!args.empty() && std::isspace(static_cast<unsigned char>(args.back()))) args.remove_suffix(1);
+    std::string_view rest = args;
+    std::string sub(game::next_cmd_arg(rest));
+    for (char& ch : sub) ch = ascii_lower(ch);
+    while (!rest.empty() && std::isspace(static_cast<unsigned char>(rest.front()))) rest.remove_prefix(1);
+    if (sub.empty() || sub == "ui") {
+        if (ui_api_) ui_api_->show("SpecialFunctionsWnd", true);
+        return;
+    }
+    std::string msg;
+    const std::string arg1 = std::string(game::next_cmd_arg(rest));
+    while (!rest.empty() && std::isspace(static_cast<unsigned char>(rest.front()))) rest.remove_prefix(1);
+    const bool ok = handle_epic_command(sub == "scan" ? "scan_self" : sub, arg1, rest, "", msg);
+    if (conn_ && !msg.empty()) {
+        conn_->show_chat(msg, ok ? 15 : 0xd);
+    }
 }
 
 } // namespace client_internal

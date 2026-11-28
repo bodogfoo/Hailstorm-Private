@@ -439,6 +439,24 @@ void ClientApp::update_ui_host() {
             return handle_commander_command(action, target, arg, msg);
         };
     }
+    if (!h.epic.profiles && epic_manager_) {
+        h.epic.profiles = [this]() { return epic_manager_->profiles_snapshot(); };
+        h.epic.definitions = [this]() { return epic_manager_->definitions_snapshot(); };
+        h.epic.item_needs = [this]() { return epic_manager_->item_needs_snapshot(); };
+        h.epic.diagnostics = [this]() { return epic_manager_->diagnostics_snapshot(); };
+        h.epic.policy = [this]() { return epic_manager_->policy(); };
+        h.epic.command = [this](std::string_view action, std::string_view arg1, std::string_view arg2,
+                                std::string_view arg3, std::string& msg) -> bool {
+            return handle_epic_command(action, arg1, arg2, arg3, msg);
+        };
+        h.epic.export_json = [this]() { return epic_manager_->export_database_json(); };
+        h.epic.import_json = [this](std::string_view json_text, bool merge, std::string& msg) -> bool {
+            std::string err;
+            const bool ok = epic_manager_->import_database_json(json_text, merge, &err);
+            msg = ok ? "Epic database imported." : err;
+            return ok;
+        };
+    }
     h.registry = automation_ ? &automation_->registry() : nullptr;
     if (!h.tlo_context && automation_) h.tlo_context = [this]() -> const mq::Context& { return automation_->context(); };
     h.in_game = screen_ == Screen::InGame && player_ready_ && conn_;

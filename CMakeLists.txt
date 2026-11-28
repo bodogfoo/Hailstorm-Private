@@ -586,8 +586,16 @@ add_library(hailstone_engine STATIC
   src/app/lua_ui_plugins.cpp
   src/app/lua_ui_scripts.cpp
   src/app/lua_ui_combat.cpp
+  src/app/lua_ui_epic.cpp
   src/app/lua_ui_rgmercs.cpp
   src/app/hailstone_combat_adapter.cpp
+  src/core/json_value.cpp
+  src/epic/epic_types.cpp
+  src/epic/epic_definitions.cpp
+  src/epic/epic_store.cpp
+  src/epic/progress_detector.cpp
+  src/epic/loot_decision_engine.cpp
+  src/epic/epic_manager.cpp
   src/combat/combat_profile.cpp
   src/combat/spell_manager.cpp
   src/combat/movement_controller.cpp
@@ -1378,6 +1386,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/hailstone24/native_support_policy_test.cpp
     tests/hailstone24/native_engine_diagnostics_test.cpp
     tests/hailstone24/native_combat_integration_test.cpp
+    tests/hailstone24/epic_quest_loot_test.cpp
     tests/hailstone24/native_combat_command_alias_test.cpp
     tests/hailstone24/native_profile_migration_test.cpp
     tests/hailstone24/companion_call_test.cpp

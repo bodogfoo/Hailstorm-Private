@@ -128,6 +128,14 @@ UI_METHOD("PressButtonFrom", "cursor", "PressButtonFrom", kCapActions)
 UI_METHOD("DebugScreens", "debug", "Screens", 0)
 UI_METHOD("DebugTree", "debug", "Tree", 0)
 
+// epic
+UI_METHOD("EpicAudit", "epic", "Audit", 0)
+UI_METHOD("EpicDo", "epic", "Do", kCapActions | kCapCommands)
+UI_METHOD("EpicExport", "epic", "Export", 0)
+UI_METHOD("EpicImport", "epic", "Import", kCapActions | kCapCommands)
+UI_METHOD("EpicItems", "epic", "Items", 0)
+UI_METHOD("EpicStatus", "epic", "Status", 0)
+
 // evolving
 UI_METHOD("ItemDisplayCanTransfer", "evolving", "CanTransferDisplayed", 0)
 UI_METHOD("ItemExpTransferConfirm", "evolving", "Confirm", kCapActions)

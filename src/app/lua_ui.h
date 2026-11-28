@@ -13,6 +13,8 @@
 #include <cstdint>
 #include <functional>
 #include "combat/combat_types.h"
+#include "epic/epic_types.h"
+#include "epic/loot_decision_engine.h"
 #include <future>
 #include <filesystem>
 #include <memory>
@@ -433,6 +435,19 @@ struct UiHost {
                            std::string& message)> command;
     };
     CommanderBridge commander;
+
+    struct EpicBridge {
+        std::function<std::vector<epic::CharacterEpicProfile>()> profiles;
+        std::function<std::vector<epic::EpicDefinition>()> definitions;
+        std::function<std::vector<epic::LootDecisionEngine::ItemNeedSummary>()> item_needs;
+        std::function<std::vector<epic::EpicDiagnosticEntry>()> diagnostics;
+        std::function<epic::EpicLootPolicy()> policy;
+        std::function<bool(std::string_view action, std::string_view arg1, std::string_view arg2,
+                           std::string_view arg3, std::string& message)> command;
+        std::function<std::string()> export_json;
+        std::function<bool(std::string_view json_text, bool merge, std::string& message)> import_json;
+    };
+    EpicBridge epic;
 };
 
 // The answer a ConfirmationDialogBox gives when its time runs out (app/lua_ui_player.cpp, OnProcessFrame). Only
