@@ -868,6 +868,13 @@ void ClientApp::tick_combat_controller() {
     }
     HailstoneCombatAdapter actions(conn_.get(), nav_.get(), &ui_host_);
     combat_engine_->tick(last_combat_snapshot_, actions);
+    if (conn_->loot_session() && conn_->loot_session()->open && conn_->loot_session()->complete &&
+        conn_->loot_session()->corpse_id != last_evaluated_epic_corpse_id_) {
+        last_evaluated_epic_corpse_id_ = conn_->loot_session()->corpse_id;
+        evaluate_epic_loot_session();
+    } else if (!conn_->loot_session() || !conn_->loot_session()->open) {
+        last_evaluated_epic_corpse_id_ = 0;
+    }
 }
 
 bool ClientApp::handle_combat_command(std::string_view action, std::string_view arg,

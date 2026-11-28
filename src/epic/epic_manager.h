@@ -82,6 +82,8 @@ public:
     void clear_diagnostics();
 
 private:
+    void sync_from_disk_if_newer_unlocked() const;
+    void save_unlocked() const;
     void record_diagnostic(EpicDiagnosticEntry entry);
     std::string resolve_epic_id_unlocked(std::string_view server, std::string_view character,
                                          std::string_view class_short, std::string_view preferred_variant) const;
@@ -89,7 +91,8 @@ private:
     mutable std::mutex mu_;
     std::filesystem::path data_dir_;
     EpicDefinitionCatalog catalog_;
-    EpicProgressStore store_;
+    mutable EpicProgressStore store_;
+    mutable std::filesystem::file_time_type last_db_mtime_{};
     CorpseLootCoordinator coordinator_;
     std::deque<EpicDiagnosticEntry> diagnostics_;
 };

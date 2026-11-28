@@ -53,15 +53,50 @@ bool EpicManager::initialize(std::string* error) {
             if (error) *error = err;
             return false;
         }
+        std::error_code ec;
+        last_db_mtime_ = std::filesystem::last_write_time(db_path, ec);
     }
     return true;
+}
+
+void EpicManager::sync_from_disk_if_newer_unlocked() const {
+    const auto db_path = progress_db_path();
+    if (db_path.empty()) return;
+    std::error_code ec;
+    if (!std::filesystem::exists(db_path, ec)) return;
+    const auto mtime = std::filesystem::last_write_time(db_path, ec);
+    if (ec || mtime == last_db_mtime_) return;
+    EpicProgressStore disk;
+    if (disk.load(db_path)) {
+        for (const auto& p : disk.profiles()) {
+            const auto* existing = store_.find_profile(p.key());
+            if (!existing || p.last_scan_ms >= existing->last_scan_ms) {
+                store_.upsert_profile(p);
+            }
+        }
+        last_db_mtime_ = mtime;
+    }
+}
+
+void EpicManager::save_unlocked() const {
+    const auto db_path = progress_db_path();
+    if (db_path.empty()) return;
+    if (store_.save(db_path)) {
+        std::error_code ec;
+        last_db_mtime_ = std::filesystem::last_write_time(db_path, ec);
+    }
 }
 
 bool EpicManager::save(std::string* error) const {
     std::lock_guard<std::mutex> lock(mu_);
     const auto db_path = progress_db_path();
     if (db_path.empty()) return true;
-    return store_.save(db_path, error);
+    const bool ok = store_.save(db_path, error);
+    if (ok) {
+        std::error_code ec;
+        last_db_mtime_ = std::filesystem::last_write_time(db_path, ec);
+    }
+    return ok;
 }
 
 bool EpicManager::reload_definitions(std::string* error) {
@@ -98,6 +133,7 @@ ReconciliationReport EpicManager::scan_character(const CharacterInventorySnapsho
                                                  std::string_view preferred_variant) {
     ReconciliationReport report;
     std::lock_guard<std::mutex> lock(mu_);
+    sync_from_disk_if_newer_unlocked();
 
     const std::string epic_id = resolve_epic_id_unlocked(
         snapshot.server, snapshot.character, snapshot.class_short, preferred_variant);
@@ -113,9 +149,7 @@ ReconciliationReport EpicManager::scan_character(const CharacterInventorySnapsho
     report = ProgressDetector::scan_and_reconcile(*def, snapshot, working, &catalog_);
     store_.upsert_profile(std::move(working));
 
-    if (!progress_db_path().empty()) {
-        store_.save(progress_db_path());
-    }
+    save_unlocked();
     return report;
 }
 
@@ -331,6 +365,7 @@ bool EpicManager::restore_database(const std::filesystem::path& path, std::strin
 
 std::vector<CharacterEpicProfile> EpicManager::profiles_snapshot() const {
     std::lock_guard<std::mutex> lock(mu_);
+    sync_from_disk_if_newer_unlocked();
     return store_.profiles();
 }
 
@@ -341,6 +376,7 @@ std::vector<EpicDefinition> EpicManager::definitions_snapshot() const {
 
 std::vector<LootDecisionEngine::ItemNeedSummary> EpicManager::item_needs_snapshot() const {
     std::lock_guard<std::mutex> lock(mu_);
+    sync_from_disk_if_newer_unlocked();
     return LootDecisionEngine::summarize_item_needs(store_.profiles(), catalog_, store_.policy());
 }
 

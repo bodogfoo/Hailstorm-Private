@@ -334,6 +334,7 @@ void ClientApp::update_zone_settle() {
     loading_since_.reset();
     // The zone-in clocks (the input script's, the test drivers') start as the world shows.
     zone_entered_ = now;
+    scan_epic_self();
 }
 
 void ClientApp::unload_zone() {

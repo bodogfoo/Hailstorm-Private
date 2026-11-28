@@ -1254,6 +1254,7 @@ private:
                                   std::string_view arg, std::string& out_msg);
     std::unique_ptr<combat::CombatEngine> combat_engine_;
     std::unique_ptr<epic::EpicManager> epic_manager_;
+    std::uint32_t last_evaluated_epic_corpse_id_ = 0;
     void scan_epic_self();
     bool handle_epic_command(std::string_view action, std::string_view arg1, std::string_view arg2,
                              std::string_view arg3, std::string& out_msg);
